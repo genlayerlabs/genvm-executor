@@ -1,0 +1,5 @@
+{
+  pkgs,
+  ...
+}@args:
+import ./pure-py args

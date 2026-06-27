@@ -1,0 +1,6 @@
+{
+  "Seq": [
+    { "MapFile": { "file": "contract.pyc", "to": "__pycache__/contract.cpython-313.pyc" } },
+    { "Depends": "py-genlayer:test" }
+  ]
+}

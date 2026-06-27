@@ -1,0 +1,64 @@
+[package]
+name = "genlayer_sdk"
+version = "0.0.2"
+edition = "2024"
+repository = "https://github.com/genlayerlabs/genvm"
+description = "Genlayer SDK for building smart contracts in rust"
+readme = "README.md"
+license-file = "LICENSE.txt"
+homepage = "https://genlayer.com"
+keywords = ["genlayer", "blockchain", "smart-contracts", "wasm", "wasi"]
+categories = ["api-bindings", "wasm"]
+exclude = [
+    "/tests/**", "/fuzz/**"
+]
+
+# Example contract that fetches a webpage
+# Build with: cargo build --example fetch_webpage --target wasm32-wasip1
+[[example]]
+name = "fetch_webpage"
+path = "examples/fetch_webpage.rs"
+
+[[example]]
+name = "storage_dyn_array"
+path = "examples/storage_dyn_array.rs"
+
+[[example]]
+name = "storage_root"
+path = "examples/storage_root.rs"
+
+[[example]]
+name = "fuzz-gvm-tree-map"
+path = "fuzz/gvm-tree-map.rs"
+required-features = ["arbitrary", "storage", "dont_define_wasi_storage"]
+
+[[example]]
+name = "fuzz-gvm-gl-call-roundtrip"
+path = "fuzz/gvm-gl-call-roundtrip.rs"
+required-features = ["arbitrary"]
+
+[features]
+default = ["wasi", "storage"]
+wasi = []
+dont_define_wasi_storage = []
+storage = ["wasi"]
+arbitrary = ["dep:arbitrary", "genlayer_calldata/arbitrary"]
+
+[dependencies]
+hex = "0.4.3"
+num-bigint = {version = "0.4.6", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+arbitrary = { version = "1.0", optional = true, features = ["derive"] }
+primitive-types = { version = "0.13", features = ["impl-serde"] }
+serde_bytes = { version = "0.11.19"}
+bytes = {version = "1.11.0", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha3 = { version = "0.10" }
+
+[dependencies.genlayer_calldata]
+path = "../calldata"
+version = "0.0.2"
+
+[dev-dependencies]
+primitive-types = { version = "0.13", features = ["impl-serde"] }
+afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }

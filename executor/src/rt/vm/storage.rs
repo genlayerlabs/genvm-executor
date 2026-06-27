@@ -1,0 +1,516 @@
+use std::mem::MaybeUninit;
+use std::ops::DerefMut;
+
+use const_lru::ConstLru;
+use genlayer_sdk::abi;
+use genvm_common::{calldata, sync};
+
+use crate::{public_abi::root_offsets, rt, runners, SlotID};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(C)]
+pub struct PageID(pub SlotID, pub u32);
+
+impl PageID {
+    pub fn to_bytes(&self) -> [u8; 36] {
+        let mut res = [0u8; 36];
+        res[..32].copy_from_slice(&self.0.raw());
+        res[32..].copy_from_slice(&self.1.to_be_bytes());
+        res
+    }
+
+    pub fn from_bytes(data: [u8; 36]) -> Self {
+        let mut slot_bytes = [0u8; 32];
+        slot_bytes.copy_from_slice(&data[..32]);
+        let slot_id = SlotID::from_bytes(slot_bytes);
+        let mut index_bytes = [0u8; 4];
+        index_bytes.copy_from_slice(&data[32..]);
+        let index = u32::from_be_bytes(index_bytes);
+        Self(slot_id, index)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Delta(
+    #[serde(with = "serde_bytes")] [u8; 36],
+    #[serde(with = "serde_bytes")] Vec<u8>,
+);
+
+impl<W: calldata::Writer> calldata::codec::Encode<W> for Delta {
+    type Error = W::Error;
+
+    fn encode(&self, enc: &mut calldata::Encoder<W>) -> Result<(), Self::Error> {
+        enc.start_array(2)?;
+        enc.push_bytes(&self.0)?;
+        enc.push_bytes(&self.1)
+    }
+}
+
+pub trait HostStorage {
+    fn storage_read(&mut self, slot_id: SlotID, index: u32, buf: &mut [u8]) -> anyhow::Result<()>;
+}
+
+impl<HS: HostStorage, T: DerefMut<Target = HS>> HostStorage for T {
+    fn storage_read(&mut self, slot_id: SlotID, index: u32, buf: &mut [u8]) -> anyhow::Result<()> {
+        self.deref_mut().storage_read(slot_id, index, buf)
+    }
+}
+
+pub trait HostStorageLocking {
+    type ReturnType<'a>: HostStorage
+    where
+        Self: 'a;
+
+    fn lock(&self) -> impl std::future::Future<Output = Self::ReturnType<'_>> + Send;
+}
+
+#[derive(Clone, Debug)]
+pub struct Limiter(sync::DArc<rt::fees::DataLimit>);
+
+impl Limiter {
+    pub fn new(data_fees_limit: sync::DArc<rt::fees::DataLimit>) -> Self {
+        Self(data_fees_limit)
+    }
+
+    pub async fn consume(&self, amount: u64) -> rt::errors::Result<()> {
+        if !self.0.consume_storage_pages(amount).await? {
+            return Err(rt::errors::Error::wrap(
+                abi::consts::VmError::oom().storage(),
+                anyhow::anyhow!("consuming {amount} storage pages"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StoragePagesOverride(
+    rpds::RedBlackTreeMap<PageID, [u8; 32], archery::ArcTK>,
+    Limiter,
+);
+
+impl StoragePagesOverride {
+    fn new(storage_pages_limit: rt::vm::storage::Limiter) -> Self {
+        Self(Default::default(), storage_pages_limit)
+    }
+
+    fn read_page_override(&self, key: PageID) -> Option<[u8; 32]> {
+        self.0.get(&key).cloned()
+    }
+
+    fn get(&self, key: PageID) -> Option<[u8; 32]> {
+        self.0.get(&key).cloned()
+    }
+
+    async fn write_page(&mut self, key: PageID, value: [u8; 32]) -> rt::errors::Result<()> {
+        if !self.0.contains_key(&key) {
+            self.1.consume(1).await?;
+        }
+        self.0 = self.0.insert(key, value);
+
+        Ok(())
+    }
+}
+
+const STORAGE_CACHE_SIZE: usize = 128;
+
+#[derive(Clone)]
+pub struct Storage<HS: Send + Sync> {
+    pub address: calldata::Address,
+    host: HS,
+    pages: StoragePagesOverride,
+    cache: ConstLru<PageID, [u8; 32], STORAGE_CACHE_SIZE>,
+}
+
+impl<HS: Send + Sync> Storage<HS> {
+    pub fn new(address: calldata::Address, storage_pages_limit: Limiter, host: HS) -> Self {
+        Self {
+            address,
+            host,
+            pages: StoragePagesOverride::new(storage_pages_limit),
+            cache: ConstLru::new(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn read_page_override(&self, key: PageID) -> Option<[u8; 32]> {
+        self.pages.read_page_override(key)
+    }
+
+    #[inline(always)]
+    pub async fn write_page(&mut self, key: PageID, value: [u8; 32]) -> rt::errors::Result<()> {
+        self.pages.write_page(key, value).await
+    }
+
+    pub fn make_delta(&self) -> Vec<Delta> {
+        let mut res = Vec::<Delta>::new();
+
+        for (k, v) in &self.pages.0 {
+            if k.1 != 0 {
+                let prev_page_id = PageID(k.0, k.1 - 1);
+                if self.pages.0.get(&prev_page_id).is_some() {
+                    res.last_mut()
+                        .expect("res must be non-empty when prev page exists")
+                        .deref_mut()
+                        .1
+                        .extend_from_slice(v);
+                    continue;
+                }
+            }
+            res.push(Delta(k.to_bytes(), v.to_vec()));
+        }
+
+        res
+    }
+}
+
+pub fn default_code_slot() -> SlotID {
+    SlotID::ZERO.indirection(root_offsets::CODE)
+}
+
+impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
+    pub async fn read(
+        &mut self,
+        slot_id: SlotID,
+        index: u32,
+        buf: &mut [u8],
+    ) -> rt::errors::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+
+        let start_index = index as usize;
+        let end_index = start_index + buf.len();
+
+        // Calculate page range
+        let start_page = start_index / 32;
+        let end_page = (end_index - 1) / 32;
+
+        // Check which pages are known (in override or cache)
+        let page_is_known = |this: &mut Self, page_id: PageID| -> bool {
+            this.pages.get(page_id).is_some() || this.cache.get(&page_id).is_some()
+        };
+
+        // Multi-page case: cut known prefix and suffix
+        let mut need_host_read_start = start_index;
+        let mut need_host_read_end = end_index;
+
+        // Cut known prefix
+        for page_idx in start_page..=end_page {
+            let page_id = PageID(slot_id, page_idx as u32);
+            if page_is_known(self, page_id) {
+                need_host_read_start = (page_idx + 1) * 32;
+            } else {
+                break;
+            }
+        }
+
+        // Cut known suffix
+        for page_idx in (start_page..=end_page).rev() {
+            let page_id = PageID(slot_id, page_idx as u32);
+            if page_is_known(self, page_id) {
+                need_host_read_end = page_idx * 32;
+            } else {
+                break;
+            }
+        }
+
+        // Read from host if needed
+        if need_host_read_start < need_host_read_end {
+            let host_read_len = need_host_read_end - need_host_read_start;
+            let host_buf_offset = need_host_read_start - start_index;
+            self.host.lock().await.storage_read(
+                slot_id,
+                need_host_read_start as u32,
+                &mut buf[host_buf_offset..host_buf_offset + host_read_len],
+            )?;
+        }
+
+        let mut put_to_cache: [MaybeUninit<(PageID, [u8; 32])>; STORAGE_CACHE_SIZE / 16] =
+            // SAFETY: MaybeUninit does not require initialization
+            unsafe { MaybeUninit::uninit().assume_init() };
+        let mut put_to_cache_count = 0;
+
+        for page_idx in start_page..=end_page {
+            let page_id = PageID(slot_id, page_idx as u32);
+
+            let page_start_byte = page_idx * 32;
+            let page_end_byte = page_start_byte + 32;
+            if let Some(page_data) = self
+                .pages
+                .get(page_id)
+                .or_else(|| self.cache.get(&page_id).cloned())
+            {
+                // Calculate overlap between requested range and this page
+                let overlap_start = start_index.max(page_start_byte);
+                let overlap_end = end_index.min(page_end_byte);
+
+                if overlap_start < overlap_end {
+                    let src_offset = overlap_start - page_start_byte;
+                    let dst_offset = overlap_start - start_index;
+                    let copy_len = overlap_end - overlap_start;
+
+                    buf[dst_offset..dst_offset + copy_len]
+                        .copy_from_slice(&page_data[src_offset..src_offset + copy_len]);
+                }
+            } else if page_start_byte >= need_host_read_start && page_end_byte <= need_host_read_end
+            {
+                // This page was read from host, extract it from buf and put to cache
+                let src_offset = page_start_byte - start_index;
+                let mut page_data = [0u8; 32];
+                page_data.copy_from_slice(&buf[src_offset..src_offset + 32]);
+
+                if put_to_cache_count < put_to_cache.len() {
+                    put_to_cache[put_to_cache_count].write((page_id, page_data));
+                    put_to_cache_count += 1;
+                } else {
+                    // staging buffer full: insert directly so no read page is dropped
+                    self.cache.insert(page_id, page_data);
+                }
+            }
+        }
+
+        for item in put_to_cache.iter().take(put_to_cache_count) {
+            // SAFETY: elements 0..put_to_cache_count have been initialized above
+            let (page_id, page_data) = unsafe { item.assume_init_ref() };
+            self.cache.insert(*page_id, *page_data);
+        }
+
+        Ok(())
+    }
+
+    async fn write_single_page(
+        &mut self,
+        page_id: PageID,
+        offset_in_page: usize,
+        buf: &[u8],
+    ) -> rt::errors::Result<()> {
+        let mut page_data = [0u8; 32];
+
+        // Check if this is a full page write
+        if offset_in_page == 0 && buf.len() == 32 {
+            // Full page write
+            page_data.copy_from_slice(buf);
+        } else {
+            // Partial page write - need existing data first
+            if let Some(existing_page) = self.pages.get(page_id) {
+                page_data.copy_from_slice(&existing_page);
+            } else {
+                // Read from host
+                let page_start = ((page_id.1 as usize) * 32) as u32;
+                self.host
+                    .lock()
+                    .await
+                    .storage_read(page_id.0, page_start, &mut page_data)?;
+            }
+
+            // Apply the write data
+            page_data[offset_in_page..offset_in_page + buf.len()].copy_from_slice(buf);
+        }
+
+        self.write_page(page_id, page_data).await?;
+        Ok(())
+    }
+
+    pub async fn write(
+        &mut self,
+        slot_id: SlotID,
+        index: u32,
+        buf: &[u8],
+    ) -> rt::errors::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+
+        let start_index = index as usize;
+        let end_index = start_index + buf.len();
+
+        // Calculate page range
+        let start_page = start_index / 32;
+        let end_page = (end_index - 1) / 32;
+
+        // Handle single page case
+        if start_page == end_page {
+            let page_id = PageID(slot_id, start_page as u32);
+            let offset_in_page = start_index % 32;
+            return self.write_single_page(page_id, offset_in_page, buf).await;
+        }
+
+        // Multi-page case
+
+        let first_page_start = start_page * 32;
+        let last_page_start = end_page * 32;
+
+        let partial_first = start_index > first_page_start;
+        let partial_last = end_index < last_page_start + 32;
+
+        if partial_first || partial_last {
+            let mut host_lock = self.host.lock().await;
+
+            if partial_first {
+                let page_id = PageID(slot_id, start_page as u32);
+                let mut page_data = [0u8; 32];
+
+                if let Some(existing_page) = self.pages.get(page_id) {
+                    page_data.copy_from_slice(&existing_page);
+                } else {
+                    host_lock.storage_read(slot_id, first_page_start as u32, &mut page_data)?;
+                }
+
+                let offset_in_page = start_index % 32;
+                let copy_len = 32 - offset_in_page;
+                page_data[offset_in_page..].copy_from_slice(&buf[..copy_len]);
+
+                self.pages.write_page(page_id, page_data).await?;
+            }
+
+            if partial_last {
+                let page_id = PageID(slot_id, end_page as u32);
+                let mut page_data = [0u8; 32];
+
+                if let Some(existing_page) = self.pages.get(page_id) {
+                    page_data.copy_from_slice(&existing_page);
+                } else {
+                    host_lock.storage_read(slot_id, last_page_start as u32, &mut page_data)?;
+                }
+
+                let end_offset_in_page = end_index % 32;
+                let src_offset = buf.len() - end_offset_in_page;
+                page_data[..end_offset_in_page].copy_from_slice(&buf[src_offset..]);
+
+                self.pages.write_page(page_id, page_data).await?;
+            }
+        }
+
+        // Write all middle pages directly
+        for page_idx in start_page..=end_page {
+            let page_start = page_idx * 32;
+            let page_end = page_start + 32;
+
+            // Skip if this is a partial page we already handled
+            if (page_idx == start_page && start_index > page_start)
+                || (page_idx == end_page && end_index < page_end)
+            {
+                continue;
+            }
+
+            let page_id = PageID(slot_id, page_idx as u32);
+            let src_offset = page_start - start_index;
+            let mut page_data = [0u8; 32];
+            page_data.copy_from_slice(&buf[src_offset..src_offset + 32]);
+            self.write_page(page_id, page_data).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn write_code(&mut self, code: &[u8]) -> rt::errors::Result<()> {
+        let code_slot = default_code_slot();
+
+        if code.len() > (u32::MAX - 4) as usize {
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().storage()));
+        }
+
+        let code_len = code.len() as u32;
+        let mut len_buf = [0; 4];
+        len_buf.copy_from_slice(&code_len.to_le_bytes());
+        self.write(code_slot, 0, &len_buf).await?;
+        self.write(code_slot, 4, code).await?;
+
+        Ok(())
+    }
+
+    /// Reads the GenVM major version the contract was deployed for, from the
+    /// `major` root field (zero if never written).
+    pub async fn read_major(&mut self) -> rt::errors::Result<u8> {
+        let mut buf = [0u8; 1];
+        self.read(SlotID::ZERO, root_offsets::MAJOR, &mut buf)
+            .await?;
+        Ok(buf[0])
+    }
+
+    /// Writes the GenVM major version the contract is deployed for into the
+    /// `major` root field, so later runs can verify major compatibility (see
+    /// [`read_major`]). Written on deploy alongside the code.
+    pub async fn write_major(&mut self, major: u8) -> rt::errors::Result<()> {
+        self.write(SlotID::ZERO, root_offsets::MAJOR, &[major])
+            .await
+    }
+
+    /// Resolves the slot the contract code is stored at: the raw `code_slot` root
+    /// field if set, otherwise the default `code` slot.
+    pub async fn resolve_code_slot(&mut self) -> rt::errors::Result<SlotID> {
+        let mut raw = [0u8; 32];
+        self.read(SlotID::ZERO, root_offsets::CODE_SLOT, &mut raw)
+            .await?;
+        if raw == [0u8; 32] {
+            Ok(default_code_slot())
+        } else {
+            Ok(SlotID::from_bytes(raw))
+        }
+    }
+
+    /// Verifies the contract's major version matches this node's, then resolves
+    /// its code slot. The major is checked *first*, before trusting the
+    /// host-read code-slot pointer; on mismatch a `major_mismatch` [`Error`]
+    /// is returned so the caller surfaces it as a contract error.
+    pub async fn check_major_and_resolve_code_slot(&mut self) -> rt::errors::Result<SlotID> {
+        let contract_major = self.read_major().await?;
+        let node_major = genvm_common::version::CURRENT.major;
+        if contract_major as u16 != node_major {
+            return Err(rt::errors::Error::wrap(
+                abi::consts::VmError::invalid_contract().major_mismatch(),
+                anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
+            ));
+        }
+        self.resolve_code_slot().await
+    }
+
+    pub async fn read_code_at(
+        &mut self,
+        code_slot: SlotID,
+        limiter: &rt::memlimiter::Limiter,
+    ) -> rt::errors::Result<Box<[u8]>> {
+        let mut len_buf = [0; 4];
+        self.read(code_slot, 0, &mut len_buf).await?;
+        let code_size = u32::from_le_bytes(len_buf);
+
+        if !limiter.consume(code_size) {
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().storage()));
+        }
+
+        let res = Box::new_uninit_slice(code_size as usize);
+        let mut res = unsafe { res.assume_init() };
+
+        self.read(code_slot, 4, &mut res).await?;
+
+        Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_sorted_correctly_1_byte() {
+        let left = PageID(SlotID::from_bytes([1u8; 32]), 5);
+        let right = PageID(SlotID::from_bytes([1u8; 32]), 10);
+        assert!(left < right);
+        assert!(left.to_bytes() < right.to_bytes());
+
+        assert!(right > left);
+        assert!(right.to_bytes() > left.to_bytes());
+    }
+
+    #[test]
+    fn pages_sorted_correctly_2_byte() {
+        let left = PageID(SlotID::from_bytes([1u8; 32]), 5);
+        let right = PageID(SlotID::from_bytes([1u8; 32]), 1024);
+        assert!(left < right);
+        assert!(left.to_bytes() < right.to_bytes());
+
+        assert!(right > left);
+        assert!(right.to_bytes() > left.to_bytes());
+    }
+}

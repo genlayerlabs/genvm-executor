@@ -1,0 +1,30 @@
+exclude = [
+    "runners/genlayer-py-std/src-emb/onnx",
+    "runners/py-libs/**/*",
+]
+# The hook passes an explicit file list; ruff only honors `exclude` for
+# explicitly-named files when force-exclude is set (otherwise exclude applies
+# only to directory discovery, and vendored/generated files get reformatted).
+force-exclude = true
+indent-width = 2
+
+[format]
+indent-style = "tab"
+quote-style = "single"
+line-ending = "lf"
+
+skip-magic-trailing-comma = false
+docstring-code-format = true
+
+[lint]
+ignore = [
+    "E741"
+]
+
+extend-select = [
+    "I"
+]
+
+exclude = [
+    "runners/cpython/modules/**",
+]

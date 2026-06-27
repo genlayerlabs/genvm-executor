@@ -1,0 +1,543 @@
+import abc
+import collections.abc
+import hashlib
+import typing
+
+from genlayer.types import u256
+
+
+def slot_id_to_bytes(slot_id: u256 | bytes) -> bytes:
+	if isinstance(slot_id, int):
+		return slot_id.to_bytes(32, 'little', signed=False)
+	elif isinstance(slot_id, bytes):
+		if len(slot_id) != 32:
+			raise ValueError(f'slot_id must be 32 bytes, got {len(slot_id)}')
+		return slot_id
+	else:
+		raise TypeError(f'slot_id must be u256 or bytes, got {type(slot_id)}')
+
+
+class Manager(metaclass=abc.ABCMeta):
+	"""
+	Abstract interface for storage backends.
+	"""
+
+	@abc.abstractmethod
+	def get_store_slot(self, slot_id: bytes | u256, /) -> 'Slot':
+		"""
+		Return a slot for the given address, creating one if necessary.
+
+		:param slot_id: 32-byte slot address or 256-bit slot address
+		:returns: storage slot
+		"""
+		...
+
+	@abc.abstractmethod
+	def do_read(self, slot_id: bytes, off: int, len: int, /) -> bytes:
+		"""
+		Read raw bytes from storage.
+
+		:param slot_id: slot identifier
+		:param off: byte offset within the slot
+		:param len: number of bytes to read
+		:returns: bytes read
+		"""
+		...
+
+	@abc.abstractmethod
+	def do_write(self, slot_id: bytes, off: int, what: collections.abc.Buffer, /):
+		"""
+		Write raw bytes to storage.
+
+		:param slot_id: slot identifier
+		:param off: byte offset within the slot
+		:param what: data to write
+		"""
+		...
+
+
+@typing.final
+class Slot:
+	"""
+	Handle to a named region of storage, identified by a 32-byte address.
+	"""
+
+	manager: Manager
+	id: bytes
+
+	__slots__ = ('manager', 'id', '_indir_cache')
+
+	def __getstate__(self):
+		return (self.manager, self.id)
+
+	def __setstate__(self, state):
+		self.manager, self.id = state
+		self._indir_cache = hashlib.sha3_256(self.id)
+
+	def __init__(self, addr: bytes, manager: Manager, /):
+		self.id = addr
+		self.manager = manager
+
+		self._indir_cache = hashlib.sha3_256(addr)
+
+	def indirect(self, off: int, /) -> 'Slot':
+		"""
+		Derive a child slot by hashing this slot's address with the given offset.
+
+		:param off: offset used to derive the child address
+		:returns: derived child slot
+		"""
+		hasher = self._indir_cache.copy()
+		hasher.update(off.to_bytes(4, 'little'))
+		return self.manager.get_store_slot(hasher.digest())
+
+	def read(self, off: int, len: int, /) -> bytes:
+		"""
+		Read raw bytes from this slot.
+
+		:param off: byte offset
+		:param len: number of bytes to read
+		:returns: bytes read
+		"""
+		return self.manager.do_read(self.id, off, len)
+
+	def write(self, off: int, what: collections.abc.Buffer, /) -> None:
+		"""
+		Write raw bytes to this slot.
+
+		:param off: byte offset
+		:param what: data to write
+		"""
+		return self.manager.do_write(self.id, off, what)
+
+	def as_int(self) -> u256:
+		"""
+		Return the slot address as an unsigned 256-bit integer.
+
+		:returns: slot address as u256
+		"""
+		return int.from_bytes(self.id, 'little', signed=False)
+
+	def cast[T](self, t: typing.Type[T], offset: int, /) -> T:
+		"""
+		Unsafely casts a storage slot to the given type. Use with caution.
+		"""
+		from ._internal.generate import _BuilderCtx, _storage_build
+
+		td = _storage_build(_BuilderCtx.empty(), t)
+
+		instance = td.get(self, offset)
+
+		return instance
+
+	def __eq__(self, r: object) -> bool:
+		if not isinstance(r, Slot):
+			return False
+		if r.manager is not self.manager:
+			return False
+		return self.id == r.id
+
+	def __hash__(self) -> int:
+		return hash(self.id)
+
+	def __repr__(self):
+		return f'Slot({self.id.hex()})'
+
+	def __str__(self):
+		return f'Slot({self.id.hex()})'
+
+
+class ComplexCopyAction(typing.Protocol):
+	"""
+	Protocol for copy actions that require non-trivial logic (beyond plain memcpy).
+	"""
+
+	def copy(self, frm: Slot, frm_off: int, to: Slot, to_off: int) -> int: ...
+
+
+type CopyAction = int | ComplexCopyAction
+
+
+def actions_apply_copy(
+	copy_actions: list[CopyAction],
+	to_stor: Slot,
+	to_off: int,
+	frm_stor: Slot,
+	frm_off: int,
+	/,
+) -> int:
+	"""
+	Execute a list of copy actions, transferring data between slots.
+
+	:param copy_actions: list of copy actions to execute
+	:param to_stor: destination slot
+	:param to_off: destination offset
+	:param frm_stor: source slot
+	:param frm_off: source offset
+	:returns: total number of bytes copied
+	"""
+	cum_off = 0
+	for act in copy_actions:
+		if isinstance(act, int):
+			to_stor.write(to_off + cum_off, frm_stor.read(frm_off + cum_off, act))
+			cum_off += act
+		else:
+			cum_off += act.copy(frm_stor, frm_off + cum_off, to_stor, to_off + cum_off)
+	return cum_off
+
+
+def actions_append(l: list[CopyAction], r: list[CopyAction], /):
+	"""
+	Append copy actions from ``r`` to ``l``, merging adjacent int (memcpy) actions.
+
+	:param l: target action list (modified in place)
+	:param r: actions to append
+	"""
+	it = iter(r)
+	if len(l) > 0 and len(r) > 0 and isinstance(l[-1], int) and isinstance(r[0], int):
+		l[-1] += r[0]
+		next(it)
+	l.extend(it)
+
+
+class TypeDesc[T](metaclass=abc.ABCMeta):
+	"""
+	Basic type description
+	"""
+
+	size: int
+	"""
+	size that value takes in current slot
+	"""
+
+	copy_actions: list[CopyAction]
+	"""
+	actions that must be executed for copying this data
+
+	:py:class:`int` represents ``memcpy``
+	"""
+	alias_to: typing.Any
+
+	__slots__ = ('size', 'copy_actions', 'alias_to')
+
+	def __init__(self, size: int, copy_actions: list[CopyAction]):
+		self.copy_actions = copy_actions
+		self.size = size
+		self.alias_to = None
+
+	@abc.abstractmethod
+	def get(self, slot: Slot, off: int) -> T:
+		"""
+		Method that reads value from slot and offset pair
+		"""
+		raise NotImplementedError()
+
+	@abc.abstractmethod
+	def set(self, slot: Slot, off: int, val: T) -> None:
+		"""
+		Method that writes value to slot and offset pair
+		"""
+		raise NotImplementedError()
+
+	def __repr__(self):
+		ret: list[str] = []
+		if self.alias_to is not None:
+			ret.append(repr(self.alias_to))
+			ret.append('((')
+		ret.append(type(self).__name__)
+		ret.append('[')
+		for k, v in self.__dict__.items():
+			if k == 'alias_to':
+				continue
+			ret.append(f' {k!r}: {v!r} ;')
+		ret.append(']')
+		if self.alias_to is not None:
+			ret.append('))')
+		return ''.join(ret)
+
+
+class _WithStorageSlot(typing.Protocol):
+	_storage_slot: Slot
+	_off: int
+
+
+class _WithStorageSlotAndTD(_WithStorageSlot, typing.Protocol):
+	_item_desc: TypeDesc
+
+
+class SpecialTypeDesc(TypeDesc):
+	__slots__ = ('item_desc', 'view_ctor')
+
+	def __init__(
+		self, item_desc: TypeDesc, view_ctor: typing.Callable[[], _WithStorageSlotAndTD]
+	):
+		self.item_desc = item_desc
+		self.view_ctor = view_ctor
+
+	def get(self, slot: Slot, off: int) -> typing.Any:
+		ret = self.view_ctor()
+		ret._storage_slot = slot
+		ret._off = off
+		ret._item_desc = self.item_desc
+
+		return ret
+
+	def __eq__(self, r):
+		return type(self) is type(r) and self.item_desc == r.item_desc
+
+	def __hash__(self) -> int:
+		return hash((type(self).__qualname__, self.item_desc))
+
+
+class Indirection[T](_WithStorageSlotAndTD):
+	"""
+	This class provides ability to save data at its own slot. Occupies 1 byte to prevent collision.
+	"""
+
+	__slots__ = ('_storage_slot', '_off', '_item_desc')
+
+	def get(self) -> T:
+		"""
+		Read the indirected value.
+
+		:returns: stored value
+		"""
+		return self._item_desc.get(self._storage_slot.indirect(self._off), 0)
+
+	def set(self, val: T, /) -> None:
+		"""
+		Write a value through the indirection.
+
+		:param val: value to store
+		"""
+		self._item_desc.set(self._storage_slot.indirect(self._off), 0, val)
+
+	def slot(self) -> Slot:
+		"""
+		:returns: :py:class:`Slot` at which data resides
+		"""
+		return self._storage_slot.indirect(self._off)
+
+	def __init__(self):
+		raise TypeError('this class can not be instantiated by user')
+
+
+class IndirectionTypeDesc[T](
+	SpecialTypeDesc, TypeDesc[Indirection[T]], ComplexCopyAction
+):
+	def __init__(self, item_desc: TypeDesc):
+		SpecialTypeDesc.__init__(self, item_desc, lambda: Indirection.__new__(Indirection))
+		TypeDesc.__init__(self, 1, [self])
+
+	def set(self, slot: Slot, off: int, val: Indirection[T]) -> None:
+		self.item_desc.set(slot.indirect(off), 0, val.get())
+
+	def copy(self, frm: Slot, frm_off: int, to: Slot, to_off: int) -> int:
+		val = self.item_desc.get(frm.indirect(frm_off), 0)
+		self.item_desc.set(to.indirect(to_off), 0, val)
+
+		return 1
+
+
+class PseudoSequence[T](
+	collections.abc.Sized, collections.abc.Iterable[T], typing.Protocol
+):
+	"""
+	Class that supports indexing elements but not slicing
+	"""
+
+	def __getitem__(self, key: int, /) -> T: ...
+
+
+class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
+	"""
+	Variable Length Array. Can be used in pair with :py:class:`~Indirection` to save length at the same place as data.
+	Can also be used in C language way. Occupies at least 4 bytes (for length)
+	"""
+
+	_storage_slot: Slot
+	_off: int
+	_item_desc: TypeDesc[T]
+
+	__slots__ = ('_storage_slot', '_off', '_item_desc')
+
+	def __len__(self) -> int:
+		data = self._storage_slot.read(self._off, 4)
+		return int.from_bytes(data, byteorder='little')
+
+	def __getitem__(self, idx: int) -> T:
+		"""
+		Get element at the given index.
+
+		:param idx: non-negative index
+		:returns: element at the index
+		:raises IndexError: when index is out of range
+		"""
+		if idx >= len(self) or idx < 0:
+			raise IndexError(f'{idx} out of range 0..{len(self)}')
+
+		return self._item_desc.get(
+			self._storage_slot, self._off + 4 + idx * self._item_desc.size
+		)
+
+	def __setitem__(self, idx: int, val: T):
+		"""
+		Set element at the given index.
+
+		:param idx: non-negative index
+		:param val: value to set
+		:raises IndexError: when index is out of range
+		"""
+		if idx >= len(self) or idx < 0:
+			raise IndexError(f'{idx} out of range 0..{len(self)}')
+
+		return self._item_desc.set(
+			self._storage_slot, self._off + 4 + idx * self._item_desc.size, val
+		)
+
+	def __iter__(self):
+		l = len(self)
+		for i in range(l):
+			yield self[i]
+
+	def append(self, val: T, /):
+		"""
+		Append a value to the end of the array.
+
+		:param val: value to append
+		"""
+		le = len(self)
+		self._item_desc.set(
+			self._storage_slot, self._off + 4 + le * self._item_desc.size, val
+		)
+		self._storage_slot.write(self._off, (le + 1).to_bytes(4, 'little'))
+
+	def extend(self, val: PseudoSequence[T], /):
+		"""
+		Add all elements from ``val``, truncating first.
+
+		:param val: sequence of values (or raw bytes for ``VLA[u8]``)
+		"""
+		if isinstance(val, bytes):
+			from ._internal.desc_base_types import _u8_desc
+
+			assert self._item_desc == _u8_desc
+			old_len = int.from_bytes(self._storage_slot.read(self._off, 4), 'little')
+			self._storage_slot.write(self._off + 4 + old_len, val)
+			self._storage_slot.write(self._off, (old_len + len(val)).to_bytes(4, 'little'))
+			return
+
+		for v in val:
+			self.append(v)
+
+	def assign(self, val: PseudoSequence[T], /):
+		"""
+		Replace contents with elements from ``val``, truncating first.
+
+		:param val: sequence of values (or raw bytes for ``VLA[u8]``)
+		"""
+		if isinstance(val, bytes):
+			from ._internal.desc_base_types import _u8_desc
+
+			assert self._item_desc == _u8_desc
+			self._storage_slot.write(self._off, len(val).to_bytes(4, 'little'))
+			self._storage_slot.write(self._off + 4, val)
+			return
+
+		self.truncate()
+
+		for v in val:
+			self.append(v)
+
+	def set_length(self, length: int, /):
+		"""
+		Set the array length
+		"""
+		self._storage_slot.write(self._off, length.to_bytes(4, 'little'))
+
+	def slot(self) -> Slot:
+		"""
+		Return the underlying storage slot.
+
+		:returns: storage slot
+		"""
+		return self._storage_slot
+
+	def data_offset(self) -> int:
+		return self._off + 4
+
+	def truncate(self, to: int = 0, /):
+		"""
+		Truncate the array to the given length.
+
+		:param to: new length (default 0)
+		:raises IndexError: when ``to`` exceeds current length
+		"""
+		if to > len(self):
+			raise IndexError(f'{to} out of range 0..{len(self)}')
+		self._storage_slot.write(self._off, to.to_bytes(4, 'little'))
+
+
+class VLATypeDesc[T](SpecialTypeDesc, TypeDesc[VLA[T]], ComplexCopyAction):
+	SIZE = 2**32 - 1
+
+	def __init__(self, item_desc: TypeDesc):
+		SpecialTypeDesc.__init__(self, item_desc, lambda: VLA.__new__(VLA))
+		TypeDesc.__init__(self, VLATypeDesc.SIZE, [self])
+
+	def set(self, slot: Slot, off: int, val: VLA[T]) -> None:
+		self.copy(val._storage_slot, val._off, slot, off)
+
+	def copy(self, frm: Slot, frm_off: int, to: Slot, to_off: int) -> int:
+		src: VLA[T] = self.get(frm, frm_off)
+		dst: VLA[T] = self.get(to, to_off)
+
+		dst.assign(src)
+
+		return VLATypeDesc.SIZE
+
+
+class InmemManager(Manager):
+	"""
+	In-memory storage backend, useful for testing.
+	"""
+
+	_parts: dict[bytes, tuple[Slot, bytearray]]
+
+	__slots__ = ('_parts',)
+
+	def __init__(self):
+		self._parts = {}
+
+	def get_store_slot(self, id: bytes | u256) -> Slot:
+		id = slot_id_to_bytes(id)
+		res = self._parts.get(id, None)
+		if res is None:
+			slt = Slot(id, self)
+			self._parts[id] = (slt, bytearray())
+			return slt
+		return res[0]
+
+	def do_read(self, id: bytes, off: int, le: int) -> bytes:
+		res = self._parts.get(id, None)
+		if res is None:
+			res = (Slot(id, self), bytearray())
+			self._parts[id] = res
+		_, mem = res
+		mem.extend(b'\x00' * (off + le - len(mem)))
+		return bytes(memoryview(mem)[off : off + le])
+
+	def do_write(self, id: bytes, off: int, what: collections.abc.Buffer) -> None:
+		_, mem = self._parts[id]
+		what = memoryview(what)
+		l = len(what)
+		mem.extend(b'\x00' * (off + l - len(mem)))
+		memoryview(mem)[off : off + l] = what
+
+	def debug(self):
+		print('=== fake storage ===')
+		for k, v in self._parts.items():
+			print(f'{k.hex()}\n\t{v[1]}')
+
+
+ROOT_SLOT_ID: typing.Final = b'\x00' * 32

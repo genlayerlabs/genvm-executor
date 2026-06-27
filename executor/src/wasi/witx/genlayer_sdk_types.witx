@@ -1,0 +1,22 @@
+(typename $errno
+    (enum (@witx tag u32)
+        ;;; Success
+        $success
+
+        $overflow
+        $inval
+        $fault
+        $ilseq
+
+        $io
+
+        $forbidden
+        $inbalance
+    )
+)
+
+(typename $success bool)
+
+(typename $bytes_len u32)
+
+(typename $fd (handle))

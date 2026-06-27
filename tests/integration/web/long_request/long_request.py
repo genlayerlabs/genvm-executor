@@ -1,0 +1,12 @@
+# { "Depends": "py-genlayer:test" }
+import genlayer as gl
+
+
+class Contract(gl.contract.Contract):
+	def __init__(self):
+		def run():
+			return gl.nondet.web.render(
+				'http://test-server.genlayer.com/timeout/20', mode='text'
+			)
+
+		print(gl.eq_principle.strict_eq(run))

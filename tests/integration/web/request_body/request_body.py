@@ -1,0 +1,14 @@
+# { "Depends": "py-genlayer:test" }
+import genlayer as gl
+
+
+class Contract(gl.contract.Contract):
+	def __init__(self):
+		def run():
+			return gl.nondet.web.request(
+				'https://test-server.genlayer.com/body/echo',
+				method='POST',
+				body=b'\xde\xad\xbe\xef',
+			).body
+
+		print(gl.eq_principle.strict_eq(run))

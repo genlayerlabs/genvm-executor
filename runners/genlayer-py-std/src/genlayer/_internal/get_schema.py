@@ -1,0 +1,204 @@
+__all__ = ('get_schema',)
+
+import collections.abc
+import dataclasses
+import inspect
+import types
+import typing
+
+import genlayer._internal.reflect as reflect
+from genlayer._internal.schema_attrs import (
+	MIN_GAS_LEADER_ATTR,
+	MIN_GAS_VALIDATOR_ATTR,
+	PAYABLE_ATTR,
+	PUBLIC_ATTR,
+	READONLY_ATTR,
+)
+from genlayer.types import Address
+
+
+def _is_public(meth) -> bool:
+	if meth is None:
+		return False
+	return getattr(meth, PUBLIC_ATTR, False)
+
+
+def _is_list(t, permissive: bool) -> bool:
+	if t is list:
+		return True
+	if not permissive:
+		return False
+	try:
+		if issubclass(t, (str, bytes)):
+			return False
+	except Exception:
+		pass
+	try:
+		return issubclass(t, collections.abc.Sequence)
+	except Exception:
+		return False
+
+
+def _is_dict(t, permissive: bool) -> bool:
+	if t is dict:
+		return True
+	if not permissive:
+		return False
+	try:
+		return issubclass(t, collections.abc.Mapping)
+	except Exception:
+		return False
+
+
+def _repr_type(t: typing.Any, permissive: bool) -> typing.Any:
+	if t is inspect.Signature.empty:
+		return 'any'
+	if type(t) is typing.NewType:
+		return _repr_type(t.__supertype__, permissive)
+	# primitive
+	if t is None or t is types.NoneType:
+		return 'null'
+	if t is bool:
+		return 'bool'
+	if t is int:
+		return 'int'
+	if t is str:
+		return 'string'
+	if t is bytes:
+		return 'bytes'
+	if t is Address:
+		return 'address'
+	if _is_list(t, permissive):
+		return 'array'
+	if _is_dict(t, permissive):
+		return 'dict'
+	if t is typing.Any:
+		return 'any'
+	ttype = type(t)
+	if ttype is getattr(typing, '_UnionGenericAlias', None) or ttype is types.UnionType:
+		return {'$or': [_repr_type(x, permissive) for x in typing.get_args(t)]}
+	if dataclasses.is_dataclass(t) and isinstance(t, type):
+		with reflect.context_type(t):
+			return {
+				prop_name: _repr_type(prop_value, permissive)
+				for prop_name, prop_value in typing.get_type_hints(t).items()
+			}
+	origin = typing.get_origin(t)
+	if origin is not None:
+		args = typing.get_args(t)
+		if _is_dict(origin, permissive):
+			if len(args) != 2:
+				raise TypeError(f'dict type must have 2 args, got {len(args)}')
+			if args[0] is not str:
+				raise TypeError(f'dictionary keys must be str, got {args[0]!r}')
+			return {'$dict': _repr_type(args[1], permissive)}
+		if origin is typing.Annotated:
+			return _repr_type(t.__origin__, permissive)
+		if origin is tuple:
+			if len(args) == 2 and args[1] == ...:
+				return [{'$rep': _repr_type(args[0], permissive)}]
+			return [_repr_type(a, permissive) for a in args]
+		if _is_list(origin, permissive):
+			if len(args) != 1:
+				raise TypeError(f'list type must have 1 arg, got {len(args)}')
+			return [{'$rep': _repr_type(args[0], permissive)}]
+		if origin is typing.Literal:
+			args = typing.get_args(t)
+			if all(isinstance(a, str) for a in args):
+				return 'string'
+			if all(isinstance(a, bool) for a in args):
+				return 'bool'
+			if all(isinstance(a, int) for a in args):
+				return 'int'
+			return 'any'
+	raise TypeError(
+		'type is not supported', {'type': t, 'kind': ttype, **reflect.try_get_lineno(t)}
+	)
+
+
+def _escape_dict_prop(prop: str) -> str:
+	if prop.startswith('$'):
+		return '$' + prop
+	return prop
+
+
+def _get_params(m: types.FunctionType, *, is_ctor: bool) -> dict:
+	import inspect
+
+	try:
+		signature = inspect.signature(m)
+		params = []
+		kwparams = {}
+
+		is_first = True
+		for name, par in signature.parameters.items():
+			if is_first:
+				if name != 'self':
+					raise Exception('missing self')
+				is_first = False
+				continue
+			match str(par.kind):
+				case 'POSITIONAL_ONLY' | 'POSITIONAL_OR_KEYWORD':
+					params.append([name, _repr_type(par.annotation, True)])
+				case 'KEYWORD_ONLY':
+					kwparams[_escape_dict_prop(name)] = _repr_type(par.annotation, True)
+				case kind:
+					raise TypeError(
+						f'unsupported parameter type {kind} {type(kind)} for `{name}: {par}`'
+					)
+
+		ret = {
+			'params': params,
+			'kwparams': kwparams,
+		}
+		if not is_ctor:
+			if min_gas := getattr(m, MIN_GAS_LEADER_ATTR, None):
+				ret['min_gas_leader'] = min_gas
+			if min_gas := getattr(m, MIN_GAS_VALIDATOR_ATTR, None):
+				ret['min_gas_validator'] = min_gas
+			ret.update(
+				{
+					'readonly': getattr(m, READONLY_ATTR, False),
+					'ret': _repr_type(signature.return_annotation, True),
+				}
+			)
+			if not ret['readonly']:
+				ret['payable'] = getattr(m, PAYABLE_ATTR, False)
+		return ret
+	except Exception as e:
+		e.add_note(f'while processing method `{m}` at {reflect.try_get_lineno(m)}')
+		raise
+
+
+def _get_ctor(contract: type) -> types.FunctionType:
+	if not hasattr(contract, '__dict__') or '__init__' not in contract.__dict__:
+		raise TypeError('__init__ is absent', contract)
+	ctor = getattr(contract, '__init__')
+	if not inspect.isfunction(ctor):
+		raise TypeError('__init__ is not a function', contract, ctor)
+	if _is_public(ctor):
+		raise TypeError('__init__ must be private', contract, ctor)
+	return ctor
+
+
+def get_schema(contract: type) -> typing.Any:
+	"""
+	Uses python type reflections to produce GenVM ABI schema
+	"""
+
+	ctor = _get_ctor(contract)
+
+	meths = {
+		name: meth
+		for name, meth in sorted(inspect.getmembers(contract))
+		if inspect.isfunction(meth) and _is_public(meth)
+	}
+
+	for k in meths:
+		if k.startswith('__'):
+			raise TypeError(f'public method names should not start with `__`, `{k}`')
+
+	return {
+		'ctor': _get_params(ctor, is_ctor=True),
+		'methods': {k: _get_params(v, is_ctor=False) for k, v in meths.items()},
+	}

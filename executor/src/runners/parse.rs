@@ -1,0 +1,94 @@
+use crate::rt;
+use crate::rt::errors::Error;
+use genlayer_sdk::abi;
+use genvm_common::*;
+
+fn detect_version_from_wasm(code: &[u8]) -> rt::errors::Result<String> {
+    let parser = wasmparser::Parser::new(0);
+
+    for payload in parser.parse_all(code) {
+        match payload? {
+            wasmparser::Payload::CustomSection(section) if section.name() == "genvm.version" => {
+                let version = section.data().to_vec();
+                if let Ok(version_str) = std::str::from_utf8(&version) {
+                    return Ok(version_str.to_string());
+                } else {
+                    return Err(Error::internal("Invalid UTF-8 in version section"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Err(Error::internal("version section not found"))
+}
+
+pub fn parse(code: bytes::Bytes) -> rt::errors::Result<super::Archive> {
+    if let Ok(mut as_zip) = zip::ZipArchive::new(std::io::Cursor::new(code.clone())) {
+        return super::Archive::from_zip(&mut as_zip, code);
+    }
+
+    if wasmparser::Parser::is_core_wasm(code.as_ref()) {
+        let version = match detect_version_from_wasm(code.as_ref()) {
+            Ok(v) => v,
+            Err(e) => {
+                log_warn!(default = host_fns::CURRENT_MAJOR_STR, error = e; "could not detect version from wasm");
+                host_fns::CURRENT_MAJOR_STR.to_string()
+            }
+        };
+        return Ok(super::Archive::from_file_and_runner(
+            code,
+            bytes::Bytes::copy_from_slice(version.as_bytes()),
+            bytes::Bytes::from_static(b"{ \"StartWasm\": \"file\" }"),
+        ));
+    }
+
+    code_to_archive_from_text(code)
+}
+
+fn code_to_archive_from_text(code: bytes::Bytes) -> rt::errors::Result<super::Archive> {
+    let code_str = std::str::from_utf8(code.as_ref()).map_err(|e| {
+        Error::vm(abi::consts::VmError::invalid_contract().not_utf8_text()).with_source(e)
+    })?;
+
+    let code_start = (|| {
+        for c in ["//", "#", "--"] {
+            if code_str.starts_with(c) {
+                return Ok(c);
+            }
+        }
+        Err(rt::errors::Error::vm(
+            abi::consts::VmError::invalid_contract().absent_runner_comment(),
+        ))
+    })()?;
+
+    let mut version_string = String::new();
+    let mut code_comment = String::new();
+    let mut first = true;
+    for l in code_str.lines() {
+        if !l.starts_with(code_start) {
+            break;
+        }
+
+        let l = &l[code_start.len()..];
+
+        if first {
+            first = false;
+            if l.trim().starts_with("v") {
+                version_string.push_str(l);
+            } else {
+                version_string.push_str(host_fns::CURRENT_MAJOR_STR);
+
+                code_comment.push_str(l)
+            }
+        } else {
+            code_comment.push_str(l)
+        }
+    }
+
+    Ok(super::Archive::from_file_and_runner(
+        code,
+        bytes::Bytes::copy_from_slice(version_string.as_bytes()),
+        bytes::Bytes::copy_from_slice(code_comment.as_bytes()),
+    ))
+}

@@ -1,0 +1,15 @@
+# { "Depends": "py-genlayer:test" }
+import genlayer as gl
+
+
+class Contract(gl.contract.Contract):
+	@gl.public.write
+	def main(self, wait4: str):
+		def run():
+			return gl.nondet.web.render(
+				'https://test-server.genlayer.com/static/genvm/js-generated.html?wait=10000',
+				mode='text',
+				wait_after_loaded=wait4,
+			)
+
+		print(gl.eq_principle.strict_eq(run))

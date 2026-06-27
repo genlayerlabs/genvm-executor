@@ -1,0 +1,38 @@
+# build related directories
+/build
+target
+zig-out
+zig-build
+/mkmf.log
+/result
+
+# fetched third-party sources (populated by tools/git-third-party from manager)
+/executor/third-party/*
+!/executor/third-party/.gitkeep
+
+# editors
+**/.vscode/*
+!**/.vscode/extensions.json
+!**/.vscode/settings.example.json
+.idea
+.envrc
+*.log
+/.direnv
+
+# py
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage*
+
+# apple
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# perf
+perf.data*
+core.[0-9]*
+node_modules

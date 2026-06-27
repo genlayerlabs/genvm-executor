@@ -1,0 +1,35 @@
+[package]
+name = "genvm-common"
+version = "0.3.0"
+edition = "2021"
+
+[profile.release]
+debug = true
+
+[dependencies]
+genlayer_sdk = { path = "../sdk-rs", default-features = false, features = ["arbitrary"] }
+genlayer_calldata = { path = "../calldata" }
+
+anyhow = { version = "1.0.97", features = ["backtrace"] }
+libc = "0.2"
+regex = "1.11.1"
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = "1.0.140"
+serde_yaml = "0.9.34"
+serde_bytes = "0.11.17"
+tokio = { version = "1.44.1", features = ["rt", "rt-multi-thread", "net", "time", "macros", "sync"], default-features = false}
+num-bigint = { version = "0.4.6", features = ["serde"] }
+num-rational = { version = "0.4", default-features = false, features = ["num-bigint"] }
+num-traits = "0.2"
+hex = "0.4.3"
+primitive-types = { version = "0.13.1", default-features = false, features = ["impl-serde", "std"] }
+crossbeam = "0.8.4"
+rustix = { version = "0.38.44", features = ["mm", "std"], default-features = false}
+symbol_table = { version = "0.4.0", features = ["global"] }
+dashmap = "6.1.0"
+clap = { version = "4.5.35", features = ["derive"] }
+arbitrary = "1.4.2"
+chrono = { version = "0.4.42", features = ["serde"] }
+bytes = {version = "1.11.0", features = ["serde"] }
+rpds = "1.2.0"
+archery = "1.2.2"

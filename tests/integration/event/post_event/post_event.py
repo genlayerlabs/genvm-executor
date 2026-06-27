@@ -1,0 +1,21 @@
+# v0.1.5
+# { "Depends": "py-genlayer:test" }
+import genlayer as gl
+
+
+class TestEvent(gl.chain.Event):
+	def __init__(self, user_id: int, action: str, /, **blob): ...
+
+
+class Contract(gl.contract.Contract):
+	def __init__(self):
+		try:
+			# Test basic event emission
+			TestEvent(42, 'create', timestamp=1234567890, data='test_data').emit()
+
+			# Test event with different parameters
+			TestEvent(100, 'update', amount=500, description='Updated record').emit()
+
+			print('Events emitted successfully')
+		except Exception as e:
+			print(f'Error emitting event: {e}')
