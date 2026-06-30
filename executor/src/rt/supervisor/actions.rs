@@ -153,28 +153,14 @@ pub(crate) async fn resolve_runner_id(
             let slot = match slot {
                 Some(s) => s,
                 None => {
-                    let mode = on.host_storage_type().ok_or_else(|| {
+                    // v0.2.16 has no per-contract `code_slot` pointer: the code
+                    // always lives at the fixed `code` indirection of slot ZERO.
+                    let _ = on.host_storage_type().ok_or_else(|| {
                         make_malformed_runner_error(
                             "deploy-state chain runner cannot resolve its code slot from chain",
                         )
                     })?;
-                    let mut storage = rt::vm::storage::Storage::new(
-                        address,
-                        supervisor.get_storage_limiter(),
-                        crate::wasi::genlayer_sdk::StorageHostHolder(
-                            supervisor.host.clone(),
-                            crate::wasi::genlayer_sdk::ReadToken {
-                                account: address,
-                                mode,
-                            },
-                        ),
-                    );
-                    storage.resolve_code_slot().await.with_ctx(|| {
-                        format!(
-                            "resolving code slot for chain runner 0x{}",
-                            address.checksum_hex_string()
-                        )
-                    })?
+                    rt::vm::storage::default_code_slot()
                 }
             };
             runners::Id::Chain { address, on, slot }
@@ -262,20 +248,8 @@ async fn get_arch(
                             ),
                         );
 
-                        let dep_major = storage
-                            .read_major()
-                            .await
-                            .with_ctx(|| format!("reading major for chain runner {id}"))?;
-                        let node_major = genvm_common::version::CURRENT.major;
-                        if dep_major as u16 != node_major {
-                            return Err(rt::errors::Error::wrap(
-                                public_abi::VmError::invalid_contract().major_mismatch(),
-                                anyhow::anyhow!(
-                                    "chain runner {id} major {dep_major} != node major {node_major}"
-                                ),
-                            ));
-                        }
-
+                        // v0.2.16 stores no `major` root field, so there is no
+                        // per-contract major to verify here (see `storage.rs`).
                         let code = storage
                             .read_code_at(slot, limiter)
                             .await

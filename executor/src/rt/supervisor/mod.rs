@@ -431,21 +431,7 @@ async fn apply_contract_actions_inner(
 ) -> anyhow::Result<wasmtime::Instance> {
     let data = &mut vm.vm_base.store.data_mut().genlayer_ctx.genlayer_sdk.data;
 
-    let topmost_runner_id = data.conf.topmost_runner_id.clone();
-    let contract_major = data
-        .storage
-        .read_major()
-        .await
-        .with_context(|| format!("reading contract major for {topmost_runner_id}"))?;
-    let node_major = genvm_common::version::CURRENT.major;
-    if contract_major as u16 != node_major {
-        return Err(rt::errors::Error::wrap(
-            public_abi::VmError::invalid_contract().major_mismatch(),
-            anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
-        )
-        .into());
-    }
-
+    // v0.2.16 has no `major` root field to verify (see `storage.rs`).
     let topmost_runner_id = data.conf.topmost_runner_id.clone();
 
     let arch = actions::load_runner(

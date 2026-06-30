@@ -1,4 +1,0 @@
-B emit forbidden: SystemError
-B send forbidden: SystemError
-A got pong
-executed with `Return(null)`

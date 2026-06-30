@@ -55,6 +55,15 @@ def hooks(ctx):
 			'types_or': ['toml'],
 		},
 		{
+			'id': 'toml-format',
+			'nix': 'taplo',
+			'entry': 'taplo',
+			'args': ['format', '--check'],
+			'fix_args': ['format'],
+			'types_or': ['toml'],
+			'pass_filenames': True,
+		},
+		{
 			'id': 'check-merge-conflict',
 			'nix': 'pre-commit-hooks',
 			'entry': 'check-merge-conflict',
@@ -117,3 +126,18 @@ def hooks(ctx):
 			'pass_filenames': False,
 		},
 	]
+
+
+def configure(line):
+	"""Per-line build configuration for `genvm-tool configure`.
+
+	``line`` is a ``genvm_tool_plugins.ninja.LineContext`` the configure command
+	builds for this executor. This is a frozen legacy line: it ships a committed
+	``executor/registry`` and the build copies those runner manifests verbatim
+	(``frozen_registry``) rather than deriving them through the umbrella nix
+	machinery, so the debug and nix builds agree on runner hashes.
+	"""
+	line.register_standard_codegen()
+	line.register_standard_crates()
+	line.frozen_registry()
+	line.install_tree()

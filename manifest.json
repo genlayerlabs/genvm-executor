@@ -1,6 +1,4 @@
 {
-  "executor-version": "v0.2.16",
-  "available-after": "2024-09-01T00:00:00Z",
-  "repo-url": "https://github.com/genlayerlabs/genvm.git",
-  "head-revision": "v0.2.16"
+  "executor-version": "v0.2.17",
+  "available-after": "2024-09-01T00:00:00Z"
 }

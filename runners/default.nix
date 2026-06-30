@@ -18,14 +18,17 @@
   ...
 }:
 let
-  pkgs = import (builtins.fetchGit {
-    url = "https://github.com/NixOS/nixpkgs";
-    rev = "2ff43b1d533641116f1740158d121013036a7f74";
-    shallow = true;
-  }) {
-    system = "x86_64-linux";
-    overlays = pkgs-overlays;
-  };
+  pkgs =
+    import
+      (builtins.fetchGit {
+        url = "https://github.com/NixOS/nixpkgs";
+        rev = "2ff43b1d533641116f1740158d121013036a7f74";
+        shallow = true;
+      })
+      {
+        system = "x86_64-linux";
+        overlays = pkgs-overlays;
+      };
 
   index = builtins.fromJSON (builtins.readFile ./index.json);
 

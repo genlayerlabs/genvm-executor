@@ -1,8 +1,0 @@
-len=3
-[0]=10
-[1]=20
-[2]=30
-after pop len=2
-[0]=10
-[1]=20
-executed with `Return(null)`

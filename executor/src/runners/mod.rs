@@ -171,7 +171,10 @@ fn parse_hex_fixed<const N: usize>(s: &str) -> Option<[u8; N]> {
 }
 
 pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
-    if id == "contract" {
+    // `<contract>` is the v0.2.16 spelling of the contract self-reference (it
+    // appears verbatim in the `With { runner: "<contract>" }` step of the
+    // frozen v0.2.16 runner archives); newer lines use the bare `contract`.
+    if id == "contract" || id == "<contract>" {
         return Some(IdUnresolved::Contract);
     }
 

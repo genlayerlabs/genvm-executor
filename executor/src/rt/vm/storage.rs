@@ -5,7 +5,7 @@ use const_lru::ConstLru;
 use genlayer_sdk::abi;
 use genvm_common::{calldata, sync};
 
-use crate::{public_abi::root_offsets, rt, runners, SlotID};
+use crate::{public_abi::root_offsets, rt, SlotID};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(C)]
@@ -420,50 +420,16 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         Ok(())
     }
 
-    /// Reads the GenVM major version the contract was deployed for, from the
-    /// `major` root field (zero if never written).
-    pub async fn read_major(&mut self) -> rt::errors::Result<u8> {
-        let mut buf = [0u8; 1];
-        self.read(SlotID::ZERO, root_offsets::MAJOR, &mut buf)
-            .await?;
-        Ok(buf[0])
-    }
-
-    /// Writes the GenVM major version the contract is deployed for into the
-    /// `major` root field, so later runs can verify major compatibility (see
-    /// [`read_major`]). Written on deploy alongside the code.
-    pub async fn write_major(&mut self, major: u8) -> rt::errors::Result<()> {
-        self.write(SlotID::ZERO, root_offsets::MAJOR, &[major])
-            .await
-    }
-
-    /// Resolves the slot the contract code is stored at: the raw `code_slot` root
-    /// field if set, otherwise the default `code` slot.
-    pub async fn resolve_code_slot(&mut self) -> rt::errors::Result<SlotID> {
-        let mut raw = [0u8; 32];
-        self.read(SlotID::ZERO, root_offsets::CODE_SLOT, &mut raw)
-            .await?;
-        if raw == [0u8; 32] {
-            Ok(default_code_slot())
-        } else {
-            Ok(SlotID::from_bytes(raw))
-        }
-    }
-
-    /// Verifies the contract's major version matches this node's, then resolves
-    /// its code slot. The major is checked *first*, before trusting the
-    /// host-read code-slot pointer; on mismatch a `major_mismatch` [`Error`]
-    /// is returned so the caller surfaces it as a contract error.
+    /// Resolves the slot the contract code is stored at.
+    ///
+    /// The v0.2.16 storage root has no `code_slot` pointer field (and no `major`
+    /// field): the contract code always lives at the fixed `code` indirection of
+    /// slot ZERO. The deterministic part of slot ZERO is owned by the contract's
+    /// own python storage `Root`, so the executor must NOT keep a header there
+    /// (doing so is what corrupts the layout). This is kept as a method for call
+    /// parity with the newer lines.
     pub async fn check_major_and_resolve_code_slot(&mut self) -> rt::errors::Result<SlotID> {
-        let contract_major = self.read_major().await?;
-        let node_major = genvm_common::version::CURRENT.major;
-        if contract_major as u16 != node_major {
-            return Err(rt::errors::Error::wrap(
-                abi::consts::VmError::invalid_contract().major_mismatch(),
-                anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
-            ));
-        }
-        self.resolve_code_slot().await
+        Ok(default_code_slot())
     }
 
     pub async fn read_code_at(

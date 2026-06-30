@@ -170,11 +170,9 @@ pub async fn run_with_impl(
             log_debug!("using provided code for execution");
 
             topmost_storage.write_code(code).await?;
-            // Record the major this contract is deployed for, so later runs can
-            // verify major compatibility (see `read_major` / major_mismatch check).
-            topmost_storage
-                .write_major(genvm_common::version::CURRENT.major as u8)
-                .await?;
+            // v0.2.16 has no `major` root field, so nothing else is written to
+            // slot ZERO on deploy: that slot belongs to the contract's python
+            // storage `Root`.
 
             let code_slot = rt::vm::storage::default_code_slot();
             let archive = runners::parse(code.clone()).map_err(|e| {
