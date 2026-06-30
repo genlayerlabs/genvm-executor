@@ -65,9 +65,7 @@ impl VFS {
         log_trace!(stdin:bytes = stdin; "creating VFS");
 
         if !limiter.consume(stdin.len() as u32) {
-            return Err(rt::errors::Error::vm(
-                abi::consts::VmError::oom().val(),
-            ));
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()));
         }
 
         let stdin_data = bytes::Bytes::from(stdin);
@@ -106,9 +104,7 @@ impl VFS {
                     .limiter
                     .consume(public_abi::memory_limiter_consts::FD_ALLOCATION)
                 {
-                    return Err(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().val()).into(),
-                    );
+                    return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
                 }
                 self.next_free_descriptor.0 += 1;
                 Ok(self.next_free_descriptor)

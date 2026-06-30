@@ -49,10 +49,7 @@ impl Context {
         };
         Ok(Self {
             vfs,
-            preview1: preview1::Context::new(
-                data.message_data.message.datetime,
-                data.conf.clone(),
-            ),
+            preview1: preview1::Context::new(data.message_data.message.datetime, data.conf.clone()),
             genlayer_sdk: genlayer_sdk::Context::new(data),
         })
     }

@@ -1738,8 +1738,7 @@ impl ContextVFS<'_> {
             None if self.context.data.supervisor.is_leader() => None,
             None => {
                 return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                    rt::errors::Error::vm(abi::consts::VmError::absent())
-                        .into(),
+                    rt::errors::Error::vm(abi::consts::VmError::absent()).into(),
                 )));
             }
             Some(data) if data.is_empty() => {
@@ -1756,10 +1755,7 @@ impl ContextVFS<'_> {
                         .mark_nondet_disagreement(call_no);
                 }
 
-                let result = rt::vm::RunOk::VMError(
-                    abi::consts::VmError::absent(),
-                    None,
-                );
+                let result = rt::vm::RunOk::VMError(abi::consts::VmError::absent(), None);
 
                 consume_nondet_output(
                     &self.context.data.supervisor.shared_data,
