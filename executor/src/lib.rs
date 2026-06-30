@@ -263,7 +263,7 @@ pub async fn run_with_impl(
         },
         data: match run_result.run_ok {
             rt::vm::RunOk::Return(buf) => buf,
-            rt::vm::RunOk::UserError(val) => val,
+            rt::vm::RunOk::UserError(msg) => calldata::Value::Str(msg).into(),
             rt::vm::RunOk::VMError(msg, _) => calldata::Value::Str(msg.0.into()).into(),
         },
         backtrace: run_result.backtrace,

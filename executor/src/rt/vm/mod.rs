@@ -10,7 +10,8 @@ pub mod storage;
 #[derive(Debug)]
 pub enum RunOk {
     Return(calldata::unparsed::Maybe<calldata::Value>),
-    UserError(calldata::unparsed::Maybe<calldata::Value>),
+    // v0.2 ABI: a user error is a plain UTF-8 string, not a calldata value.
+    UserError(String),
     VMError(abi::consts::VmError, Option<anyhow::Error>),
 }
 
@@ -50,7 +51,7 @@ impl FullResult {
             },
             data: match run_ok {
                 RunOk::Return(buf) => buf,
-                RunOk::UserError(val) => val,
+                RunOk::UserError(msg) => calldata::Value::Str(msg).into(),
                 RunOk::VMError(msg, _) => calldata::Value::Str(msg.into()).into(),
             },
             backtrace: None,
@@ -89,16 +90,10 @@ impl RunOk {
                 res.extend_from_slice(&encoded);
                 res
             }
-            RunOk::UserError(val) => {
+            RunOk::UserError(msg) => {
+                // v0.2 ABI: [UserError] followed by the raw UTF-8 message bytes.
                 let mut res = vec![ResultCode::UserError as u8];
-                match val {
-                    calldata::unparsed::Maybe::Materialized(value) => {
-                        res.extend_from_slice(&calldata::encode(value));
-                    }
-                    calldata::unparsed::Maybe::Checked(raw) => {
-                        res.extend_from_slice(&raw.0);
-                    }
-                }
+                res.extend_from_slice(msg.as_bytes());
                 res
             }
             RunOk::VMError(buf, _) => {
@@ -223,7 +218,7 @@ impl VM<wasmtime::Instance> {
                 log_debug!(result = "Return"; "execution result unwrapped")
             }
             Ok((rt::vm::RunOk::UserError(msg), _)) => {
-                log_debug!(result = "UserError", message:cd = msg.clone(); "execution result unwrapped")
+                log_debug!(result = "UserError", message = msg; "execution result unwrapped")
             }
             Ok((rt::vm::RunOk::VMError(e, cause), _)) => {
                 log_debug!(result = "VMError", message = e.0, cause:? = cause; "execution result unwrapped")
@@ -313,7 +308,7 @@ impl RunResult {
                 buf.encode(&mut enc)?;
             }
             RunOk::UserError(buf) => {
-                buf.encode(&mut enc)?;
+                enc.push_str(buf)?;
             }
             RunOk::VMError(data, _) => {
                 enc.push_str(&data.0)?;

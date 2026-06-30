@@ -150,8 +150,9 @@ pub fn unwrap_vm_errors_backtrace(
 pub enum ErrorKind {
     /// VM-level error carrying a stable code (-> ResultCode::VMError).
     Vm(abi::consts::VmError),
-    /// User/contract error carrying a calldata value (-> ResultCode::UserError).
-    User(calldata::unparsed::Maybe<calldata::Value>),
+    /// User/contract error carrying a raw UTF-8 string (-> ResultCode::UserError).
+    /// v0.2 ABI: user errors are strings, not calldata values.
+    User(String),
     /// Generic internal executor error (the bare `anyhow` case).
     Internal,
 }
@@ -226,7 +227,7 @@ impl Error {
         }
     }
 
-    pub fn user(value: calldata::unparsed::Maybe<calldata::Value>) -> Self {
+    pub fn user(value: String) -> Self {
         Self {
             kind: ErrorKind::User(value),
             context: Vec::new(),

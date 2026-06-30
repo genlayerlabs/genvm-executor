@@ -592,7 +592,10 @@ pub enum Message {
     ExecPrompt(llm_iface::PromptPayload),
     ExecPromptTemplate(llm_iface::PromptTemplatePayload),
 
-    UserError(calldata::unparsed::Maybe<calldata::Value>),
+    // v0.2 ABI: a user error is signalled by a `Rollback` message carrying a
+    // plain UTF-8 string (the variant name is the calldata map key, matching the
+    // runner's `gl_call.rollback` which sends `{"Rollback": <str>}`).
+    Rollback(String),
     Return(calldata::unparsed::Maybe<calldata::Value>),
 
     Trace(TracePayload),

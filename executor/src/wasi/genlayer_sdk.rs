@@ -912,10 +912,12 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 // Peek the (possibly deferred) calldata to derive the fee call key.
                 let calldata_materialized = calldata.clone().materialize().ok();
+                // This calldata is built by the runner, which writes the method
+                // name under the legacy "method" key (gl/genvm_contracts.py:46).
                 let method_name = calldata_materialized
                     .as_ref()
                     .and_then(|x| x.as_map())
-                    .and_then(|x| x.get(""))
+                    .and_then(|x| x.get(super::method_compat::LEGACY_METHOD_KEY))
                     .and_then(|x| x.as_str());
                 let call_key = if let Some(method_name) = method_name {
                     abi::CallKey::for_method(method_name)
@@ -1213,6 +1215,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
                 let sup = self.context.data.supervisor.clone();
+                let response_format = prompt_payload.response_format;
 
                 let task = taskify(async move {
                     let result = sup
@@ -1247,7 +1250,25 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         *acc = acc.saturating_add(result.consumed_gen);
                     }
 
-                    let result = result.data;
+                    // v0.2 ABI: exec_prompt(response_format='json') must hand the
+                    // contract a calldata map, not the raw JSON string. Re-encode here
+                    // so JSON integers stay calldata integers and non-integer floats
+                    // become calldata strings (v0.2 calldata has no native float).
+                    let result = match (response_format, result.data) {
+                        (
+                            gl_call::llm_iface::OutputFormat::JSON,
+                            genvm_modules_interfaces::llm::PromptAnswerData::Text(json),
+                        ) => {
+                            let parsed: serde_json::Map<String, serde_json::Value> =
+                                serde_json::from_str(&json).map_err(|e| {
+                                    anyhow::anyhow!("parsing json answer {json:?}: {e}")
+                                })?;
+                            genvm_modules_interfaces::llm::PromptAnswerData::Object(
+                                crate::wasi::json_to_calldata::json_map_to_calldata(parsed),
+                            )
+                        }
+                        (_, other) => other,
+                    };
 
                     Ok(Ok(result))
                 })
@@ -1332,7 +1353,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
             }
-            gl_call::Message::UserError(msg) => Err(generated::types::Error::trap(
+            // v0.2 ABI: the runner signals a user error by sending a `Rollback`
+            // gl_call message carrying a plain string (see gl_call.py `rollback`).
+            gl_call::Message::Rollback(msg) => Err(generated::types::Error::trap(
                 crate::anyhow_to_wasmtime(rt::errors::Error::user(msg).into()),
             )),
             gl_call::Message::Return(value) => Err(generated::types::Error::trap(
@@ -1766,12 +1789,13 @@ impl ContextVFS<'_> {
                         ))
                     }
                     x if x == ResultCode::UserError as u8 => {
-                        let val = calldata::decode(rest).map_err(|e| {
+                        // v0.2 ABI: the UserError payload is a raw UTF-8 string.
+                        let msg = std::str::from_utf8(rest).map_err(|e| {
                             generated::types::Error::trap(crate::anyhow_to_wasmtime(
                                 anyhow::anyhow!(e),
                             ))
                         })?;
-                        rt::vm::RunOk::UserError(calldata::unparsed::Maybe::Materialized(val))
+                        rt::vm::RunOk::UserError(msg.to_owned())
                     }
                     x if x == ResultCode::VmError as u8 => {
                         let code = std::str::from_utf8(rest).map_err(|e| {
