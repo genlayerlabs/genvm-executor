@@ -25,6 +25,7 @@
             rustfmt
             nixfmt
             cargo
+            taplo
             ;
           pre-commit-hooks = pkgs.python3Packages.pre-commit-hooks;
           # v19 to match the executor's historical clang-format pin.

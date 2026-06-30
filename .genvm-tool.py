@@ -55,6 +55,15 @@ def hooks(ctx):
 			'types_or': ['toml'],
 		},
 		{
+			'id': 'toml-format',
+			'nix': 'taplo',
+			'entry': 'taplo',
+			'args': ['format', '--check'],
+			'fix_args': ['format'],
+			'types_or': ['toml'],
+			'pass_filenames': True,
+		},
+		{
 			'id': 'check-merge-conflict',
 			'nix': 'pre-commit-hooks',
 			'entry': 'check-merge-conflict',
@@ -117,3 +126,17 @@ def hooks(ctx):
 			'pass_filenames': False,
 		},
 	]
+
+
+def configure(line):
+	"""Per-line build configuration for `genvm-tool configure`.
+
+	``line`` is a ``genvm_tool_plugins.ninja.LineContext`` the configure command
+	builds for this executor. This is a live line: its runner ``latest``/``all``
+	manifests are derived through the umbrella nix machinery (``nix_manifests``),
+	which imports every active line's runners.
+	"""
+	line.register_standard_codegen()
+	line.register_standard_crates()
+	line.nix_manifests()
+	line.install_tree()

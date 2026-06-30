@@ -1144,7 +1144,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let task = taskify(async move {
                     web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
                         genvm_modules_interfaces::web::Message::Render(
-                            render_payload,
+                            gl_call_to_mi::render_payload(render_payload),
                             space_left_with_overhead,
                         ),
                     )
@@ -1182,7 +1182,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let task = taskify(async move {
                     web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
                         genvm_modules_interfaces::web::Message::Request(
-                            request_payload,
+                            gl_call_to_mi::request_payload(request_payload),
                             space_left_with_overhead,
                         ),
                     )
@@ -1220,7 +1220,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         .llm
                         .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
                             genvm_modules_interfaces::llm::Message::Prompt {
-                                payload: prompt_payload,
+                                payload: gl_call_to_mi::prompt_payload(prompt_payload),
                                 remaining_fuel_as_gen,
                             },
                         )
@@ -1284,7 +1284,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         .llm
                         .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
                             genvm_modules_interfaces::llm::Message::PromptTemplate {
-                                payload: prompt_template_payload,
+                                payload: gl_call_to_mi::prompt_template_payload(
+                                    prompt_template_payload,
+                                ),
                                 remaining_fuel_as_gen,
                             },
                         )
@@ -1979,5 +1981,110 @@ impl ContextVFS<'_> {
 
         let data: Vec<u8> = my_res.run_ok.as_bytes();
         self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
+    }
+}
+
+/// Conversions from sdk-rs `gl_call` payload types to the self-contained
+/// `genvm_modules_interfaces` payload types.
+///
+/// These types are structurally identical but distinct: `genvm-modules-interfaces`
+/// no longer depends on `sdk-rs`, so it carries its own copies. The orphan rule
+/// prevents `From`/`Into` impls here (both types are foreign to this crate), so
+/// free functions bridge the executor<->module boundary instead.
+mod gl_call_to_mi {
+    use genlayer_sdk::abi::gl_call::{llm_iface, web_iface};
+    use genvm_modules_interfaces::{llm as mi_llm, web as mi_web};
+
+    pub fn render_mode(m: web_iface::RenderMode) -> mi_web::RenderMode {
+        match m {
+            web_iface::RenderMode::Text => mi_web::RenderMode::Text,
+            web_iface::RenderMode::HTML => mi_web::RenderMode::HTML,
+            web_iface::RenderMode::Screenshot => mi_web::RenderMode::Screenshot,
+        }
+    }
+
+    pub fn wait_after_loaded(w: web_iface::WaitAfterLoaded) -> mi_web::WaitAfterLoaded {
+        match w {
+            web_iface::WaitAfterLoaded::Seconds(s) => mi_web::WaitAfterLoaded::Seconds(s),
+            web_iface::WaitAfterLoaded::Millis(ms) => mi_web::WaitAfterLoaded::Millis(ms),
+        }
+    }
+
+    pub fn render_payload(p: web_iface::RenderPayload) -> mi_web::RenderPayload {
+        mi_web::RenderPayload {
+            mode: render_mode(p.mode),
+            url: p.url,
+            wait_after_loaded: wait_after_loaded(p.wait_after_loaded),
+        }
+    }
+
+    pub fn request_method(m: web_iface::RequestMethod) -> mi_web::RequestMethod {
+        match m {
+            web_iface::RequestMethod::GET => mi_web::RequestMethod::GET,
+            web_iface::RequestMethod::POST => mi_web::RequestMethod::POST,
+            web_iface::RequestMethod::HEAD => mi_web::RequestMethod::HEAD,
+            web_iface::RequestMethod::PUT => mi_web::RequestMethod::PUT,
+            web_iface::RequestMethod::DELETE => mi_web::RequestMethod::DELETE,
+            web_iface::RequestMethod::OPTIONS => mi_web::RequestMethod::OPTIONS,
+            web_iface::RequestMethod::PATCH => mi_web::RequestMethod::PATCH,
+        }
+    }
+
+    pub fn request_payload(p: web_iface::RequestPayload) -> mi_web::RequestPayload {
+        mi_web::RequestPayload {
+            method: request_method(p.method),
+            url: p.url,
+            headers: p.headers,
+            body: p.body,
+            sign: p.sign,
+        }
+    }
+
+    pub fn output_format(f: llm_iface::OutputFormat) -> mi_llm::OutputFormat {
+        match f {
+            llm_iface::OutputFormat::Text => mi_llm::OutputFormat::Text,
+            llm_iface::OutputFormat::JSON => mi_llm::OutputFormat::JSON,
+        }
+    }
+
+    pub fn prompt_payload(p: llm_iface::PromptPayload) -> mi_llm::PromptPayload {
+        mi_llm::PromptPayload {
+            response_format: output_format(p.response_format),
+            prompt: p.prompt,
+            images: p.images,
+        }
+    }
+
+    pub fn prompt_template_payload(
+        p: llm_iface::PromptTemplatePayload,
+    ) -> mi_llm::PromptTemplatePayload {
+        match p {
+            llm_iface::PromptTemplatePayload::EqComparative(x) => {
+                mi_llm::PromptTemplatePayload::EqComparative(mi_llm::PromptEqComparativePayload {
+                    leader_answer: x.leader_answer,
+                    validator_answer: x.validator_answer,
+                    principle: x.principle,
+                })
+            }
+            llm_iface::PromptTemplatePayload::EqNonComparativeValidator(x) => {
+                mi_llm::PromptTemplatePayload::EqNonComparativeValidator(
+                    mi_llm::PromptEqNonComparativeValidatorPayload {
+                        task: x.task,
+                        criteria: x.criteria,
+                        input: x.input,
+                        output: x.output,
+                    },
+                )
+            }
+            llm_iface::PromptTemplatePayload::EqNonComparativeLeader(x) => {
+                mi_llm::PromptTemplatePayload::EqNonComparativeLeader(
+                    mi_llm::PromptEqNonComparativeLeaderPayload {
+                        task: x.task,
+                        criteria: x.criteria,
+                        input: x.input,
+                    },
+                )
+            }
+        }
     }
 }
