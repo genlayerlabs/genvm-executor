@@ -40,13 +40,9 @@ impl Context {
         };
         data.message_data = msg_data.into();
 
-        // The deterministic RNG seed is the sha3-256 of the VM's stdin (the encoded
-        // message data), so it is fully determined by the VM inputs at construction.
-        let seed: [u8; 32] = {
-            use sha3::Digest as _;
-            sha3::Sha3_256::digest(&as_bytes).into()
-        };
-
+        // v0.2.16 seeds the deterministic RNG from a fixed constant (see
+        // `preview1::Context::new`), not from the stdin, so no per-VM seed is
+        // derived here.
         let vfs = match vfs::VFS::new(as_bytes, limiter) {
             Ok(vfs) => vfs,
             Err(e) => return Err((e, data)),
@@ -56,7 +52,6 @@ impl Context {
             preview1: preview1::Context::new(
                 data.message_data.message.datetime,
                 data.conf.clone(),
-                seed,
             ),
             genlayer_sdk: genlayer_sdk::Context::new(data),
         })

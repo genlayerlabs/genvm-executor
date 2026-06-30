@@ -239,13 +239,25 @@ impl Supervisor {
         code_slot: crate::SlotID,
         archive: runners::Archive,
     ) {
-        let id = runners::Id::Chain {
-            address,
-            on: runners::ChainState::Deploy,
-            slot: code_slot,
+        // The contract's code is not committed to host storage until the deploy
+        // transaction finishes, so an in-transaction read of this contract (e.g.
+        // a `gl.get_contract_at(self).view()` from `__init__`, as in the balance
+        // tests) cannot load it from storage. Seed the deploy archive under every
+        // chain state — not just `Deploy` — so such a self/intra-tx call resolves
+        // the freshly-deployed code instead of failing with `absent_runner`.
+        for on in [
+            runners::ChainState::Deploy,
+            runners::ChainState::Accepted,
+            runners::ChainState::Finalized,
+        ] {
+            let id = runners::Id::Chain {
+                address,
+                on,
+                slot: code_slot,
+            }
+            .canonical();
+            self.runner_cache.put(id, archive.clone());
         }
-        .canonical();
-        self.runner_cache.put(id, archive);
     }
 
     /// Registers a runner from its `code`, returning the `custom:<hash>` id it can
@@ -354,7 +366,7 @@ pub async fn spawn(
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
     if vm.depth >= public_abi::top_limits::VM_RECURSION {
         return Err(rt::SpawnError {
-            error: rt::errors::Error::vm(public_abi::VmError::oom().ram().limit()).into(),
+            error: rt::errors::Error::vm(public_abi::VmError::oom().val()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
         });
     }
@@ -590,7 +602,7 @@ fn register_custom_runner_into(
             rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
         })?;
         if !limiter.consume(archive.total_size) {
-            return Err(rt::errors::Error::vm(public_abi::VmError::oom().ram().val()).into());
+            return Err(rt::errors::Error::vm(public_abi::VmError::oom().val()).into());
         }
         slot.insert(archive);
     }

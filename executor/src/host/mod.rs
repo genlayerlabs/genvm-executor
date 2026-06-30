@@ -301,11 +301,11 @@ impl Host {
         let len = u32::from_le_bytes(len_buf);
 
         if len > abi::consts::top_limits::LOCKED_SLOTS {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into());
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
         }
 
         if !limiter.consume_mul(len, SlotID::SIZE) {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into());
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
         }
 
         let res = Box::new_uninit_slice(len as usize);
@@ -349,7 +349,7 @@ impl Host {
         let len = u32::from_le_bytes(len_buf);
 
         if len > abi::consts::top_limits::UPGRADERS {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into());
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
         }
 
         for i in 0..len {

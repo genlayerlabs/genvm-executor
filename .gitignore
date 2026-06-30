@@ -36,3 +36,4 @@ __pycache__
 perf.data*
 core.[0-9]*
 node_modules
+/runners/genlayer-py-std/

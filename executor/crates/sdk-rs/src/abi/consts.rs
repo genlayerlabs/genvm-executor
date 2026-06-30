@@ -253,6 +253,7 @@ pub mod __VmError {
     pub struct Oom;
 
     impl Oom {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("OOM")) }
         pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("OOM storage")) }
         pub const fn ram(&self) -> OomRam { OomRam }
         pub const fn receipt(&self) -> OomReceipt { OomReceipt }
@@ -315,7 +316,7 @@ impl From<VmError> for String {
 #[rustfmt::skip]
 impl VmError {
     pub const fn timeout() -> Self { Self(Cow::Borrowed("timeout")) }
-    pub const fn absent_leader_nondet_output() -> Self { Self(Cow::Borrowed("absent_leader_nondet_output")) }
+    pub const fn absent() -> Self { Self(Cow::Borrowed("absent")) }
     pub const fn exit_code() -> __VmError::ExitCode { __VmError::ExitCode }
     pub const fn wasm_trap() -> __VmError::WasmTrap { __VmError::WasmTrap }
     pub const fn oom() -> __VmError::Oom { __VmError::Oom }

@@ -355,7 +355,7 @@ pub(crate) fn map_archive_file(
             if !limiter
                 .consume(public_abi::memory_limiter_consts::FILE_MAPPING + name_in_fs.len() as u32)
             {
-                return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into());
+                return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
             }
 
             preview1.map_file(&name_in_fs, file_contents.clone())?;
@@ -364,7 +364,7 @@ pub(crate) fn map_archive_file(
         check_mapping_target(to)?;
 
         if !limiter.consume(public_abi::memory_limiter_consts::FILE_MAPPING + to.len() as u32) {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into());
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
         }
 
         preview1.map_file(to, arch.get_file(file)?)?;

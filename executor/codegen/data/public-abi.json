@@ -78,7 +78,7 @@
     "name": "vm_error",
     "values": [
       "timeout",
-      "absent_leader_nondet_output",
+      "absent",
       {
         "head": "exit_code",
         "tail": "$i32"
@@ -90,6 +90,7 @@
       {
         "head": "OOM",
         "tail": [
+          null,
           {
             "head": "RAM",
             "tail": [

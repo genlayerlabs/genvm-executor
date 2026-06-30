@@ -1136,7 +1136,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 if space_left < abi::consts::top_limits::WEB_RENDER_MIN_SPACE {
                     log_warn!(space_left = space_left; "not enough memory for web render");
                     return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into(),
+                        rt::errors::Error::vm(abi::consts::VmError::oom().val()).into(),
                     )));
                 }
 
@@ -1174,7 +1174,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 if space_left < abi::consts::top_limits::WEB_REQUEST_MIN_SPACE {
                     log_warn!(space_left = space_left; "not enough memory for web request");
                     return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into(),
+                        rt::errors::Error::vm(abi::consts::VmError::oom().val()).into(),
                     )));
                 }
 
@@ -1724,7 +1724,7 @@ impl ContextVFS<'_> {
 
         if call_no >= public_abi::top_limits::NONDET_BLOCKS {
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into(),
+                rt::errors::Error::vm(abi::consts::VmError::oom().val()).into(),
             )));
         }
 
@@ -1738,7 +1738,7 @@ impl ContextVFS<'_> {
             None if self.context.data.supervisor.is_leader() => None,
             None => {
                 return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                    rt::errors::Error::vm(abi::consts::VmError::absent_leader_nondet_output())
+                    rt::errors::Error::vm(abi::consts::VmError::absent())
                         .into(),
                 )));
             }
@@ -1757,7 +1757,7 @@ impl ContextVFS<'_> {
                 }
 
                 let result = rt::vm::RunOk::VMError(
-                    abi::consts::VmError::absent_leader_nondet_output(),
+                    abi::consts::VmError::absent(),
                     None,
                 );
 
