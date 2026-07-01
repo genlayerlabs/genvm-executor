@@ -1,4 +1,9 @@
 reviews:
+  # Review PRs targeting the long-lived version branches (e.g. v0.2.x, v0.2-dev)
+  # and main; feature/topic branches are reviewed via their target base.
+  base_branches:
+    - "main"
+    - "v\\d+\\.\\d+(\\.x|-dev)?"
   path_filters:
     - "!**/*.onnx"
     - "!**/*.txt"
@@ -10,3 +15,6 @@ reviews:
     - "!runners/softfloat/berkeley-softfloat-3/**"
     - "!executor/third-party/**"
     - "!**/fuzz/inputs*/**"
+    # Root-level system-test fixtures (contracts, expected outputs); crate and
+    # runner test code under */tests/ is still reviewed.
+    - "!tests/**"
