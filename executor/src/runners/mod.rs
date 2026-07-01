@@ -160,14 +160,35 @@ fn is_hash_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '='
 }
 
-fn parse_hex_fixed<const N: usize>(s: &str) -> Option<[u8; N]> {
-    let s = s.strip_prefix("0x")?;
-    if s.len() != N * 2 {
+fn parse_safe_address(s: &str) -> Option<[u8; 20]> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+
+    if s.len() != 40 {
+        log_warn!("address must be exactly 40 hex characters, got {}", s.len());
         return None;
     }
-    let mut out = [0u8; N];
-    hex::decode_to_slice(s, &mut out).ok()?;
-    Some(out)
+
+    let mut address = [0u8; 20];
+    if hex::decode_to_slice(s, &mut address).is_err() {
+        log_warn!("address contains invalid hex characters");
+        return None;
+    }
+
+    let is_all_lower = s.chars().all(|c| !c.is_ascii_uppercase());
+    let is_all_upper = s.chars().all(|c| !c.is_ascii_lowercase());
+
+    if is_all_lower || is_all_upper {
+        return Some(address);
+    }
+
+    let addr = calldata::Address::from(address);
+    let checksum = addr.checksum_hex_string();
+    if s == checksum {
+        return Some(address);
+    }
+
+    log_warn!("address must be all lowercase, all uppercase, or valid checksum");
+    None
 }
 
 pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
@@ -184,7 +205,7 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
             return None;
         }
 
-        let address = calldata::Address::from(parse_hex_fixed::<20>(address)?);
+        let address = calldata::Address::from(parse_safe_address(address)?);
         let on = match on_str {
             Some("a") | None => Some(ChainState::Accepted),
             Some("f") => Some(ChainState::Finalized),
