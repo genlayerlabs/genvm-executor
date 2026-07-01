@@ -125,22 +125,22 @@ pub(crate) async fn resolve_runner_id(
                         "runner id doesn't match expected format",
                     ));
                 };
-                Bytes32Hash::from_gvm32(new_latest).map_err(|e| {
+                Bytes32Hash::from_nix32(new_latest).map_err(|e| {
                     make_malformed_runner_error(&format!(
-                        "runner hash `{new_latest}` is not valid gvm32: {e}"
+                        "runner hash `{new_latest}` is not valid nix base32: {e}"
                     ))
                 })?
             } else {
-                Bytes32Hash::from_gvm32(&hash).map_err(|e| {
+                Bytes32Hash::from_nix32(&hash).map_err(|e| {
                     make_malformed_runner_error(&format!(
-                        "runner hash `{hash}` is not valid gvm32: {e}"
+                        "runner hash `{hash}` is not valid nix base32: {e}"
                     ))
                 })?
             };
 
-            let hash_gvm32 = hash.to_gvm32();
-            if !supervisor.runner_cache.has_in_all(&name, &hash_gvm32) {
-                anyhow::bail!("runner {}:{} not found", name, hash_gvm32);
+            let hash_nix32 = hash.to_nix32();
+            if !supervisor.runner_cache.has_in_all(&name, &hash_nix32) {
+                anyhow::bail!("runner {}:{} not found", name, hash_nix32);
             }
 
             runners::Id::Builtin {
@@ -166,9 +166,9 @@ pub(crate) async fn resolve_runner_id(
             runners::Id::Chain { address, on, slot }
         }
         runners::IdUnresolved::Custom { hash } => {
-            let hash = Bytes32Hash::from_gvm32(&hash).map_err(|e| {
+            let hash = Bytes32Hash::from_nix32(&hash).map_err(|e| {
                 make_malformed_runner_error(&format!(
-                    "custom runner hash `{hash}` is not valid gvm32: {e}"
+                    "custom runner hash `{hash}` is not valid nix base32: {e}"
                 ))
             })?;
             runners::Id::Custom { hash }
@@ -208,7 +208,7 @@ async fn get_arch(
                     id,
                     || async {
                         let mut path = cache.runners_path().to_owned();
-                        runners::append_runner_subpath(name.as_str(), &hash.to_gvm32(), &mut path);
+                        runners::append_runner_subpath(name.as_str(), &hash.to_nix32(), &mut path);
                         path.set_extension("tar");
                         if !path.exists() {
                             return Err(rt::errors::Error::internal(format!(

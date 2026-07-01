@@ -67,7 +67,7 @@ impl ChainState {
 /// - `chain:<address>:<a|f>:<slot>` — read the runner code blob from a storage
 ///   slot of an arbitrary contract. `address` is a `0x`-prefixed 20 byte hex
 ///   address, `a`/`f` selects accepted (latest non final) / finalized state and
-///   `slot` is a 32 byte slot id encoded with GVM32 (Crockford Base32).
+///   `slot` is a 32 byte slot id encoded with Nix base32.
 ///   Both `<a|f>` and `<slot>` are optional: `<a|f>` defaults to `a` and
 ///   `<slot>` defaults to reading the target contract's root slot during
 ///   resolution (i.e. `chain:<address>` and `chain:<address>:a` are valid).
@@ -132,18 +132,18 @@ impl Id {
             Id::Builtin { name, hash } => {
                 let mut id = name.as_str().to_owned();
                 id.push(':');
-                id.push_str(&hash.to_gvm32());
+                id.push_str(&hash.to_nix32());
                 symbol_table::GlobalSymbol::from(id)
             }
             Id::Chain { address, on, slot } => symbol_table::GlobalSymbol::from(format!(
                 "chain:0x{}:{}:{}",
                 address.checksum_hex_string(),
                 on.canonical_char(),
-                genlayer_sdk::gvm32::encode(&slot.raw())
+                genlayer_sdk::nix32::encode(&slot.raw())
             )),
             Id::Custom { hash } => {
                 let mut id = String::from("custom:");
-                id.push_str(&hash.to_gvm32());
+                id.push_str(&hash.to_nix32());
                 symbol_table::GlobalSymbol::from(id)
             }
         }
@@ -160,14 +160,35 @@ fn is_hash_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '='
 }
 
-fn parse_hex_fixed<const N: usize>(s: &str) -> Option<[u8; N]> {
-    let s = s.strip_prefix("0x")?;
-    if s.len() != N * 2 {
+fn parse_safe_address(s: &str) -> Option<[u8; 20]> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+
+    if s.len() != 40 {
+        log_warn!("address must be exactly 40 hex characters, got {}", s.len());
         return None;
     }
-    let mut out = [0u8; N];
-    hex::decode_to_slice(s, &mut out).ok()?;
-    Some(out)
+
+    let mut address = [0u8; 20];
+    if hex::decode_to_slice(s, &mut address).is_err() {
+        log_warn!("address contains invalid hex characters");
+        return None;
+    }
+
+    let is_all_lower = s.chars().all(|c| !c.is_ascii_uppercase());
+    let is_all_upper = s.chars().all(|c| !c.is_ascii_lowercase());
+
+    if is_all_lower || is_all_upper {
+        return Some(address);
+    }
+
+    let addr = calldata::Address::from(address);
+    let checksum = addr.checksum_hex_string();
+    if s == checksum {
+        return Some(address);
+    }
+
+    log_warn!("address must be all lowercase, all uppercase, or valid checksum");
+    None
 }
 
 pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
@@ -187,7 +208,7 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
             return None;
         }
 
-        let address = calldata::Address::from(parse_hex_fixed::<20>(address)?);
+        let address = calldata::Address::from(parse_safe_address(address)?);
         let on = match on_str {
             Some("a") | None => Some(ChainState::Accepted),
             Some("f") => Some(ChainState::Finalized),
@@ -195,7 +216,7 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
         };
         let slot = match slot_str {
             Some(s) => {
-                let bytes: [u8; 32] = genlayer_sdk::gvm32::decode(s).ok()?.try_into().ok()?;
+                let bytes: [u8; 32] = genlayer_sdk::nix32::decode(s).ok()?.try_into().ok()?;
                 Some(crate::SlotID::from_bytes(bytes))
             }
             None => None,
@@ -232,11 +253,12 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
     })
 }
 
-/// The dev-mode magic builtin/custom runner hash. Its GVM32 form is the literal
-/// string `test` padded with `0`s to 52 chars (`test0000…`), which is what shows
-/// up on disk and in `all.json`/`latest.json`. The raw bytes below are exactly
-/// `gvm32::decode("test0000…")`. Kept in sync with `hashToIDHash` in
-/// `runners/support/default.nix`.
+/// The dev-mode magic builtin/custom runner hash — a fixed sentinel used by the
+/// `:test`/`:latest` resolution path. The raw bytes are the historical
+/// `hashToIDHash("test")` constant from `runners/support/default.nix`; its
+/// textual form under this line's Nix base32 is not meaningful (that `test0000…`
+/// string belonged to the Crockford scheme these bytes were originally derived
+/// from).
 pub const TEST_RUNNER_HASH: Bytes32Hash = {
     let mut bytes = [0u8; 32];
     bytes[0] = 0xd3;
