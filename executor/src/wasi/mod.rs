@@ -4,7 +4,6 @@ use ::genlayer_sdk as original_genlayer_sdk;
 
 pub mod base;
 pub mod genlayer_sdk;
-pub mod json_to_calldata;
 pub mod preview1;
 pub mod vfs;
 
