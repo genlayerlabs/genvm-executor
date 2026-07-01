@@ -112,6 +112,25 @@ fn compile_single_file(
 }
 
 pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
+    if args.info {
+        log_info!(version = genvm_common::version::CURRENT.clone(); "current version");
+
+        let cache_dir = caching::get_cache_dir(&config.cache_dir)?;
+        let mut precompile_dir = cache_dir.clone();
+        precompile_dir.push(caching::PRECOMPILE_DIR_NAME);
+
+        let registry_dir = std::path::Path::new(&config.registry_dir);
+
+        log_info!(cache_dir:? = cache_dir, precompile_dir:? = precompile_dir, registry_dir:? = registry_dir; "information");
+        return Ok(());
+    }
+
+    run(&config)
+}
+
+/// Precompiles every runner listed in `all.json` into the on-disk cache. Shared
+/// by the `precompile` subcommand and `check --precompile`.
+pub fn run(config: &config::Config) -> anyhow::Result<()> {
     log_info!(version = genvm_common::version::CURRENT.clone(); "current version");
 
     let cache_dir = caching::get_cache_dir(&config.cache_dir)?;
@@ -122,9 +141,6 @@ pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
 
     log_info!(cache_dir:? = cache_dir, precompile_dir:? = precompile_dir, registry_dir:? = registry_dir; "information");
 
-    if args.info {
-        return Ok(());
-    }
     let engines = genvm::rt::supervisor::create_engines(|conf| {
         conf.cranelift_opt_level(wasmtime::OptLevel::Speed);
         Ok(())

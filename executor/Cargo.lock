@@ -1026,6 +1026,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml",
+ "sha2",
  "sha3",
  "symbol_table",
  "tokio",
