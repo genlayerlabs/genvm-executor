@@ -138,5 +138,8 @@ blocking_threads: 4
 log_disable: genvm::rt::memlimiter
 
 cache_dir: ${exeDir}/../.cache/
-runners_dir: ${exeDir}/../../../runners/
+# v0.2.x is a frozen legacy line: its runners are installed privately under the
+# executor root (executor/<version>/legacy-runners) rather than the shared
+# manager-root `runners/` dir used by forward-rolling lines.
+runners_dir: ${exeDir}/../legacy-runners/
 registry_dir: ${exeDir}/../data
