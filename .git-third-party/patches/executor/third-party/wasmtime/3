@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: kp2pml30 <kp2pml30@gmail.com>
+Date: Thu, 2 Jul 2026 10:35:16 +0900
+Subject: [PATCH] =?UTF-8?q?fix(wasm):=20allow=20SIMD=20float=20lane=20copy?=
+ =?UTF-8?q?=20ops=20in=20deterministic=20mode=20=F0=9F=90=9B?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+f32x4/f64x2 splat, extract_lane and replace_lane are bit-exact copies
+(no rounding or NaN semantics), matching the existing exception for
+loads/bitcasts; genvm-floats-to-soft intentionally leaves them in
+place, so trapping on them broke real numpy code paths.
+
+Claude-Session: https://claude.ai/code/session_013QtkVNJFxWsNwCLhTp5idV
+---
+ crates/cranelift/src/translate/code_translator.rs | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
+index 9dde783c..927df0f8 100644
+--- a/crates/cranelift/src/translate/code_translator.rs
++++ b/crates/cranelift/src/translate/code_translator.rs
+@@ -1750,7 +1750,8 @@ pub fn translate_operator(
+         }
+         Operator::F32x4Splat
+         | Operator::F64x2Splat => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            // Lane duplication is a bit-exact copy (no rounding/NaN semantics),
++            // so it stays allowed in deterministic mode.
+             let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
+             environ.stacks.push1(splatted)
+         }
+@@ -1839,7 +1840,7 @@ pub fn translate_operator(
+         }
+         Operator::F32x4ExtractLane { lane }
+         | Operator::F64x2ExtractLane { lane } => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            // Bit-exact lane copy; allowed in deterministic mode.
+             let vector = pop1_with_bitcast(environ, type_of(op), builder);
+             environ
+                 .stacks
+@@ -1864,7 +1865,7 @@ pub fn translate_operator(
+         }
+         Operator::F32x4ReplaceLane { lane }
+         | Operator::F64x2ReplaceLane { lane } => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            // Bit-exact lane copy; allowed in deterministic mode.
+             let (vector, replacement) = environ.stacks.pop2();
+             let vector = optionally_bitcast_vector(vector, type_of(op), builder);
+             environ
