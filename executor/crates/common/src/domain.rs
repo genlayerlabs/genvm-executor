@@ -29,6 +29,9 @@ pub enum ExecutionEmission {
 
         fee_params: fees::InternalMessageParams,
         subtree: bytes::Bytes,
+        /// Chain `useBalance`: the fee is drawn from the emitting contract's
+        /// balance rather than the sender's prefunded message-fee pool.
+        use_balance: bool,
     },
     DeployContract {
         calldata: genlayer_calldata::codec::Maybe<genlayer_sdk::calldata::Value>,
@@ -41,6 +44,8 @@ pub enum ExecutionEmission {
 
         fee_params: fees::InternalMessageParams,
         subtree: bytes::Bytes,
+        /// Chain `useBalance`; see `ExecutionEmission::PostMessage::use_balance`.
+        use_balance: bool,
     },
     EmitEvent {
         topics: Vec<Bytes>,

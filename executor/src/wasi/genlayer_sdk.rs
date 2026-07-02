@@ -34,31 +34,36 @@ struct ConsumeInternalArgs {
     subtree_length: u64,
 }
 
+/// How an internal message's fee is funded.
+enum FeeFunding<'a> {
+    /// Sender-pool allocation: fee capped by `node.budget`; consumes the
+    /// message-fee and receipt buckets.
+    Allocation(&'a mut domain::fees::MessageAllocationNode),
+    /// Balance-funded (`useBalance`): the metered fee is the `declaredBudget`,
+    /// reserved from the contract balance. On-chain such messages are excluded
+    /// from the sender pool, so the message-fee bucket is skipped and only the
+    /// receipt is charged. The balance is checked here, before the receipt is
+    /// consumed, so nothing is charged unless funding is guaranteed.
+    Balance {
+        value: primitive_types::U256,
+        messages_value_decremented: primitive_types::U256,
+        my_balance: primitive_types::U256,
+    },
+}
+
 async fn consume_message_fee_internal(
     shared_data: &rt::SharedData,
-    node: &mut domain::fees::MessageAllocationNode,
+    funding: FeeFunding<'_>,
     fee_params: Arc<domain::fees::InternalMessageParams>,
     on: gl_call::On,
     args: ConsumeInternalArgs,
 ) -> Result<rt::fees::MessageFeeConsumption, generated::types::Error> {
+    let balance_funded = matches!(funding, FeeFunding::Balance { .. });
     let fee_cost = shared_data
         .data_fees_limit
-        .calculate_message_fee_internal(on, &fee_params)
+        .calculate_message_fee_internal(on, balance_funded, &fee_params)
         .map_err(internal_trap)?;
-
-    let fee_total = fee_cost.sum();
-    if fee_total > node.budget {
-        log_warn!(
-            node:cd = *node,
-            fee_cost:cd = fee_total,
-            budget: cd = node.budget;
-            "message fee cost exceeds node budget"
-        );
-        return Err(internal_trap(rt::errors::Error::vm_detailed(
-            abi::consts::VmError::fee().below_minimal(),
-            host_fns::VmErrorDetail::internal(),
-        )));
-    }
+    let fee_total = fee_cost.reported_fee();
 
     let receipt_cost = shared_data
         .data_fees_limit
@@ -72,24 +77,76 @@ async fn consume_message_fee_internal(
         .ctx("calculate_message_receipt")
         .map_err(internal_trap)?;
 
-    if !shared_data
-        .data_fees_limit
-        .consume_message_fee(&fee_cost, &receipt_cost)
-        .await
-    {
-        log_warn!(
-            node:cd = *node,
-            fee_cost:cd = fee_total,
-            buckets:? = shared_data.data_fees_limit;
-            "not enough remaining fee limit to consume message fee"
-        );
-        return Err(internal_trap(rt::errors::Error::vm_detailed(
-            abi::consts::VmError::out_of().message_fee(),
-            host_fns::VmErrorDetail::internal(),
-        )));
-    }
+    match funding {
+        FeeFunding::Allocation(node) => {
+            if fee_total > node.budget {
+                log_warn!(
+                    node:cd = *node,
+                    fee_cost:cd = fee_total,
+                    budget: cd = node.budget;
+                    "message fee cost exceeds node budget"
+                );
+                return Err(internal_trap(rt::errors::Error::vm_detailed(
+                    abi::consts::VmError::out_of().message_fee().node(),
+                    host_fns::VmErrorDetail::internal(),
+                )));
+            }
 
-    node.budget -= fee_total;
+            if !shared_data
+                .data_fees_limit
+                .consume_message_fee(&fee_cost, &receipt_cost)
+                .await
+            {
+                log_warn!(
+                    node:cd = *node,
+                    fee_cost:cd = fee_total,
+                    buckets:? = shared_data.data_fees_limit;
+                    "not enough remaining fee limit to consume message fee"
+                );
+                return Err(internal_trap(rt::errors::Error::vm_detailed(
+                    abi::consts::VmError::out_of().message_fee().total(),
+                    host_fns::VmErrorDetail::internal(),
+                )));
+            }
+
+            node.budget -= fee_total;
+        }
+        FeeFunding::Balance {
+            value,
+            messages_value_decremented,
+            my_balance,
+        } => {
+            // `value + fee_total` can itself overflow U256.
+            let Some(total) = value.checked_add(fee_total) else {
+                return Err(generated::types::Errno::Inbalance.into());
+            };
+            if !checked_sum_le(total, messages_value_decremented, my_balance) {
+                log_warn!(
+                    fee_cost:cd = fee_total,
+                    value:cd = value,
+                    my_balance:cd = my_balance;
+                    "insufficient balance to fund balance-funded message fee"
+                );
+                return Err(generated::types::Errno::Inbalance.into());
+            }
+
+            if !shared_data
+                .data_fees_limit
+                .consume_message_receipt_only(&receipt_cost)
+                .await
+            {
+                log_warn!(
+                    receipt_cost:cd = receipt_cost.reported_fee(),
+                    buckets:? = shared_data.data_fees_limit;
+                    "not enough remaining receipt limit to consume message receipt"
+                );
+                return Err(internal_trap(rt::errors::Error::vm_detailed(
+                    abi::consts::VmError::out_of().receipt().message(),
+                    host_fns::VmErrorDetail::internal(),
+                )));
+            }
+        }
+    }
 
     Ok(rt::fees::MessageFeeConsumption {
         message_fee: fee_cost,
@@ -117,10 +174,10 @@ async fn consume_message_fee_external(
         .calculate_message_fee_external(&params)
         .map_err(internal_trap)?;
 
-    let fee_total = fee_cost.sum();
+    let fee_total = fee_cost.reported_fee();
     if fee_total > node.budget {
         return Err(internal_trap(rt::errors::Error::vm_detailed(
-            abi::consts::VmError::fee().below_minimal(),
+            abi::consts::VmError::out_of().message_fee().node(),
             host_fns::VmErrorDetail::external(),
         )));
     }
@@ -142,7 +199,7 @@ async fn consume_message_fee_external(
         .await
     {
         return Err(internal_trap(rt::errors::Error::vm_detailed(
-            abi::consts::VmError::out_of().message_fee(),
+            abi::consts::VmError::out_of().message_fee().total(),
             host_fns::VmErrorDetail::external(),
         )));
     }
@@ -153,6 +210,88 @@ async fn consume_message_fee_external(
         message_fee: fee_cost,
         receipt_fee: receipt_cost,
     })
+}
+
+/// Magnitude bounds (in significant bits; a larger field is rejected) on
+/// guest-supplied fee params. Invariant the code cannot express: the worst-case
+/// `messageFeeFloor` product must stay within U256, since the fee evaluator's
+/// `rational_to_u256` treats overflow as an internal abort. Three guest fields
+/// multiply into one floor term (`maxPrice × rotations entry × validatorTU`),
+/// so with the default 18-round validator table (counts ≤ 1537 < 2^11) the
+/// accepted-lifecycle worst case is
+///   lifecycle(<2^4) × [price(<2^96) × rounds(<2^5) × rot(<2^33)
+///     × (leaderTU + vpr × validatorTU)(<2^44)
+///     + price(<2^96) × leaderRounds(<2^36)]
+///   < 2^183 ≪ 2^256.
+/// Economically generous: 2^96 atto-GEN ≈ 8e10 GEN for prices/budgets; 2^32
+/// for counts (time units per phase, rotations per round).
+const FEE_PARAM_PRICE_BITS: usize = 96;
+const FEE_PARAM_COUNT_BITS: usize = 32;
+
+/// Validates the balance-funded fee fields (`use_balance` / `fee_params`) shared
+/// by `PostMessage` and `DeployContract` (GVM-281 §4.2). Returns the fee params
+/// to meter against the contract balance when `use_balance` is set, or `None`
+/// for the ordinary allocation-matched path.
+///
+/// Guest params are structurally validated so no guest input can drive the fee
+/// evaluator into an internal abort or emit a message the chain would reject at
+/// reveal: `rotations` must be non-empty (the yaml floor derives
+/// `appealRounds = len - 1` and would go negative otherwise), the three
+/// price caps must be non-zero (the chain reverts `FeeValueMustBeNonZero(4/5/6)`
+/// at reveal), and every numeric field — rotations entries included — is
+/// bounded by [`FEE_PARAM_PRICE_BITS`] / [`FEE_PARAM_COUNT_BITS`] so the
+/// metered floor fits in U256. The rotations-length upper bound is
+/// node-config-dependent (validator table length) and is enforced in the yaml
+/// fee expression instead.
+fn validate_balance_fee(
+    can_use_balance: bool,
+    use_balance: bool,
+    fee_params: Option<domain::fees::InternalMessageParams>,
+) -> Result<Option<domain::fees::InternalMessageParams>, generated::types::Error> {
+    match (use_balance, fee_params) {
+        (true, _) if !can_use_balance => {
+            log_debug!("balance-funded message rejected: permission absent (Forbidden)");
+            Err(generated::types::Errno::Forbidden.into())
+        }
+        (true, None) => {
+            // this is a feature for future
+            log_debug!("balance-funded message rejected: fee_params absent (Inval)");
+            Err(generated::types::Errno::Inval.into())
+        }
+        (true, Some(params)) => {
+            if params.rotations.is_empty() {
+                log_debug!("balance-funded message rejected: rotations empty (Inval)");
+                return Err(generated::types::Errno::Inval.into());
+            }
+            if params.max_price_gen_per_time_unit.is_zero()
+                || params.storage_fee_max_gas_price.is_zero()
+                || params.receipt_fee_max_gas_price.is_zero()
+            {
+                log_debug!("balance-funded message rejected: zero price cap (Inval)");
+                return Err(generated::types::Errno::Inval.into());
+            }
+            let too_large = params.max_price_gen_per_time_unit.bits() > FEE_PARAM_PRICE_BITS
+                || params.storage_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
+                || params.receipt_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
+                || params.execution_budget_per_round.bits() > FEE_PARAM_PRICE_BITS
+                || params.leader_timeunits_allocation.bits() > FEE_PARAM_COUNT_BITS
+                || params.validator_timeunits_allocation.bits() > FEE_PARAM_COUNT_BITS
+                || params
+                    .rotations
+                    .iter()
+                    .any(|r| r.bits() > FEE_PARAM_COUNT_BITS);
+            if too_large {
+                log_debug!("balance-funded message rejected: fee param too large (Inval)");
+                return Err(generated::types::Errno::Inval.into());
+            }
+            Ok(Some(params))
+        }
+        (false, Some(_)) => {
+            log_debug!("message rejected: fee_params without use_balance (Inval)");
+            Err(generated::types::Errno::Inval.into())
+        }
+        (false, None) => Ok(None),
+    }
 }
 
 async fn consume_nondet_output(
@@ -770,6 +909,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         can_call_others: my_conf.can_call_others,
                         can_send_messages: false,
                         can_register_runners: my_conf.can_register_runners,
+                        can_use_balance_for_message_fees: false,
                         state_mode: state,
                         topmost_runner_id: runners::Id::Chain {
                             address,
@@ -908,10 +1048,13 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 calldata,
                 value,
                 on,
+                use_balance,
+                fee_params,
             } => {
                 log_debug!(
                     recipient = address,
-                    on:? = on;
+                    on:? = on,
+                    use_balance = use_balance;
                     "PostMessage dispatched"
                 );
                 if !self.context.data.conf.is_deterministic {
@@ -923,7 +1066,11 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
-                let sd = self.context.data.supervisor.shared_data.clone();
+                let balance_params = validate_balance_fee(
+                    self.context.data.conf.can_use_balance_for_message_fees,
+                    use_balance,
+                    fee_params,
+                )?;
 
                 // Peek the (possibly deferred) calldata to derive the fee call key.
                 let calldata_materialized = calldata.clone().materialize().ok();
@@ -937,6 +1084,63 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 } else {
                     abi::CallKey::UNNAMED
                 };
+
+                if let Some(params) = balance_params {
+                    let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
+                    calldata::codec::Encode::encode(&calldata, &mut enc)
+                        .unwrap_or_else(|e| match e {});
+                    let calldata_length = enc.into_inner().0;
+
+                    let my_balance = self
+                        .context
+                        .get_balance_impl(self.context.data.message_data.message.contract_address)
+                        .await?;
+                    let messages_value_decremented =
+                        self.context.data.accumulator.messages_value_decremented;
+
+                    let fees = consume_message_fee_internal(
+                        &self.context.data.supervisor.shared_data,
+                        FeeFunding::Balance {
+                            value,
+                            messages_value_decremented,
+                            my_balance,
+                        },
+                        Arc::new(params.clone()),
+                        on,
+                        ConsumeInternalArgs {
+                            is_deploy: false,
+                            calldata_length,
+                            code_length: 0,
+                            subtree_length: 0,
+                        },
+                    )
+                    .await?;
+
+                    let metered_fee = fees.message_fee.reported_fee();
+
+                    // Empty subtree: use_balance nesting is fail-closed on-chain.
+                    self.context.data.accumulator.emissions.push(
+                        domain::ExecutionEmission::PostMessage {
+                            call_key,
+                            address,
+                            calldata,
+                            value,
+                            on,
+                            message_fee: metered_fee,
+                            receipt_fee: fees.receipt_fee.reported_fee(),
+                            fee_params: params,
+                            subtree: bytes::Bytes::new(),
+                            use_balance: true,
+                        },
+                    );
+
+                    self.context.data.accumulator.messages_value_decremented =
+                        messages_value_decremented
+                            .saturating_add(value)
+                            .saturating_add(metered_fee);
+
+                    return Ok(file_fd_none());
+                }
 
                 if !value.is_zero() {
                     let my_balance = self
@@ -995,7 +1199,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 let fees = consume_message_fee_internal(
                     &self.context.data.supervisor.shared_data,
-                    matched_node,
+                    FeeFunding::Allocation(matched_node),
                     matched_params,
                     on,
                     ConsumeInternalArgs {
@@ -1018,6 +1222,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         receipt_fee: fees.receipt_fee.reported_fee(),
                         fee_params,
                         subtree,
+                        use_balance: false,
                     },
                 );
 
@@ -1042,6 +1247,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 value,
                 on,
                 salt_nonce,
+                use_balance,
+                fee_params,
             } => {
                 if !self.context.data.conf.is_deterministic {
                     return Err(generated::types::Errno::Forbidden.into());
@@ -1050,7 +1257,68 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
-                let sd = self.context.data.supervisor.shared_data.clone();
+                let balance_params = validate_balance_fee(
+                    self.context.data.conf.can_use_balance_for_message_fees,
+                    use_balance,
+                    fee_params,
+                )?;
+
+                if let Some(params) = balance_params {
+                    let code_length = code.len() as u64;
+                    let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
+                    calldata::codec::Encode::encode(&calldata, &mut enc)
+                        .unwrap_or_else(|e| match e {});
+                    let calldata_length = enc.into_inner().0;
+
+                    let my_balance = self
+                        .context
+                        .get_balance_impl(self.context.data.message_data.message.contract_address)
+                        .await?;
+                    let messages_value_decremented =
+                        self.context.data.accumulator.messages_value_decremented;
+
+                    let fees = consume_message_fee_internal(
+                        &self.context.data.supervisor.shared_data,
+                        FeeFunding::Balance {
+                            value,
+                            messages_value_decremented,
+                            my_balance,
+                        },
+                        Arc::new(params.clone()),
+                        on,
+                        ConsumeInternalArgs {
+                            is_deploy: true,
+                            calldata_length,
+                            code_length,
+                            subtree_length: 0,
+                        },
+                    )
+                    .await?;
+
+                    let metered_fee = fees.message_fee.reported_fee();
+
+                    self.context.data.accumulator.emissions.push(
+                        domain::ExecutionEmission::DeployContract {
+                            calldata,
+                            code,
+                            value,
+                            on,
+                            salt_nonce,
+                            receipt_fee: fees.receipt_fee.reported_fee(),
+                            message_fee: metered_fee,
+                            fee_params: params,
+                            subtree: bytes::Bytes::new(),
+                            use_balance: true,
+                        },
+                    );
+
+                    self.context.data.accumulator.messages_value_decremented =
+                        messages_value_decremented
+                            .saturating_add(value)
+                            .saturating_add(metered_fee);
+
+                    return Ok(file_fd_none());
+                }
 
                 if !value.is_zero() {
                     let my_balance = self
@@ -1103,7 +1371,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 let fees = consume_message_fee_internal(
                     &self.context.data.supervisor.shared_data,
-                    matched_node,
+                    FeeFunding::Allocation(matched_node),
                     matched_params,
                     on,
                     ConsumeInternalArgs {
@@ -1126,6 +1394,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         message_fee: fees.message_fee.reported_fee(),
                         fee_params,
                         subtree,
+                        use_balance: false,
                     },
                 );
 
@@ -1877,6 +2146,7 @@ impl ContextVFS<'_> {
                     can_call_others: false,
                     can_send_messages: false,
                     can_register_runners: false,
+                    can_use_balance_for_message_fees: false,
                     state_mode: public_abi::StorageType::Default,
                     topmost_runner_id: self.context.data.conf.topmost_runner_id.clone(),
                 },
@@ -1978,6 +2248,7 @@ impl ContextVFS<'_> {
                 can_call_others: false,
                 can_send_messages: zelf_conf.can_send_messages & allow_send_messages,
                 can_register_runners: zelf_conf.can_register_runners & allow_register_runners,
+                can_use_balance_for_message_fees: zelf_conf.can_use_balance_for_message_fees,
                 state_mode: zelf_conf.state_mode,
                 topmost_runner_id,
             },
@@ -2107,5 +2378,122 @@ mod gl_call_to_mi {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primitive_types::U256;
+
+    fn valid_params() -> domain::fees::InternalMessageParams {
+        domain::fees::InternalMessageParams {
+            leader_timeunits_allocation: U256::from(5),
+            validator_timeunits_allocation: U256::from(5),
+            execution_budget_per_round: U256::from(1024),
+            rotations: vec![U256::from(4); 5],
+            max_price_gen_per_time_unit: U256::from(2),
+            storage_fee_max_gas_price: U256::from(20),
+            receipt_fee_max_gas_price: U256::from(20),
+        }
+    }
+
+    fn errno(e: generated::types::Error) -> generated::types::Errno {
+        e.downcast().expect("expected a plain errno, got a trap")
+    }
+
+    #[test]
+    fn balance_no_permission_is_forbidden() {
+        let err = validate_balance_fee(false, true, Some(valid_params())).unwrap_err();
+        assert_eq!(errno(err), generated::types::Errno::Forbidden);
+    }
+
+    #[test]
+    fn balance_without_params_is_inval() {
+        let err = validate_balance_fee(true, true, None).unwrap_err();
+        assert_eq!(errno(err), generated::types::Errno::Inval);
+    }
+
+    #[test]
+    fn params_without_use_balance_is_inval() {
+        let err = validate_balance_fee(true, false, Some(valid_params())).unwrap_err();
+        assert_eq!(errno(err), generated::types::Errno::Inval);
+    }
+
+    #[test]
+    fn empty_rotations_is_inval() {
+        let mut p = valid_params();
+        p.rotations.clear();
+        let err = validate_balance_fee(true, true, Some(p)).unwrap_err();
+        assert_eq!(errno(err), generated::types::Errno::Inval);
+    }
+
+    #[test]
+    fn zero_price_caps_are_inval() {
+        for mutate in [
+            (|p: &mut domain::fees::InternalMessageParams| {
+                p.max_price_gen_per_time_unit = U256::zero()
+            }) as fn(&mut domain::fees::InternalMessageParams),
+            |p| p.storage_fee_max_gas_price = U256::zero(),
+            |p| p.receipt_fee_max_gas_price = U256::zero(),
+        ] {
+            let mut p = valid_params();
+            mutate(&mut p);
+            let err = validate_balance_fee(true, true, Some(p)).unwrap_err();
+            assert_eq!(errno(err), generated::types::Errno::Inval);
+        }
+    }
+
+    #[test]
+    fn huge_magnitude_params_are_inval() {
+        // Security-review N1 repro: passes the emptiness/zero checks, but the
+        // 2^250 magnitudes would push messageFeeFloor past U256 and trip the
+        // evaluator's internal `fee cost exceeds U256 range` abort.
+        let p = domain::fees::InternalMessageParams {
+            leader_timeunits_allocation: U256::one() << 250,
+            validator_timeunits_allocation: U256::zero(),
+            execution_budget_per_round: U256::zero(),
+            rotations: vec![U256::zero()],
+            max_price_gen_per_time_unit: U256::one() << 250,
+            storage_fee_max_gas_price: U256::from(20),
+            receipt_fee_max_gas_price: U256::from(20),
+        };
+        let err = validate_balance_fee(true, true, Some(p)).unwrap_err();
+        assert_eq!(errno(err), generated::types::Errno::Inval);
+    }
+
+    #[test]
+    fn huge_rotations_entry_is_inval() {
+        let mut p = valid_params();
+        p.rotations[2] = U256::one() << 250;
+        let err = validate_balance_fee(true, true, Some(p)).unwrap_err();
+        assert_eq!(errno(err), generated::types::Errno::Inval);
+    }
+
+    #[test]
+    fn params_at_magnitude_bounds_pass() {
+        let mut p = valid_params();
+        p.max_price_gen_per_time_unit = (U256::one() << FEE_PARAM_PRICE_BITS) - 1;
+        p.storage_fee_max_gas_price = (U256::one() << FEE_PARAM_PRICE_BITS) - 1;
+        p.receipt_fee_max_gas_price = (U256::one() << FEE_PARAM_PRICE_BITS) - 1;
+        p.execution_budget_per_round = (U256::one() << FEE_PARAM_PRICE_BITS) - 1;
+        p.leader_timeunits_allocation = (U256::one() << FEE_PARAM_COUNT_BITS) - 1;
+        p.validator_timeunits_allocation = (U256::one() << FEE_PARAM_COUNT_BITS) - 1;
+        p.rotations = vec![(U256::one() << FEE_PARAM_COUNT_BITS) - 1; 5];
+        let got = validate_balance_fee(true, true, Some(p.clone())).unwrap();
+        assert_eq!(got, Some(p));
+    }
+
+    #[test]
+    fn valid_balance_params_pass_through() {
+        let p = valid_params();
+        let got = validate_balance_fee(true, true, Some(p.clone())).unwrap();
+        assert_eq!(got, Some(p));
+    }
+
+    #[test]
+    fn no_balance_no_params_is_allocation_path() {
+        let got = validate_balance_fee(true, false, None).unwrap();
+        assert_eq!(got, None);
     }
 }

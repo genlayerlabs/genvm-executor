@@ -10,6 +10,19 @@ use serde::{Deserialize, Serialize};
 use crate::calldata;
 
 use super::consts as public_abi;
+use super::fees;
+
+/// Calldata `default` for the backward-compatible `use_balance` flag: an old
+/// encoding without the key decodes as `false`.
+fn default_false() -> bool {
+    false
+}
+
+/// Calldata `default` for the backward-compatible optional `fee_params`: an old
+/// encoding without the key decodes as `None`.
+fn default_none<T>() -> Option<T> {
+    None
+}
 
 /// Web module interface types for WebRender and WebRequest operations.
 pub mod web_iface {
@@ -541,6 +554,15 @@ pub enum Message {
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
         value: primitive_types::U256,
         on: On,
+        /// Chain `useBalance`: fund this message's fee from the emitting
+        /// contract's balance instead of the sender's prefunded pool. Requires
+        /// `fee_params` and the `can_use_balance_for_message_fees` permission.
+        #[calldata(default = default_false)]
+        use_balance: bool,
+        /// Guest-supplied fee params GenVM meters the (balance-funded) fee from;
+        /// only honored when `use_balance` is set.
+        #[calldata(default = default_none)]
+        fee_params: Option<fees::InternalMessageParams>,
     },
     DeployContract {
         calldata: calldata::unparsed::Maybe<calldata::Value>,
@@ -551,6 +573,12 @@ pub enum Message {
         on: On,
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
         salt_nonce: primitive_types::U256,
+        /// Chain `useBalance` for the deploy message; see `PostMessage::use_balance`.
+        #[calldata(default = default_false)]
+        use_balance: bool,
+        /// Guest fee params for the balance-funded deploy; see `PostMessage::fee_params`.
+        #[calldata(default = default_none)]
+        fee_params: Option<fees::InternalMessageParams>,
     },
     EmitEvent {
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_vec_bytes))]

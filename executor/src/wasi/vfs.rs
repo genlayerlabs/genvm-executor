@@ -64,7 +64,7 @@ impl VFS {
     pub fn new(stdin: Vec<u8>, limiter: rt::memlimiter::Limiter) -> rt::errors::Result<Self> {
         log_trace!(stdin:bytes = stdin; "creating VFS");
 
-        if !limiter.consume(stdin.len() as u32) {
+        if !limiter.consume_size(stdin.len()) {
             return Err(rt::errors::Error::vm(
                 abi::consts::VmError::out_of().memory().val(),
             ));
@@ -140,7 +140,7 @@ impl VFS {
     }
 
     pub fn place_content(&mut self, value: FileContents) -> anyhow::Result<Fd> {
-        if value.release_memory && !self.limiter.consume(value.contents.len() as u32) {
+        if value.release_memory && !self.limiter.consume_size(value.contents.len()) {
             return Err(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
             );

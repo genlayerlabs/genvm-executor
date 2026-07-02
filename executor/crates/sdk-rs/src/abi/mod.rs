@@ -15,6 +15,7 @@ pub(crate) mod arb;
 
 pub mod consts;
 pub mod entry;
+pub mod fees;
 pub mod gl_call;
 
 #[cfg(feature = "wasi")]

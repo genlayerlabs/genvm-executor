@@ -165,8 +165,12 @@ pub async fn run_with_impl(
         ),
     );
 
-    let topmost_runner_id = match async {
-        anyhow::Ok(if let Some(code) = &entry_data.code {
+    let (topmost_runner_id, root_permissions) = match async {
+        // Contract-owned permissions live in the root slot, not the node-granted
+        // `permissions` string; pre-read them before running the wasm.
+        let root_permissions = topmost_storage.read_permissions().await?;
+
+        let id = if let Some(code) = &entry_data.code {
             log_debug!("using provided code for execution");
 
             topmost_storage.write_code(code).await?;
@@ -201,11 +205,13 @@ pub async fn run_with_impl(
                 on: runners::ChainState::Accepted,
                 slot: code_slot,
             }
-        })
+        };
+
+        anyhow::Ok((id, root_permissions))
     }
     .await
     {
-        Ok(id) => id,
+        Ok(v) => v,
         // A VMError raised while preparing the contract (bad code, major
         // mismatch, missing code slot) is a contract error, not an internal
         // failure: surface it as a VMError result. Genuine internal errors still
@@ -216,6 +222,10 @@ pub async fn run_with_impl(
             ));
         }
     };
+
+    let can_use_balance_for_message_fees =
+        primitive_types::U256::from_little_endian(&root_permissions)
+            .bit(public_abi::Permissions::CanUseBalanceForMessageFees.value() as usize);
 
     let data_fees_limit = supervisor.shared_data.gep(|x| &x.data_fees_limit);
 
@@ -231,6 +241,7 @@ pub async fn run_with_impl(
             can_call_others: permissions.contains("c"),
             can_spawn_nondet: permissions.contains("n"),
             can_register_runners: permissions.contains("u"),
+            can_use_balance_for_message_fees,
             state_mode: crate::public_abi::StorageType::Default,
             topmost_runner_id,
         },

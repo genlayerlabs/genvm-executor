@@ -151,6 +151,44 @@ impl TryFrom<u8> for EntryKind {
         }
     }
 }
+#[derive(
+    Debug,
+    PartialEq,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    ::genlayer_calldata::Encode,
+    ::genlayer_calldata::Decode,
+)]
+#[repr(u32)]
+pub enum Permissions {
+    CanUseBalanceForMessageFees = 1,
+}
+
+impl Permissions {
+    pub fn value(self) -> u32 {
+        match self {
+            Permissions::CanUseBalanceForMessageFees => 1,
+        }
+    }
+    pub fn str_snake_case(self) -> &'static str {
+        match self {
+            Permissions::CanUseBalanceForMessageFees => "can_use_balance_for_message_fees",
+        }
+    }
+}
+
+impl TryFrom<u32> for Permissions {
+    type Error = ();
+
+    fn try_from(value: u32) -> Result<Self, ()> {
+        match value {
+            1 => Ok(Permissions::CanUseBalanceForMessageFees),
+            _ => Err(()),
+        }
+    }
+}
 pub mod memory_limiter_consts {
     pub const TABLE_ENTRY: u32 = 64;
     pub const FILE_MAPPING: u32 = 256;
@@ -164,6 +202,7 @@ pub mod root_offsets {
     pub const LOCKED_SLOTS: u32 = 3;
     pub const UPGRADERS: u32 = 4;
     pub const CODE_SLOT: u32 = 5;
+    pub const PERMISSIONS: u32 = 37;
 }
 
 pub mod top_limits {
@@ -260,11 +299,17 @@ pub mod __VmError {
         pub const fn event(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt event")) }
     }
 
+    pub struct OutOfMessageFee;
+
+    impl OutOfMessageFee {
+        pub const fn total(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee total")) }
+        pub const fn node(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node")) }
+    }
+
     pub struct OutOf;
 
     impl OutOf {
         pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("out_of storage")) }
-        pub const fn message_fee(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee")) }
         pub const fn vm_recursion(&self) -> VmError { VmError(Cow::Borrowed("out_of vm_recursion")) }
         pub const fn nondet_blocks(&self) -> VmError { VmError(Cow::Borrowed("out_of nondet_blocks")) }
         pub const fn locked_slots(&self) -> VmError { VmError(Cow::Borrowed("out_of locked_slots")) }
@@ -272,13 +317,15 @@ pub mod __VmError {
         pub const fn fds(&self) -> VmError { VmError(Cow::Borrowed("out_of fds")) }
         pub const fn memory(&self) -> OutOfMemory { OutOfMemory }
         pub const fn receipt(&self) -> OutOfReceipt { OutOfReceipt }
+        pub const fn message_fee(&self) -> OutOfMessageFee { OutOfMessageFee }
     }
 
     pub struct Fee;
 
     impl Fee {
         pub const fn no_matching_node(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node")) }
-        pub const fn below_minimal(&self) -> VmError { VmError(Cow::Borrowed("fee below_minimal")) }
+        pub const fn below_minimum(&self) -> VmError { VmError(Cow::Borrowed("fee below_minimum")) }
+        pub const fn too_many_rounds(&self) -> VmError { VmError(Cow::Borrowed("fee too_many_rounds")) }
     }
 
     pub struct Evm;

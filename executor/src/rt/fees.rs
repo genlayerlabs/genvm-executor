@@ -57,9 +57,10 @@ pub fn fee_params_value_internal(
     );
     let rotations: Vec<Value> = p.rotations.iter().map(|r| num_u256(*r)).collect();
     m.insert("rotations".to_owned(), Value::Array(Arc::new(rotations)));
-    // v0.6-dev (CON-549) price caps, exposed so the host-provided fee expression
-    // can charge at `maxPriceGenPerTimeUnit` as the funding multiplier and clamp
-    // the storage/receipt components, matching the chain's `_calculateRoundFees`.
+    // v0.6-dev (CON-549) price caps. `maxPriceGenPerTimeUnit` is the funding
+    // multiplier for balance-funded messages (chain `_calculateRoundFees`); the
+    // storage/receipt caps are exposed for completeness but stay out of the floor
+    // calc, mirroring `feeParamsToFeesDistribution` which zeroes them there.
     m.insert(
         "maxPriceGenPerTimeUnit".to_owned(),
         num_u256(p.max_price_gen_per_time_unit),
@@ -302,7 +303,7 @@ impl DataLimit {
             prelude,
             &fees.message_fee,
             &node,
-            abi::consts::VmError::out_of().message_fee(),
+            abi::consts::VmError::out_of().message_fee().total(),
         )?;
         let event = build_bucket(
             prelude,
@@ -495,15 +496,20 @@ impl DataLimit {
             ],
         )?;
         if self.consume_bucket_raw(&self.event, &costs.0).await {
-            Ok(Some(costs.sum()))
+            Ok(Some(costs.reported_fee()))
         } else {
             Ok(None)
         }
     }
 
+    /// `balance_funded` selects the chain's `minMessagePrimaryFees` multiplier:
+    /// balance-funded (`useBalance`) messages charge the consensus term at the
+    /// guest's `maxPriceGenPerTimeUnit` cap (per `_calculateRoundFees`), whereas
+    /// allocation-matched messages use the node's live `genPerTimeUnit`.
     pub fn calculate_message_fee_internal(
         &self,
         on: abi::gl_call::On,
+        balance_funded: bool,
         matched_fee_params: &genvm_common::domain::fees::InternalMessageParams,
     ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
@@ -511,6 +517,7 @@ impl DataLimit {
             &[
                 ("isInternal", true.into()),
                 ("onAcceptance", (on == abi::gl_call::On::Accepted).into()),
+                ("balanceFunded", balance_funded.into()),
                 (
                     "matchedFeeParams",
                     fee_params_value_internal(matched_fee_params),
@@ -572,6 +579,14 @@ impl DataLimit {
 
         log_debug!("consume_message_fee: ok");
         true
+    }
+
+    /// Consumes only the `message_receipt` bucket, leaving the `message_fee`
+    /// bucket untouched (balance-funded messages are excluded from the sender
+    /// pool on-chain). Atomic; returns `false` if the bucket cannot cover it.
+    pub async fn consume_message_receipt_only(&self, cost_receipt: &CostVec) -> bool {
+        self.consume_bucket_raw(&self.message_receipt, &cost_receipt.0)
+            .await
     }
 
     pub fn calculate_message_fee_external(

@@ -31,6 +31,14 @@
     }
   },
   {
+    "type": "enum",
+    "name": "permissions",
+    "repr": "u32",
+    "values": {
+      "can_use_balance_for_message_fees": 1
+    }
+  },
+  {
     "type": "consts",
     "name": "memory_limiter_consts",
     "repr": "u32",
@@ -50,7 +58,8 @@
       "code": 2,
       "locked_slots": 3,
       "upgraders": 4,
-      "code_slot": 5
+      "code_slot": 5,
+      "permissions": 37
     }
   },
   {
@@ -119,7 +128,10 @@
             "head": "receipt",
             "tail": ["nondet_output", "message", "event"]
           },
-          "message_fee",
+          {
+            "head": "message_fee",
+            "tail": ["total", "node"]
+          },
           "vm_recursion",
           "nondet_blocks",
           "locked_slots",
@@ -129,7 +141,7 @@
       },
       {
         "head": "fee",
-        "tail": ["no_matching_node", "below_minimal"]
+        "tail": ["no_matching_node", "below_minimum", "too_many_rounds"]
       },
       "host_forbidden",
       {

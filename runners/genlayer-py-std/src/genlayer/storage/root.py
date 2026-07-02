@@ -56,6 +56,13 @@ class Root:
 	from the pointed-to slot (see ``chain:`` runner ids).
 	"""
 
+	permissions: u256
+	"""
+	Permission bitfield read by the executor at execution start. Bit ``n`` corresponds
+	to the :py:class:`~genlayer.vm.public_abi.Permissions` member whose value is ``n``.
+	Use :py:meth:`get_permission` / :py:meth:`set_permission` to access it.
+	"""
+
 	@staticmethod
 	def get() -> 'Root':
 		"""
@@ -112,3 +119,25 @@ class Root:
 		frozen.append(self.code.slot().as_int())
 		frozen.append(self.locked_slots.slot().as_int())
 		frozen.append(self.upgraders.slot().as_int())
+
+	def get_permission(self, perm: public_abi.Permissions, /) -> bool:
+		"""
+		Check whether a permission bit is set in the root ``permissions`` bitfield.
+
+		:param perm: permission to query
+		:returns: ``True`` iff the corresponding bit is set
+		"""
+		return (self.permissions >> perm.value) & 1 != 0
+
+	def set_permission(self, perm: public_abi.Permissions, value: bool, /) -> None:
+		"""
+		Set or clear a permission bit in the root ``permissions`` bitfield.
+
+		:param perm: permission to modify
+		:param value: whether to grant the permission
+		"""
+		bit = 1 << perm.value
+		if value:
+			self.permissions |= bit
+		else:
+			self.permissions &= ~bit

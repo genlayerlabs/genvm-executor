@@ -3,42 +3,10 @@ use primitive_types::U256;
 
 mod abi;
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    genlayer_calldata::Encode,
-    genlayer_calldata::Decode,
-)]
-pub struct InternalMessageParams {
-    pub leader_timeunits_allocation: U256,
-    pub validator_timeunits_allocation: U256,
-    pub execution_budget_per_round: U256,
-    /// Per-round rotation allocations; `rotations[0]` is the initial round, the
-    /// rest are appeal rounds. Must be non-empty.
-    ///
-    /// The chain's `InternalMessageFeeParams` carries an explicit `appealRounds`
-    /// field, but it is not stored here: the chain enforces
-    /// `appealRounds == rotations.length - 1` (`FeesVerifier.InvalidAppealRounds`),
-    /// so we derive `appeal_rounds = rotations.len() - 1` instead. The ABI
-    /// encoder re-inserts it so the encoded bytes (and their `keccak256` fee-param
-    /// pin) match the chain's field layout.
-    pub rotations: Vec<U256>,
-    /// Per-time-unit GEN price cap locked at activation (consensus CON-549,
-    /// v0.6-dev). The chain charges at this cap as the funding multiplier and
-    /// cancels the tx if the global price exceeds it; `MessagePayments` requires
-    /// it to be non-zero for internal messages.
-    pub max_price_gen_per_time_unit: U256,
-    /// Max gas price applied to the storage-fee component (v0.6-dev). Revert
-    /// guard in `_calculateRoundFees`; must be non-zero for internal messages.
-    pub storage_fee_max_gas_price: U256,
-    /// Max gas price applied to the receipt-fee component (v0.6-dev). Revert
-    /// guard in `_calculateRoundFees`; must be non-zero for internal messages.
-    pub receipt_fee_max_gas_price: U256,
-}
+/// Balance-funded internal messages carry these params from the guest, so the
+/// type is guest-facing and lives in sdk-rs; re-export it here to keep the
+/// executor-side `genvm_common::domain::fees::InternalMessageParams` path stable.
+pub use genlayer_sdk::abi::fees::InternalMessageParams;
 
 #[derive(
     Debug,

@@ -119,12 +119,16 @@ def hooks(ctx: 'genvm_tool.common.Context'):
 		},
 		# --- local guard ---------------------------------------------------
 		{
-			# Refuse commits that leave the dev-mode runner toggle on (false).
-			'id': 'no-commit-test',
+			# Refuse commits that leave dev-mode on or any hash as "test".
+			# On failure prints docs/contributing/howto/committing/runners.md.
+			'id': 'no-commit-dev-mode',
 			'local': True,
-			'entry': 'grep',
-			'args': ['-P', 'false', 'runners/support/versions/dev-mode.nix'],
-			'files': r'^runners/support/versions/dev-mode\.nix$',
+			'entry': ctx.python_command[0],
+			'args': [
+				*ctx.python_command[1:],
+				'runners/support/versions/check-dev-mode.py',
+			],
+			'files': r'^runners/support/versions/(dev-mode|current)\.nix$',
 			'pass_filenames': False,
 		},
 		# --- commit-msg ----------------------------------------------------

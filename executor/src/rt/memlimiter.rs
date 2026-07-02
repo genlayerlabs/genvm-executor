@@ -71,6 +71,16 @@ impl Limiter {
         }))
     }
 
+    /// Charges `delta` bytes, failing (rather than truncating) when `delta`
+    /// does not fit in the `u32` budget. A body larger than `u32::MAX` can never
+    /// fit the 4 GiB budget anyway, so this maps cleanly onto the OOM path.
+    pub fn consume_size(&self, delta: usize) -> bool {
+        match u32::try_from(delta) {
+            Ok(delta) => self.consume(delta),
+            Err(_) => false,
+        }
+    }
+
     pub fn consume_mul(&self, delta: u32, multiplier: u32) -> bool {
         let delta = match delta.checked_mul(multiplier) {
             Some(delta) => delta,

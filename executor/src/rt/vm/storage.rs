@@ -452,6 +452,16 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         }
     }
 
+    /// Reads the contract's inline permission bitfield from the root slot as a
+    /// raw 32-byte little-endian `u256`; bit `n` is the `Permissions` member with
+    /// value `n`. Zero (never-written default) grants nothing.
+    pub async fn read_permissions(&mut self) -> rt::errors::Result<[u8; 32]> {
+        let mut raw = [0u8; 32];
+        self.read(SlotID::ZERO, root_offsets::PERMISSIONS, &mut raw)
+            .await?;
+        Ok(raw)
+    }
+
     /// Verifies the contract's major version matches this node's, then resolves
     /// its code slot. The major is checked *first*, before trusting the
     /// host-read code-slot pointer; on mismatch a `major_mismatch` [`Error`]

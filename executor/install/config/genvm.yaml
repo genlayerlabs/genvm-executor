@@ -30,6 +30,20 @@ fees:
   # Optional:
   #   node.validatorsPerRound[]        - validator count per round
   #                                      (defaults to defaultValidatorsPerRound below)
+  #   node.minTimeUnitsPerPhase        - minimum per-phase timeunits an emitted
+  #                                      internal message's allocation must fund
+  #                                      (leader->propose, validator->commit); a
+  #                                      matched message below it is rejected at
+  #                                      emission with `fee below_minimum`
+  #                                      (defaults to 0 = no floor)
+  #   node.messageBudgetFloor          - minimum non-zero per-round execution
+  #                                      budget a balance-funded internal message
+  #                                      may declare; the chain reverts
+  #                                      `BudgetTooLow` below it. A message whose
+  #                                      executionBudgetPerRound is in (0, floor)
+  #                                      is rejected at emission with
+  #                                      `fee below_minimum`
+  #                                      (defaults to 0 = no floor)
   #
   # GenVM consumption points can consume multiple buckets, but as a fee only first is reported to the node
   #   i.e. message_receipt consumes from execution_data_gas & submitted_messages
@@ -60,13 +74,23 @@ fees:
       else defaultValidatorsPerRound in
     # leaf-node message fee floor = minPrimaryFees * lifecycleMultiplier
     # feeParams: object { leaderTimeunitsAllocation,
-    #   validatorTimeunitsAllocation, executionBudgetPerRound, rotations[] }
+    #   validatorTimeunitsAllocation, executionBudgetPerRound, rotations[],
+    #   maxPriceGenPerTimeUnit }
     # appealRounds = len(rotations) - 1
     # onAcceptance: per-message lifecycle flag (bool)
-    # uses validatorsPerRound[] (node or default), node.genPerTimeUnit
-    let messageFeeFloor = \feeParams onAcceptance =
+    # balanceFunded: true for use_balance messages (bool)
+    # uses validatorsPerRound[] (node or default) and, as the consensus-term
+    # multiplier, either the guest cap (balance-funded) or node.genPerTimeUnit.
+    let messageFeeFloor = \feeParams onAcceptance balanceFunded =
       let rotations = feeParams.rotations in
       let appealRounds = arrayLen rotations - 1 in
+      # rounds span 0 .. 2*appealRounds and index validatorsPerRound[round]; a
+      # message with more appeal rounds than the validator table supports would
+      # overrun the array (internal abort). The bound is node-config-dependent,
+      # so it is enforced here rather than in the SDK. On-chain such a message
+      # exceeds MAX_ROUNDS.
+      if 2 * appealRounds >= arrayLen validatorsPerRound then vmError "fee too_many_rounds"
+      else
       let leaderTU = feeParams.leaderTimeunitsAllocation in
       let validatorTU = feeParams.validatorTimeunitsAllocation in
       let execBudgetPerRound = feeParams.executionBudgetPerRound in
@@ -87,11 +111,18 @@ fees:
           + appealRounds in
       # 4. execution-budget term
       let executionTerm = execBudgetPerRound * leaderRounds in
-      # 5. minimum primary fees (caps forced to zero by construction)
+      # 5. consensus-term multiplier. Chain `_calculateRoundFees` charges the
+      #    consensus term at maxPriceGenPerTimeUnit (the funding cap) for
+      #    balance-funded messages; the allocation path keeps the historical
+      #    node.genPerTimeUnit behaviour. Storage/receipt caps stay out of the
+      #    floor: `feeParamsToFeesDistribution` zeroes them so their
+      #    revert-on-exceed guards never fire during this calc.
+      let multiplier = if balanceFunded then feeParams.maxPriceGenPerTimeUnit else node.genPerTimeUnit in
+      # 6. minimum primary fees
       let minPrimaryFees =
-        (if node.genPerTimeUnit > 0 then node.genPerTimeUnit * consensusTerm else consensusTerm)
+        (if multiplier > 0 then multiplier * consensusTerm else consensusTerm)
           + executionTerm in
-      # 6. lifecycle multiplier
+      # 7. lifecycle multiplier
       let lifecycleMultiplier = if onAcceptance then appealRounds + 1 else 1 in
       minPrimaryFees * lifecycleMultiplier
     in
@@ -143,8 +174,27 @@ fees:
       0
     delta_expr: |
       \a =
+      # per-phase timeunit floor (leader->propose, validator->commit): a matched
+      # internal message whose child timeunits fall below the node minimum would
+      # revert PhaseTimeoutOutOfBounds at child creation on-chain, so reject it at
+      # emission instead of silently dropping it. Absent constant => no floor.
+      let minTimeUnits = if hasKey node "minTimeUnitsPerPhase" then node.minTimeUnitsPerPhase else 0 in
+      # a non-zero per-round budget below the node floor reverts `BudgetTooLow`
+      # at reveal on-chain; reject it at emission instead. Absent constant => no
+      # floor.
+      let budgetFloor = if hasKey node "messageBudgetFloor" then node.messageBudgetFloor else 0 in
+      # reject only a non-zero per-round budget below the floor (matches the
+      # chain's `execBudget > 0 && execBudget < floor`)
+      let budgetTooLow =
+        if a.matchedFeeParams.executionBudgetPerRound > 0
+        then a.matchedFeeParams.executionBudgetPerRound < budgetFloor
+        else false in
       if a.isInternal
-      then messageFeeFloor a.matchedFeeParams a.onAcceptance
+      then
+        if a.matchedFeeParams.leaderTimeunitsAllocation < minTimeUnits then vmError "fee below_minimum"
+        else if a.matchedFeeParams.validatorTimeunitsAllocation < minTimeUnits then vmError "fee below_minimum"
+        else if budgetTooLow then vmError "fee below_minimum"
+        else messageFeeFloor a.matchedFeeParams a.onAcceptance a.balanceFunded
       # external messages reserve the worst-case L1 gas cost: gasLimit * maxGasPrice
       # (matches the chain's `budget == k * (gasLimit * maxGasPrice)` requirement)
       else a.matchedFeeParams.gasLimit * a.matchedFeeParams.maxGasPrice
