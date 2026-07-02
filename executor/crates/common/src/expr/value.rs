@@ -30,39 +30,32 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum EvalError {
+    #[error("script VM error: {0}")]
+    ScriptVMError(String),
+
+    #[error("undefined variable `{0}`")]
     UndefinedVariable(String),
+    #[error("division by zero")]
     DivisionByZero,
+    #[error("infinite recursion while forcing a lazy value (tying the knot?)")]
+    InfiniteRecursion,
+    #[error("exponent too large")]
+    ExponentTooLarge,
+    #[error("object key not found: `{0}`")]
+    ObjectKeyNotFound(String),
+    #[error("array index out of bounds: index {index}, length {len}")]
+    ArrayIndexOutOfBounds { index: usize, len: usize },
+    #[error("type error: expected integer, got fractional")]
+    IsFractional,
+    #[error("type error: expected {expected}, got {got}")]
     TypeError {
         expected: &'static str,
         got: &'static str,
     },
-    Custom(String),
+    #[error(transparent)]
     Dyn(Box<dyn std::error::Error + Send + Sync>),
-}
-
-impl fmt::Display for EvalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EvalError::UndefinedVariable(name) => write!(f, "undefined variable `{name}`"),
-            EvalError::DivisionByZero => write!(f, "division by zero"),
-            EvalError::TypeError { expected, got } => {
-                write!(f, "type error: expected {expected}, got {got}")
-            }
-            EvalError::Custom(msg) => write!(f, "{msg}"),
-            EvalError::Dyn(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for EvalError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            EvalError::Dyn(e) => Some(&**e),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -197,9 +190,7 @@ impl Thunk {
                     return Ok(v);
                 }
                 ThunkState::InProgress => {
-                    return Err(EvalError::Custom(
-                        "infinite recursion while forcing a lazy value".to_owned(),
-                    ));
+                    return Err(EvalError::InfiniteRecursion);
                 }
                 ThunkState::Deferred(f) => f,
             }

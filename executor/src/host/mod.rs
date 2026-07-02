@@ -99,10 +99,17 @@ fn read_host_error(sock: &mut dyn Sock, context: &str) -> Result<host_fns::Error
 fn handle_host_error(sock: &mut dyn Sock, context: &str) -> Result<()> {
     let e = read_host_error(sock, context)?;
 
-    if e == host_fns::Errors::Ok {
-        Ok(())
-    } else {
-        Err(rt::errors::Error::vm(abi::consts::VmError::host().val_str(e.str_snake_case())).into())
+    match e {
+        host_fns::Errors::Ok => Ok(()),
+        host_fns::Errors::EvmReverted => {
+            Err(rt::errors::Error::vm(abi::consts::VmError::evm().reverted()).into())
+        }
+        // Reserved for gen_call-class host methods (e.g. eth_call) refused in
+        // the current execution context; it must not occur during on-chain
+        // consensus execution.
+        host_fns::Errors::Forbidden => {
+            Err(rt::errors::Error::vm(abi::consts::VmError::host_forbidden()).into())
+        }
     }
 }
 
@@ -301,11 +308,15 @@ impl Host {
         let len = u32::from_le_bytes(len_buf);
 
         if len > abi::consts::top_limits::LOCKED_SLOTS {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into());
+            return Err(
+                rt::errors::Error::vm(abi::consts::VmError::out_of().locked_slots()).into(),
+            );
         }
 
         if !limiter.consume_mul(len, SlotID::SIZE) {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into());
+            return Err(
+                rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
+            );
         }
 
         let res = Box::new_uninit_slice(len as usize);
@@ -349,7 +360,7 @@ impl Host {
         let len = u32::from_le_bytes(len_buf);
 
         if len > abi::consts::top_limits::UPGRADERS {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into());
+            return Err(rt::errors::Error::vm(abi::consts::VmError::out_of().upgraders()).into());
         }
 
         for i in 0..len {

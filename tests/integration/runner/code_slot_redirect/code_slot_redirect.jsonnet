@@ -12,7 +12,7 @@ local util = import 'templates/util.jsonnet';
 			vars: {},
 			code: null,
 			message: msg,
-			calldata: std.manifestJsonEx({method: 'foo', args: []}, '    '),
+			calldata: std.manifestJsonEx({'': 'foo', args: []}, '    '),
 			stable_hash: false,
 		}],
 	}])

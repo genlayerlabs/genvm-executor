@@ -3,6 +3,8 @@ use std::sync::Arc;
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
 
+use crate::expr::value::HostFnImpl;
+
 use super::value::{BinOp, EvalError, Expr, StrSeg, Thunk, Value};
 
 // SAFETY: this evaluator has no recursion depth or fuel limits.
@@ -135,7 +137,7 @@ fn eval(expr: &Expr, ctx: &EvalContext) -> Result<Value, EvalError> {
             obj.as_object()?
                 .get(key)
                 .cloned()
-                .ok_or_else(|| EvalError::Custom(format!("object has no key `{key}`")))
+                .ok_or_else(|| EvalError::ObjectKeyNotFound(key.clone()))
         }
     }
 }
@@ -166,82 +168,106 @@ fn apply(f: &Value, arg: Thunk, ctx: &EvalContext) -> Result<Value, EvalError> {
     }
 }
 
-fn resolve_builtin(name: &str) -> Option<Value> {
-    match name {
-        "floor" => Some(Value::HostFn(Arc::new(|arg: &Value| {
-            Ok(Value::Rational(arg.clone().into_rational()?.floor()))
-        }))),
-        "toString" => Some(Value::HostFn(Arc::new(|arg: &Value| {
-            Ok(Value::Str(stringify(arg).into()))
-        }))),
-        "hasKey" => Some(Value::HostFn(Arc::new(|obj: &Value| {
-            let obj = obj.as_object()?.clone();
-            Ok(Value::HostFn(Arc::new(move |key: &Value| {
-                Ok(Value::Bool(obj.contains_key(key.as_str()?)))
-            })))
-        }))),
-        "arrayLen" => Some(Value::HostFn(Arc::new(|arg: &Value| match arg {
-            Value::Array(elems) => Ok(Value::Rational(BigRational::from_integer(
-                elems.len().into(),
-            ))),
-            other => Err(EvalError::TypeError {
-                expected: "array",
-                got: other.typ(),
-            }),
-        }))),
-        "arrayGetElem" => Some(Value::HostFn(Arc::new(|arr: &Value| match arr {
-            Value::Array(elems) => {
-                let elems = elems.clone();
-                Ok(Value::HostFn(Arc::new(move |idx: &Value| {
-                    let i = idx
-                        .clone()
-                        .into_rational()?
-                        .to_integer()
-                        .to_usize()
-                        .ok_or_else(|| {
-                            EvalError::Custom(format!("array index out of range: {idx}"))
-                        })?;
-                    elems.get(i).cloned().ok_or_else(|| {
-                        EvalError::Custom(format!(
-                            "array index {i} out of bounds for length {}",
-                            elems.len()
-                        ))
-                    })
+static BUILTINS: std::sync::LazyLock<std::collections::HashMap<&'static str, Arc<HostFnImpl>>> =
+    std::sync::LazyLock::new(|| {
+        let mut m = std::collections::HashMap::<_, Arc<HostFnImpl>>::new();
+        m.insert(
+            "floor",
+            Arc::new(|arg: &Value| Ok(Value::Rational(arg.clone().into_rational()?.floor()))),
+        );
+        m.insert(
+            "toString",
+            Arc::new(|arg: &Value| Ok(Value::Str(stringify(arg).into()))),
+        );
+        m.insert(
+            "hasKey",
+            Arc::new(|obj: &Value| {
+                let obj = obj.as_object()?.clone();
+                Ok(Value::HostFn(Arc::new(move |key: &Value| {
+                    Ok(Value::Bool(obj.contains_key(key.as_str()?)))
                 })))
-            }
-            other => Err(EvalError::TypeError {
-                expected: "array",
-                got: other.typ(),
             }),
-        }))),
-        "pow" => Some(Value::HostFn(Arc::new(|base: &Value| {
-            let base = base.clone().into_rational()?;
-            Ok(Value::HostFn(Arc::new(move |exp: &Value| {
-                let exp = exp.clone().into_rational()?;
-                if !exp.is_integer() {
-                    return Err(EvalError::Custom(format!(
-                        "pow exponent must be an integer, got {exp}"
-                    )));
+        );
+        m.insert(
+            "arrayLen",
+            Arc::new(|arg: &Value| match arg {
+                Value::Array(elems) => Ok(Value::Rational(BigRational::from_integer(
+                    elems.len().into(),
+                ))),
+                other => Err(EvalError::TypeError {
+                    expected: "array",
+                    got: other.typ(),
+                }),
+            }),
+        );
+        m.insert(
+            "vmError",
+            Arc::new(|arg: &Value| {
+                let msg = arg.as_str()?.to_string();
+                Err(EvalError::ScriptVMError(msg))
+            }),
+        );
+        m.insert(
+            "arrayGetElem",
+            Arc::new(|arr: &Value| match arr {
+                Value::Array(elems) => {
+                    let elems = elems.clone();
+                    Ok(Value::HostFn(Arc::new(move |idx: &Value| {
+                        let i = idx.clone().into_rational()?;
+                        if !i.is_integer() {
+                            return Err(EvalError::IsFractional);
+                        }
+                        let i = i.to_integer().to_usize().unwrap_or(usize::MAX);
+                        if i >= elems.len() {
+                            return Err(EvalError::ArrayIndexOutOfBounds {
+                                index: i,
+                                len: elems.len(),
+                            });
+                        }
+                        Ok(elems[i].clone())
+                    })))
                 }
-                let exp = exp.to_integer();
-                let negative = exp < num_bigint::BigInt::ZERO;
-                let exp: u64 = exp
-                    .magnitude()
-                    .try_into()
-                    .map_err(|_| EvalError::Custom("pow exponent too large".to_owned()))?;
-                let result = num_traits::pow::pow(base.clone(), exp as usize);
-                if negative {
-                    if result.is_zero() {
-                        return Err(EvalError::DivisionByZero);
+                other => Err(EvalError::TypeError {
+                    expected: "array",
+                    got: other.typ(),
+                }),
+            }),
+        );
+        m.insert(
+            "pow",
+            Arc::new(|base: &Value| {
+                let base = base.clone().into_rational()?;
+                Ok(Value::HostFn(Arc::new(move |exp: &Value| {
+                    let exp = exp.clone().into_rational()?;
+                    if !exp.is_integer() {
+                        return Err(EvalError::TypeError {
+                            expected: "integer",
+                            got: "fraction",
+                        });
                     }
-                    Ok(Value::Rational(result.recip()))
-                } else {
-                    Ok(Value::Rational(result))
-                }
-            })))
-        }))),
-        _ => None,
-    }
+                    let exp = exp.to_integer();
+                    let negative = exp < num_bigint::BigInt::ZERO;
+                    let exp: u64 = exp
+                        .magnitude()
+                        .try_into()
+                        .map_err(|_| EvalError::ExponentTooLarge)?;
+                    let result = num_traits::pow::pow(base.clone(), exp as usize);
+                    if negative {
+                        if result.is_zero() {
+                            return Err(EvalError::DivisionByZero);
+                        }
+                        Ok(Value::Rational(result.recip()))
+                    } else {
+                        Ok(Value::Rational(result))
+                    }
+                })))
+            }),
+        );
+        m
+    });
+
+fn resolve_builtin(name: &str) -> Option<Value> {
+    BUILTINS.get(name).map(|f| Value::HostFn(f.clone()))
 }
 
 impl Value {

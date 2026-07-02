@@ -7,7 +7,7 @@ from genlayer.types import u32
 
 @generate_storage
 class UserStorage:
-	m: gl.TreeMap[str, u32]
+	m: gl.storage.TreeMap[str, u32]
 
 
 tst = UserStorage()

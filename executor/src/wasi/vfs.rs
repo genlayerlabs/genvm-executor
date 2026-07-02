@@ -66,7 +66,7 @@ impl VFS {
 
         if !limiter.consume(stdin.len() as u32) {
             return Err(rt::errors::Error::vm(
-                abi::consts::VmError::oom().ram().val(),
+                abi::consts::VmError::out_of().memory().val(),
             ));
         }
 
@@ -97,7 +97,7 @@ impl VFS {
     /// gives vacant fd
     pub fn alloc_fd(&mut self) -> anyhow::Result<Fd> {
         if self.fds.len() >= public_abi::top_limits::MAX_FDS as usize {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into());
+            return Err(rt::errors::Error::vm(abi::consts::VmError::out_of().fds()).into());
         }
         match self.free_descriptors.pop() {
             Some(v) => Ok(v),
@@ -106,9 +106,10 @@ impl VFS {
                     .limiter
                     .consume(public_abi::memory_limiter_consts::FD_ALLOCATION)
                 {
-                    return Err(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into(),
-                    );
+                    return Err(rt::errors::Error::vm(
+                        abi::consts::VmError::out_of().memory().val(),
+                    )
+                    .into());
                 }
                 self.next_free_descriptor.0 += 1;
                 Ok(self.next_free_descriptor)
@@ -140,7 +141,9 @@ impl VFS {
 
     pub fn place_content(&mut self, value: FileContents) -> anyhow::Result<Fd> {
         if value.release_memory && !self.limiter.consume(value.contents.len() as u32) {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into());
+            return Err(
+                rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
+            );
         }
 
         let fd = match self.alloc_fd() {

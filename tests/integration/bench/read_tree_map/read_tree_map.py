@@ -9,14 +9,14 @@ from genlayer import u8, u32
 
 @gl.storage.allow
 class TrieNode[K: gl.storage.Comparable, T]:
-	children: gl.TreeMap[K, u32]
+	children: gl.storage.TreeMap[K, u32]
 	value: T
 	has_value: bool
 
 
 @gl.storage.allow
 class Trie[K: gl.storage.Comparable, T]:
-	nodes: gl.DynArray[TrieNode[K, T]]
+	nodes: gl.storage.DynArray[TrieNode[K, T]]
 
 	def __init__(self):
 		_root = self.nodes.append_new_get()

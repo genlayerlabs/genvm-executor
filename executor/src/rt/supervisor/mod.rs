@@ -354,7 +354,7 @@ pub async fn spawn(
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
     if vm.depth >= public_abi::top_limits::VM_RECURSION {
         return Err(rt::SpawnError {
-            error: rt::errors::Error::vm(public_abi::VmError::oom().ram().limit()).into(),
+            error: rt::errors::Error::vm(public_abi::VmError::out_of().vm_recursion()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
         });
     }
@@ -604,7 +604,7 @@ fn register_custom_runner_into(
             rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
         })?;
         if !limiter.consume(archive.total_size) {
-            return Err(rt::errors::Error::vm(public_abi::VmError::oom().ram().val()).into());
+            return Err(rt::errors::Error::vm(public_abi::VmError::out_of().memory().val()).into());
         }
         slot.insert(archive);
     }

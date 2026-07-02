@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::Context;
 use genvm_common::*;
 
 use crate::rt;
+pub use crate::rt::errors::ResultExt as _;
 use genlayer_sdk::abi;
 
 /// Builds a numeric expression value.
@@ -85,18 +85,20 @@ pub fn fee_params_value_external(
     Value::Object(Arc::new(m))
 }
 
-fn rational_to_u256(rational: num_rational::BigRational) -> anyhow::Result<primitive_types::U256> {
-    anyhow::ensure!(
+fn rational_to_u256(
+    rational: num_rational::BigRational,
+) -> rt::errors::Result<primitive_types::U256> {
+    rt::errors::internal_ensure!(
         rational.is_integer(),
         "fee expression must yield an integer, got {rational}"
     );
     let int = rational.to_integer();
     let (sign, bytes) = int.to_bytes_be();
-    anyhow::ensure!(
+    rt::errors::internal_ensure!(
         sign != num_bigint::Sign::Minus,
         "fee cost must be non-negative"
     );
-    anyhow::ensure!(bytes.len() <= 32, "fee cost exceeds U256 range");
+    rt::errors::internal_ensure!(bytes.len() <= 32, "fee cost exceeds U256 range");
     let mut buf = [0u8; 32];
     buf[32 - bytes.len()..].copy_from_slice(&bytes);
     Ok(primitive_types::U256::from_big_endian(&buf))
@@ -105,29 +107,30 @@ fn rational_to_u256(rational: num_rational::BigRational) -> anyhow::Result<primi
 fn value_to_u256_vec(
     value: genvm_common::expr::Value,
     bucket_count: usize,
-) -> anyhow::Result<Vec<primitive_types::U256>> {
+) -> rt::errors::Result<Vec<primitive_types::U256>> {
     match value {
         genvm_common::expr::Value::Rational(r) => {
             let cost = rational_to_u256(r)?;
             Ok(vec![cost; bucket_count])
         }
         genvm_common::expr::Value::Array(arr) => {
-            anyhow::ensure!(
+            rt::errors::internal_ensure!(
                 arr.len() == bucket_count,
                 "fee expression returned array of length {} but bucket_no has {bucket_count} entries",
                 arr.len(),
             );
             arr.iter()
                 .map(|v| {
-                    let r = v
-                        .clone()
-                        .into_rational()
-                        .map_err(|e| anyhow::anyhow!("fee array element must be a number: {e}"))?;
+                    let r = v.clone().into_rational().map_err(|e| {
+                        rt::errors::internal!("fee array element must be a number: {e}")
+                    })?;
                     rational_to_u256(r)
                 })
                 .collect()
         }
-        other => anyhow::bail!("fee expression must yield a number or array, got {other:?}",),
+        other => Err(rt::errors::internal!(
+            "fee expression must yield a number or array, got {other:?}",
+        )),
     }
 }
 
@@ -139,15 +142,15 @@ fn eval_with_node(
     label: &str,
     code: &str,
     node: &genvm_common::expr::Value,
-) -> anyhow::Result<genvm_common::expr::Value> {
+) -> rt::errors::Result<genvm_common::expr::Value> {
     let src = format!("\\node = {prelude}\n{code}");
     let lambda = genvm_common::expr::Expr::parse(&src)
-        .map_err(|e| anyhow::anyhow!("parsing {label} fee expression `{code}`: {e}"))?
+        .map_err(|e| rt::errors::internal!("parsing {label} fee expression `{code}`: {e}"))?
         .evaluate()
-        .map_err(|e| anyhow::anyhow!("evaluating {label} fee expression: {e}"))?;
+        .map_err(|e| rt::errors::internal!("evaluating {label} fee expression: {e}"))?;
     lambda
         .apply_with(node.clone(), no_free_vars)
-        .map_err(|e| anyhow::anyhow!("binding `node` in {label} fee expression: {e}"))
+        .map_err(|e| rt::errors::internal!("binding `node` in {label} fee expression: {e}"))
 }
 
 /// A fee bucket: total = `subtract_on_start` (charged once by
@@ -181,9 +184,9 @@ fn build_bucket(
     cfg: &crate::config::FeesBucketConfig,
     node: &genvm_common::expr::Value,
     oom_error: abi::consts::VmError,
-) -> anyhow::Result<Bucket> {
+) -> rt::errors::Result<Bucket> {
     let n = cfg.bucket_no.len();
-    anyhow::ensure!(n > 0, "bucket_no must have at least one entry");
+    rt::errors::internal_ensure!(n > 0, "bucket_no must have at least one entry");
 
     let subtract_on_start = value_to_u256_vec(
         eval_with_node(
@@ -215,6 +218,10 @@ impl CostVec {
             .iter()
             .copied()
             .fold(primitive_types::U256::zero(), |a, b| a + b)
+    }
+
+    pub fn reported_fee(&self) -> primitive_types::U256 {
+        self.0[0]
     }
 }
 
@@ -257,7 +264,7 @@ impl DataLimit {
         bucket_totals: Vec<primitive_types::U256>,
         fees: crate::config::FeesConfig,
         gas_data: std::collections::BTreeMap<String, String>,
-    ) -> anyhow::Result<Self> {
+    ) -> rt::errors::Result<Self> {
         let prelude = &fees.expr_prelude;
 
         // Host-provided values are exposed under a single `node` object, e.g.
@@ -266,9 +273,9 @@ impl DataLimit {
         for (name, raw) in gas_data {
             let src = format!("{prelude}\n{raw}");
             let value = genvm_common::expr::Expr::parse(&src)
-                .map_err(|e| anyhow::anyhow!("parsing gas_data constant `{name}`: {e}"))?
+                .map_err(|e| rt::errors::internal!("parsing gas_data constant `{name}`: {e}"))?
                 .evaluate()
-                .map_err(|e| anyhow::anyhow!("evaluating gas_data constant `{name}`: {e}"))?;
+                .map_err(|e| rt::errors::internal!("evaluating gas_data constant `{name}`: {e}"))?;
             node.insert(name, value);
         }
         let node = genvm_common::expr::Value::Object(Arc::new(node));
@@ -277,31 +284,31 @@ impl DataLimit {
             prelude,
             &fees.storage,
             &node,
-            abi::consts::VmError::oom().storage(),
+            abi::consts::VmError::out_of().storage(),
         )?;
         let message_receipt = build_bucket(
             prelude,
             &fees.message_receipt,
             &node,
-            abi::consts::VmError::oom().receipt().message().internal(),
+            abi::consts::VmError::out_of().receipt().message(),
         )?;
         let nondet_output = build_bucket(
             prelude,
             &fees.nondet_output,
             &node,
-            abi::consts::VmError::oom().receipt().nondet_output(),
+            abi::consts::VmError::out_of().receipt().nondet_output(),
         )?;
         let message_fee = build_bucket(
             prelude,
             &fees.message_fee,
             &node,
-            abi::consts::VmError::oom().fees().internal(),
+            abi::consts::VmError::out_of().message_fee(),
         )?;
         let event = build_bucket(
             prelude,
             &fees.event,
             &node,
-            abi::consts::VmError::oom().storage(),
+            abi::consts::VmError::out_of().receipt().event(),
         )?;
 
         Ok(Self {
@@ -318,17 +325,20 @@ impl DataLimit {
         &self,
         bucket: &Bucket,
         vars: &[(&str, genvm_common::expr::Value)],
-    ) -> anyhow::Result<CostVec> {
-        match bucket
-            .delta
-            .apply_with(attrs_object(vars), no_free_vars)
-            .map_err(|e| anyhow::anyhow!("{e}"))
-            .and_then(|v| value_to_u256_vec(v, bucket.bucket_nos.len()))
-        {
+    ) -> rt::errors::Result<CostVec> {
+        let res = bucket.delta.apply_with(attrs_object(vars), no_free_vars);
+        let res = match res {
+            Ok(v) => Ok(v),
+            Err(genvm_common::expr::EvalError::ScriptVMError(e)) => {
+                Err(rt::errors::Error::vm(abi::consts::VmError(e.into())))
+            }
+            Err(e) => Err(rt::errors::Error::internal(format!("{}", e))),
+        };
+        match res.and_then(|v| value_to_u256_vec(v, bucket.bucket_nos.len())) {
             Ok(costs) => Ok(CostVec(costs)),
             Err(e) => {
-                log_error!(error:ah = e; "failed to evaluate fee expression");
-                Err(e).context("failed to evaluate fee expression")
+                log_error!(error:err = e; "failed to evaluate fee expression");
+                Err(e).ctx("failed to evaluate fee expression")
             }
         }
     }
@@ -337,7 +347,7 @@ impl DataLimit {
         &self,
         bucket: &Bucket,
         vars: &[(&str, genvm_common::expr::Value)],
-    ) -> anyhow::Result<bool> {
+    ) -> rt::errors::Result<bool> {
         let costs = self.calculate_bucket(bucket, vars)?;
         Ok(self.consume_bucket_raw(bucket, &costs.0).await)
     }
@@ -431,7 +441,7 @@ impl DataLimit {
             {
                 return Some(rt::errors::Error::wrap(
                     bucket.oom_error.clone(),
-                    anyhow::anyhow!(
+                    rt::errors::internal!(
                         "subtract_on_start exceeds bucket {:?} total",
                         bucket.bucket_nos
                     ),
@@ -441,7 +451,7 @@ impl DataLimit {
         None
     }
 
-    pub async fn consume_storage_pages(&self, pages: u64) -> anyhow::Result<bool> {
+    pub async fn consume_storage_pages(&self, pages: u64) -> rt::errors::Result<bool> {
         self.consume_bucket(&self.storage, &[("pages", num(pages))])
             .await
     }
@@ -449,7 +459,7 @@ impl DataLimit {
     pub fn calculate_message_receipt(
         &self,
         params: MessageReceiptParams,
-    ) -> anyhow::Result<CostVec> {
+    ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
             &self.message_receipt,
             &[
@@ -460,23 +470,23 @@ impl DataLimit {
                 ("subtreeLength", num(params.subtree_length)),
             ],
         )
-        .context("calculating message receipt")
+        .ctx("calculating message receipt")
     }
 
-    pub async fn consume_nondet_output(&self, output_length: u64) -> anyhow::Result<bool> {
+    pub async fn consume_nondet_output(&self, output_length: u64) -> rt::errors::Result<bool> {
         self.consume_bucket(
             &self.nondet_output,
             &[("outputLength", output_length.into())],
         )
         .await
-        .context("consuming nondet output")
+        .ctx("consuming nondet output")
     }
 
     pub async fn consume_event(
         &self,
         blob_size: u64,
         topics_count: u64,
-    ) -> anyhow::Result<Option<primitive_types::U256>> {
+    ) -> rt::errors::Result<Option<primitive_types::U256>> {
         let costs = self.calculate_bucket(
             &self.event,
             &[
@@ -495,7 +505,7 @@ impl DataLimit {
         &self,
         on: abi::gl_call::On,
         matched_fee_params: &genvm_common::domain::fees::InternalMessageParams,
-    ) -> anyhow::Result<CostVec> {
+    ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
             &self.message_fee,
             &[
@@ -507,7 +517,7 @@ impl DataLimit {
                 ),
             ],
         )
-        .context("calculating message fee internal")
+        .ctx("calculating message fee internal")
     }
 
     pub async fn consume_message_fee(&self, cost_fee: &CostVec, cost_receipt: &CostVec) -> bool {
@@ -567,7 +577,7 @@ impl DataLimit {
     pub fn calculate_message_fee_external(
         &self,
         matched_fee_params: &genvm_common::domain::fees::ExternalMessageParams,
-    ) -> anyhow::Result<CostVec> {
+    ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
             &self.message_fee,
             &[
@@ -578,6 +588,6 @@ impl DataLimit {
                 ),
             ],
         )
-        .context("calculating message fee external")
+        .ctx("calculating message fee external")
     }
 }

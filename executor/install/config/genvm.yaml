@@ -9,18 +9,31 @@ modules:
 log_level: info
 
 fees:
+  # Host bucket indices (bucket_totals[] supplied by node/consensus):
+  #   0 - execution_data_gas budget  (shared by storage, message_receipt, nondet_output, event)
+  #   1 - message_fee budget
+  #   2 - eq_outputs byte cap   (node.maxEqOutputsBytes; enforced via nondet_output)
+  #   3 - submitted_messages byte cap (node.maxSubmittedMessagesBytes; enforced via message_receipt)
+  #
+  #
   # Required host-provided `node` fields (from gas_data):
-  #   node.storageUnitPrice       - price per storage page
-  #   node.receiptGasPerByte      - price per receipt/output byte
-  #   node.gasPerChangedSlot      - price per changed storage slot
-  #   node.intrinsicGas           - per-tx intrinsic gas
-  #   node.bootloaderOverhead     - per-tx bootloader overhead
-  #   node.fixedProposeReceiptGas - fixed cost of a propose receipt
-  #   node.fixedMessageRevealGas  - fixed cost of a message reveal
-  #   node.genPerTimeUnit         - GEN per time unit (0 disables the time term)
+  #   node.storageUnitPrice            - price per storage page
+  #   node.receiptGasPerByte           - price per receipt/output byte
+  #   node.gasPerChangedSlot           - price per changed storage slot
+  #   node.intrinsicGas                - per-tx intrinsic gas
+  #   node.bootloaderOverhead          - per-tx bootloader overhead
+  #   node.fixedProposeReceiptGas      - fixed cost of a propose receipt
+  #   node.fixedMessageRevealGas       - fixed cost of a message reveal
+  #   node.genPerTimeUnit              - GEN per time unit (0 disables the time term)
+  #   node.maxEqOutputsBytes           - hard byte cap for eqBlocksOutputs (bucket 2)
+  #   node.maxSubmittedMessagesBytes   - hard byte cap for SubmittedMessage[] (bucket 3)
   # Optional:
-  #   node.validatorsPerRound[]   - validator count per round
-  #                                 (defaults to defaultValidatorsPerRound below)
+  #   node.validatorsPerRound[]        - validator count per round
+  #                                      (defaults to defaultValidatorsPerRound below)
+  #
+  # GenVM consumption points can consume multiple buckets, but as a fee only first is reported to the node
+  #   i.e. message_receipt consumes from execution_data_gas & submitted_messages
+  #   to message only execution_data_gas gets attached
   expr_prelude: |
     let Y = \f = (\x = f (\v = x x v)) (\x = f (\v = x x v)) in
     let fold = \arr acc fn =
@@ -89,16 +102,18 @@ fees:
     delta_expr: |
       \a = a.pages * node.storageUnitPrice
   message_receipt:
-    bucket_no: 0
+    # bucket 0: gas cost; bucket 3: canonical ABI byte size of this SubmittedMessage
+    bucket_no: [0, 3]
     subtract_on_start_expr: |
-      node.fixedProposeReceiptGas # for propose
+      [node.fixedProposeReceiptGas # for propose
         + node.intrinsicGas
         + node.bootloaderOverhead
         + 7 * node.gasPerChangedSlot
         + node.fixedMessageRevealGas # for reveal
         + node.intrinsicGas
         + node.bootloaderOverhead
-        + 32 * node.gasPerChangedSlot # for 32 bytes of length
+        + 32 * node.gasPerChangedSlot, # for 32 bytes of length
+      0]
     delta_expr: |
       \a =
       # each `bytes` field is indirection + length + data, rounded up to 32 bytes
@@ -108,13 +123,20 @@ fees:
       let subtreeBytes = 32 + 32 + ceilDiv a.subtreeLength 32 * 32 in
       # deployed contract code carried in the receipt (deploys only)
       let codeBytes = if a.isDeploy then 32 + 32 + ceilDiv a.codeLength 32 * 32 else 0 in
-      (calldataBytes + subtreeBytes + codeBytes) * node.receiptGasPerByte + 1 * node.gasPerChangedSlot
+      let abiBytes = calldataBytes + subtreeBytes + codeBytes in
+      [(calldataBytes + subtreeBytes + codeBytes) * node.receiptGasPerByte + 1 * node.gasPerChangedSlot,
+       abiBytes]
   nondet_output:
-    bucket_no: 0
+    # bucket 0: gas cost; bucket 2: raw output byte count
+    bucket_no: [0, 2]
     subtract_on_start_expr: |
-      32 * node.receiptGasPerByte # for 32 bytes of length
+      [32 * node.receiptGasPerByte, # for 32 bytes of length
+       0]
     delta_expr: |
-      \a = (32 + 32 + ceilDiv a.outputLength 32 * 32) * node.receiptGasPerByte # bytes are indirection + length + data, rounded up to 32 bytes
+      \a =
+      # bytes are indirection + length + data, rounded up to 32 bytes
+      let abiBytes = 32 + 32 + ceilDiv a.outputLength 32 * 32 in
+      [abiBytes * node.receiptGasPerByte, a.outputLength]
   message_fee:
     bucket_no: 1
     subtract_on_start_expr: |

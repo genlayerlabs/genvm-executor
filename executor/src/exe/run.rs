@@ -199,7 +199,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         // OOM code if that ever stops holding rather than panicking during setup.
         let insufficient_run_ok = insufficient_err.into_run_ok().unwrap_or_else(|e| {
             genvm::rt::vm::RunOk::VMError(
-                genvm::public_abi::VmError::oom().ram().val(),
+                genvm::public_abi::VmError::out_of().memory().val(),
                 Some(anyhow::Error::new(e)),
             )
         });

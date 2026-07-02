@@ -9,7 +9,10 @@ class Contract(gl.contract.Contract):
 		print(f'balance before={self.balance}')
 
 		def sandbox_fn():
-			gl.contract.get_at(target).emit_transfer(value=60)
+			try:
+				gl.contract.get_at(target).emit_transfer(value=60)
+			except SystemError as e:
+				print(f'sandbox transfer failed: {e}')
 			return self.balance
 
 		result = gl.vm.spawn_sandbox(sandbox_fn, allow_send_messages=True)

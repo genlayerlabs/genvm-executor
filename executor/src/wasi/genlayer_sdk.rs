@@ -11,6 +11,7 @@ use wiggle::GuestError;
 use crate::host::{self, SlotID};
 use crate::{anyhow_to_wasmtime, calldata, public_abi, rt, runners, wasi};
 
+use crate::rt::errors::ResultExt as _;
 use genlayer_calldata::codec::Encode;
 pub use genlayer_sdk::abi::entry::ExtendedMessage;
 use genlayer_sdk::abi::{self, gl_call};
@@ -21,10 +22,8 @@ fn default_entry_stage_data() -> calldata::Value {
     calldata::Value::Null
 }
 
-fn oom_trap(error: abi::consts::VmError) -> generated::types::Error {
-    generated::types::Error::trap(crate::anyhow_to_wasmtime(
-        rt::errors::Error::vm(error).into(),
-    ))
+fn internal_trap(error: rt::errors::Error) -> generated::types::Error {
+    generated::types::Error::trap(anyhow_to_wasmtime(error.into()))
 }
 
 /// Named arguments for [`consume_message_fee_internal`].
@@ -45,7 +44,7 @@ async fn consume_message_fee_internal(
     let fee_cost = shared_data
         .data_fees_limit
         .calculate_message_fee_internal(on, &fee_params)
-        .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
+        .map_err(internal_trap)?;
 
     let fee_total = fee_cost.sum();
     if fee_total > node.budget {
@@ -55,7 +54,10 @@ async fn consume_message_fee_internal(
             budget: cd = node.budget;
             "message fee cost exceeds node budget"
         );
-        return Err(oom_trap(abi::consts::VmError::oom().fees().internal()));
+        return Err(internal_trap(rt::errors::Error::vm_detailed(
+            abi::consts::VmError::fee().below_minimal(),
+            host_fns::VmErrorDetail::internal(),
+        )));
     }
 
     let receipt_cost = shared_data
@@ -67,11 +69,8 @@ async fn consume_message_fee_internal(
             code_length: args.code_length,
             subtree_length: args.subtree_length,
         })
-        .map_err(|x| {
-            generated::types::Error::trap(anyhow_to_wasmtime(
-                x.context("calculate_message_receipt"),
-            ))
-        })?;
+        .ctx("calculate_message_receipt")
+        .map_err(internal_trap)?;
 
     if !shared_data
         .data_fees_limit
@@ -84,7 +83,10 @@ async fn consume_message_fee_internal(
             buckets:? = shared_data.data_fees_limit;
             "not enough remaining fee limit to consume message fee"
         );
-        return Err(oom_trap(abi::consts::VmError::oom().fees().internal()));
+        return Err(internal_trap(rt::errors::Error::vm_detailed(
+            abi::consts::VmError::out_of().message_fee(),
+            host_fns::VmErrorDetail::internal(),
+        )));
     }
 
     node.budget -= fee_total;
@@ -113,11 +115,14 @@ async fn consume_message_fee_external(
     let fee_cost = shared_data
         .data_fees_limit
         .calculate_message_fee_external(&params)
-        .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
+        .map_err(internal_trap)?;
 
     let fee_total = fee_cost.sum();
     if fee_total > node.budget {
-        return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
+        return Err(internal_trap(rt::errors::Error::vm_detailed(
+            abi::consts::VmError::fee().below_minimal(),
+            host_fns::VmErrorDetail::external(),
+        )));
     }
 
     let receipt_cost = shared_data
@@ -129,14 +134,17 @@ async fn consume_message_fee_external(
             code_length: 0,
             subtree_length: 0,
         })
-        .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
+        .map_err(internal_trap)?;
 
     if !shared_data
         .data_fees_limit
         .consume_message_fee(&fee_cost, &receipt_cost)
         .await
     {
-        return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
+        return Err(internal_trap(rt::errors::Error::vm_detailed(
+            abi::consts::VmError::out_of().message_fee(),
+            host_fns::VmErrorDetail::external(),
+        )));
     }
 
     node.budget -= fee_total;
@@ -155,11 +163,11 @@ async fn consume_nondet_output(
         .data_fees_limit
         .consume_nondet_output(output_length)
         .await
-        .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?
+        .map_err(internal_trap)?
     {
-        return Err(oom_trap(
-            abi::consts::VmError::oom().receipt().nondet_output(),
-        ));
+        return Err(internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::out_of().receipt().nondet_output(),
+        )));
     }
     Ok(())
 }
@@ -642,7 +650,10 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         "no matching node for message fee allocation"
                     );
 
-                    return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
+                    return Err(internal_trap(rt::errors::Error::vm_detailed(
+                        abi::consts::VmError::fee().no_matching_node(),
+                        host_fns::VmErrorDetail::external(),
+                    )));
                 };
 
                 let calldata_length = calldata.len() as u64;
@@ -667,8 +678,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         address,
                         calldata,
                         value,
-                        message_fee: fees.message_fee.sum(),
-                        receipt_fee: fees.receipt_fee.sum(),
+                        message_fee: fees.message_fee.reported_fee(),
+                        receipt_fee: fees.receipt_fee.reported_fee(),
                         fee_params: matched_params,
                     });
 
@@ -875,8 +886,12 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .data_fees_limit
                     .consume_event(blob_size, topics_count)
                     .await
-                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?
-                    .ok_or_else(|| oom_trap(abi::consts::VmError::oom().storage()))?;
+                    .map_err(internal_trap)?
+                    .ok_or_else(|| {
+                        internal_trap(rt::errors::Error::vm(
+                            abi::consts::VmError::out_of().receipt().event(),
+                        ))
+                    })?;
 
                 self.context.data.accumulator.emissions.push(
                     domain::ExecutionEmission::EmitEvent {
@@ -956,7 +971,10 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         "no matching node for message fee allocation"
                     );
 
-                    return Err(oom_trap(abi::consts::VmError::oom().fees().internal()));
+                    return Err(internal_trap(rt::errors::Error::vm_detailed(
+                        abi::consts::VmError::fee().no_matching_node(),
+                        host_fns::VmErrorDetail::internal(),
+                    )));
                 };
 
                 log_debug!(
@@ -996,8 +1014,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         calldata,
                         value,
                         on,
-                        message_fee: fees.message_fee.sum(),
-                        receipt_fee: fees.receipt_fee.sum(),
+                        message_fee: fees.message_fee.reported_fee(),
+                        receipt_fee: fees.receipt_fee.reported_fee(),
                         fee_params,
                         subtree,
                     },
@@ -1067,7 +1085,10 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         "no matching node for message fee allocation"
                     );
 
-                    return Err(oom_trap(abi::consts::VmError::oom().fees().internal()));
+                    return Err(internal_trap(rt::errors::Error::vm_detailed(
+                        abi::consts::VmError::fee().no_matching_node(),
+                        host_fns::VmErrorDetail::internal(),
+                    )));
                 };
 
                 let code_length = code.len() as u64;
@@ -1101,8 +1122,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         value,
                         on,
                         salt_nonce,
-                        message_fee: fees.message_fee.sum(),
-                        receipt_fee: fees.receipt_fee.sum(),
+                        receipt_fee: fees.receipt_fee.reported_fee(),
+                        message_fee: fees.message_fee.reported_fee(),
                         fee_params,
                         subtree,
                     },
@@ -1134,7 +1155,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 if space_left < abi::consts::top_limits::WEB_RENDER_MIN_SPACE {
                     log_warn!(space_left = space_left; "not enough memory for web render");
                     return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into(),
+                        rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
                     )));
                 }
 
@@ -1172,7 +1193,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 if space_left < abi::consts::top_limits::WEB_REQUEST_MIN_SPACE {
                     log_warn!(space_left = space_left; "not enough memory for web request");
                     return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into(),
+                        rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
                     )));
                 }
 
@@ -1713,7 +1734,7 @@ impl ContextVFS<'_> {
 
         if call_no >= public_abi::top_limits::NONDET_BLOCKS {
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into(),
+                rt::errors::Error::vm(abi::consts::VmError::out_of().nondet_blocks()).into(),
             )));
         }
 

@@ -7,8 +7,8 @@ from genlayer.types import Address
 
 @generate_storage
 class Test:
-	arr: gl.DynArray[str]
-	map: gl.TreeMap[str, None]
+	arr: gl.storage.DynArray[str]
+	map: gl.storage.TreeMap[str, None]
 
 
 addr = Address(b'\xa2' * 20)

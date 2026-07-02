@@ -19,7 +19,10 @@ class Contract(gl.contract.Contract):
 			# Second transfer: spend another 60 inside sandbox
 			# This should fail (total 120 > 100) but the sandbox
 			# doesn't know about the parent's 60 already spent.
-			gl.contract.get_at(target).emit_transfer(value=60)
+			try:
+				gl.contract.get_at(target).emit_transfer(value=60)
+			except SystemError as e:
+				print(f'sandbox transfer failed: {e}')
 			return self.balance
 
 		result = gl.vm.spawn_sandbox(sandbox_fn, allow_send_messages=True)

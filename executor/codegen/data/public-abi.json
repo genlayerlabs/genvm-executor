@@ -88,33 +88,53 @@
       },
       {
         "head": "wasm_trap",
-        "tail": "$str"
+        "tail": [
+          null,
+          "unreachable",
+          "stack_overflow",
+          "memory_out_of_bounds",
+          "table_out_of_bounds",
+          "indirect_call_to_null",
+          "bad_signature",
+          "integer_overflow",
+          "integer_divide_by_zero",
+          "bad_conversion_to_integer",
+          "heap_misaligned",
+          "atomic_wait_non_shared_memory",
+          "out_of_fuel",
+          "interrupt",
+          "nondet_instruction",
+          "fault"
+        ]
       },
       {
-        "head": "OOM",
+        "head": "out_of",
         "tail": [
           {
-            "head": "RAM",
-            "tail": [
-              [], "table", "memory", "limit"
-            ]
+            "head": "memory",
+            "tail": [null, "wasm_memory", "wasm_table"]
           },
           "storage",
           {
             "head": "receipt",
-            "tail": [
-              "nondet_output",
-              {
-                "head": "message",
-                "tail": ["internal", "external"]
-              }
-            ]
+            "tail": ["nondet_output", "message", "event"]
           },
-          {
-            "head": "fees",
-            "tail": ["internal", "external"]
-          }
+          "message_fee",
+          "vm_recursion",
+          "nondet_blocks",
+          "locked_slots",
+          "upgraders",
+          "fds"
         ]
+      },
+      {
+        "head": "fee",
+        "tail": ["no_matching_node", "below_minimal"]
+      },
+      "host_forbidden",
+      {
+        "head": "evm",
+        "tail": ["reverted"]
       },
       {
         "head": "invalid_contract",
@@ -129,10 +149,6 @@
             "tail": ["validating", "linking", "entrypoint"]
           }
         ]
-      },
-      {
-        "head": "host",
-        "tail": "$str"
       }
     ]
   },

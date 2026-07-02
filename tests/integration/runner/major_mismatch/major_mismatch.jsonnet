@@ -14,7 +14,7 @@ local entries = [
 			vars: {},
 			code: null,
 			message: msg,
-			calldata: std.manifestJsonEx({method: 'foo', args: []}, '    '),
+			calldata: std.manifestJsonEx({'': 'foo', args: []}, '    '),
 		}],
 	},
 	// 1: CallContract into a major-mismatched contract

@@ -77,6 +77,25 @@ class VMError:
 	Description of the VM error that occurred. It begins with code, such as ``exit_code``
 	"""
 
+	public_code: str
+	"""
+	Extracted public code from the full message, which is the part before the first `` # `` detail suffix.
+	"""
+
+	detail: str
+	"""
+	Additional detail about the error, which is the part after the first `` # `` suffix.
+	"""
+
+	def __init__(self, message: str, /):
+		self.message = message
+		self.public_code, _, self.detail = message.partition(' # ')
+
+	def __str__(self) -> str:
+		if self.detail:
+			return f'VMError("{self.public_code} # {self.detail}")'
+		return f'VMError("{self.public_code}")'
+
 
 class UserError(Exception):
 	"""
@@ -262,7 +281,7 @@ def run_nondet_default[T: calldata.Decoded](
 		a.data == b.data
 	),
 	compare_vm_errors: typing.Callable[[VMError, VMError], bool] = lambda a, b: (
-		a.message == b.message
+		a.public_code == b.public_code
 	),
 ) -> Lazy[T]:
 	"""
@@ -275,7 +294,7 @@ def run_nondet_default[T: calldata.Decoded](
 	:param leader_fn: Function executed by the leader node
 	:param validator_fn: Function that validates the leader's result, is ran in a sandbox
 	:param compare_user_errors: Function to compare UserError instances for equality
-	:param compare_vm_errors: Function to compare VMError instances for equality
+	:param compare_vm_errors: Function to compare VMError instances for equality; the default compares only the public code (the part before the first `` # `` detail suffix), ignoring implementation-specific diagnostics
 	:return: The result from the leader if validation passes
 
 	Error handling:

@@ -75,7 +75,7 @@ impl Limiter {
     pub async fn consume(&self, amount: u64) -> rt::errors::Result<()> {
         if !self.0.consume_storage_pages(amount).await? {
             return Err(rt::errors::Error::wrap(
-                abi::consts::VmError::oom().storage(),
+                abi::consts::VmError::out_of().storage(),
                 anyhow::anyhow!("consuming {amount} storage pages"),
             ));
         }
@@ -408,7 +408,9 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         let code_slot = default_code_slot();
 
         if code.len() > (u32::MAX - 4) as usize {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().storage()));
+            return Err(rt::errors::Error::vm(
+                abi::consts::VmError::out_of().storage(),
+            ));
         }
 
         let code_len = code.len() as u32;
@@ -476,7 +478,9 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         let code_size = u32::from_le_bytes(len_buf);
 
         if !limiter.consume(code_size) {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().storage()));
+            return Err(rt::errors::Error::vm(
+                abi::consts::VmError::out_of().memory().val(),
+            ));
         }
 
         let res = Box::new_uninit_slice(code_size as usize);

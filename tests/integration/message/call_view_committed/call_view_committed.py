@@ -5,7 +5,7 @@ from genlayer.types import u32
 
 class Contract(gl.contract.Contract):
 	x: u32
-	write_answer: gl.DynArray[u32]
+	write_answer: gl.storage.DynArray[u32]
 
 	def __init__(self):
 		self.x = 1

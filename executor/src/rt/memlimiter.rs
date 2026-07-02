@@ -149,7 +149,7 @@ impl wasmtime::ResourceLimiter for Limiter {
         let success = self.consume(delta);
 
         if current == 0 && !success {
-            Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().memory()).into())
+            Err(rt::errors::Error::vm(abi::consts::VmError::out_of().memory().wasm_memory()).into())
         } else {
             Ok(success)
         }
@@ -171,7 +171,7 @@ impl wasmtime::ResourceLimiter for Limiter {
         let success = self.consume_mul(delta, abi::consts::memory_limiter_consts::TABLE_ENTRY);
 
         if current == 0 && !success {
-            Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().table()).into())
+            Err(rt::errors::Error::vm(abi::consts::VmError::out_of().memory().wasm_table()).into())
         } else {
             Ok(success)
         }

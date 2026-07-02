@@ -11,7 +11,6 @@ The recommended import pattern is:
 This provides access to:
 
 * Type aliases: ``gl.u8``, ``gl.u16``, ..., ``gl.u256``, ``gl.Address``, etc.
-* Storage types: ``gl.TreeMap``, ``gl.DynArray``, ``gl.Array``
 * Contract declaration via ``gl.contract.Contract``
 * Contract interaction via ``gl.contract.interface``, ``gl.contract.deploy``, ``gl.contract.get_at``
 * Message context via ``gl.message.contract_address``, ``gl.message.sender_address``, etc.
@@ -44,7 +43,6 @@ import genlayer.storage  # noqa: F401, E402
 
 # Decorators - directly import so gl.public and gl.private work
 from ._internal.annotations import private, public  # noqa: E402
-from .storage import Array, DynArray, TreeMap, allow  # noqa: E402
 
 # Re-export types and storage names so they are accessible as gl.X
 from .types import *  # noqa: E402
@@ -65,11 +63,6 @@ __all__ = (
 	# Decorators (accessible via gl.public, gl.private)
 	'public',
 	'private',
-	# Storage types
-	'DynArray',
-	'Array',
-	'TreeMap',
-	'allow',
 	# Unsigned integers
 	'u8',
 	'u16',

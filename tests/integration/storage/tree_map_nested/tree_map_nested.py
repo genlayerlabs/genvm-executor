@@ -5,7 +5,7 @@ from genlayer.types import Address, u256
 
 
 class Contract(gl.contract.Contract):
-	st: gl.TreeMap[Address, gl.TreeMap[Address, u256]]
+	st: gl.storage.TreeMap[Address, gl.storage.TreeMap[Address, u256]]
 
 	def __init__(self):
 		first = self.st.get_or_insert_default(Address(b'\x00' * 20))
