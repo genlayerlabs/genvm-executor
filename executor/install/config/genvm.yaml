@@ -8,21 +8,9 @@ modules:
 
 log_level: info
 
+# NOTE: we on purpose set all to 0 in this legacy version
 fees:
-  # Required host-provided `node` fields (from gas_data):
-  #   node.storageUnitPrice       - price per storage page
-  #   node.receiptGasPerByte      - price per receipt/output byte
-  #   node.gasPerChangedSlot      - price per changed storage slot
-  #   node.intrinsicGas           - per-tx intrinsic gas
-  #   node.bootloaderOverhead     - per-tx bootloader overhead
-  #   node.fixedProposeReceiptGas - fixed cost of a propose receipt
-  #   node.fixedMessageRevealGas  - fixed cost of a message reveal
-  #   node.genPerTimeUnit         - GEN per time unit (0 disables the time term)
-  # Optional:
-  #   node.validatorsPerRound[]   - validator count per round
-  #                                 (defaults to defaultValidatorsPerRound below)
   expr_prelude: ""
-  # NOTE: we on purpose set all to 0 in this legacy version
   storage:
     bucket_no: 0
     subtract_on_start_expr: |
@@ -42,7 +30,7 @@ fees:
     delta_expr: |
       \a = 0
   message_fee:
-    bucket_no: 1
+    bucket_no: 0
     subtract_on_start_expr: |
       0
     delta_expr: |

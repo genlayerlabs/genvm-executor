@@ -5,8 +5,10 @@ hook engine asks it for ``hooks(ctx)`` (was ``support/nix/precommit/hooks.toml``
 The umbrella test suite lives in the manager's ``.genvm-tool.py``.
 """
 
+import genvm_tool
 
-def hooks(ctx):
+
+def hooks(ctx: 'genvm_tool.common.Context'):
 	"""Executor commit-hook definitions (was support/nix/precommit/hooks.toml).
 
 	Tools resolve from the sibling flake's buildEnv (``nix = "<flake output>"``);
@@ -123,6 +125,19 @@ def hooks(ctx):
 			'entry': 'grep',
 			'args': ['-P', 'false', 'runners/support/versions/dev-mode.nix'],
 			'files': r'^runners/support/versions/dev-mode\.nix$',
+			'pass_filenames': False,
+		},
+		# --- commit-msg ----------------------------------------------------
+		{
+			'id': 'check-commit-message',
+			'local': True,
+			'entry': ctx.python_command[0],
+			'args': [
+				*ctx.python_command[1:],
+				str(ctx.root / 'support/scripts/check-commit-message.py'),
+				'--message-file',
+			],
+			'stages': ['commit-msg'],
 			'pass_filenames': False,
 		},
 	]
