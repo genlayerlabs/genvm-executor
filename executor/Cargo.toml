@@ -10,10 +10,18 @@ opt-level = 2
 
 [profile.dev]
 panic = "abort"
+incremental = false
 
 [profile.release]
 debug = true
 panic = "abort"
+incremental = false
+
+[profile.dev.build-override]
+debug = false
+opt-level = 0
+incremental = false
+strip = true
 
 [[example]]
 name = "fuzz-genvm-storage"
