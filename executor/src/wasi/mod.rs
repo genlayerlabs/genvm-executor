@@ -32,7 +32,7 @@ impl Context {
             sha3::Sha3_256::digest(&as_bytes).into()
         };
 
-        let vfs = match vfs::VFS::new(as_bytes, limiter) {
+        let vfs = match vfs::VFS::new(as_bytes, limiter.clone()) {
             Ok(vfs) => vfs,
             Err(e) => return Err((e, data)),
         };
@@ -43,7 +43,7 @@ impl Context {
                 data.conf.clone(),
                 seed,
             ),
-            genlayer_sdk: genlayer_sdk::Context::new(data),
+            genlayer_sdk: genlayer_sdk::Context::new(data, limiter),
         })
     }
 }

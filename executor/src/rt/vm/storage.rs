@@ -5,7 +5,7 @@ use const_lru::ConstLru;
 use genlayer_sdk::abi;
 use genvm_common::{calldata, sync};
 
-use crate::{public_abi::root_offsets, rt, runners, SlotID};
+use crate::{public_abi::root_offsets, rt, SlotID};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(C)]
@@ -65,15 +65,19 @@ pub trait HostStorageLocking {
 }
 
 #[derive(Clone, Debug)]
-pub struct Limiter(sync::DArc<rt::fees::DataLimit>);
+pub struct Limiter {
+    limit: sync::DArc<rt::fees::DataLimit>,
+}
 
 impl Limiter {
     pub fn new(data_fees_limit: sync::DArc<rt::fees::DataLimit>) -> Self {
-        Self(data_fees_limit)
+        Self {
+            limit: data_fees_limit,
+        }
     }
 
     pub async fn consume(&self, amount: u64) -> rt::errors::Result<()> {
-        if !self.0.consume_storage_pages(amount).await? {
+        if !self.limit.consume_storage_pages(amount).await? {
             return Err(rt::errors::Error::wrap(
                 abi::consts::VmError::out_of().storage(),
                 anyhow::anyhow!("consuming {amount} storage pages"),
@@ -478,21 +482,25 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         self.resolve_code_slot().await
     }
 
-    pub async fn read_code_at(
-        &mut self,
-        code_slot: SlotID,
-        limiter: &rt::memlimiter::Limiter,
-    ) -> rt::errors::Result<Box<[u8]>> {
+    /// Reads the 4-byte little-endian length prefix of the code blob at
+    /// `code_slot`. Cheap (one slot read, no fee metering) — the runner load
+    /// action reads this first to learn the size to charge *before* fetching the
+    /// blob, so a single `LOAD_CONST + code_size` charge covers the peak
+    /// (ADR-012 §1).
+    pub async fn read_code_len(&mut self, code_slot: SlotID) -> rt::errors::Result<u32> {
         let mut len_buf = [0; 4];
         self.read(code_slot, 0, &mut len_buf).await?;
-        let code_size = u32::from_le_bytes(len_buf);
+        Ok(u32::from_le_bytes(len_buf))
+    }
 
-        if !limiter.consume(code_size) {
-            return Err(rt::errors::Error::vm(
-                abi::consts::VmError::out_of().memory().val(),
-            ));
-        }
-
+    /// Reads the code blob of `code_size` bytes at `code_slot` (after its 4-byte
+    /// length prefix). Charges nothing: the load action already charged
+    /// `code_size` via [`read_code_len`](Self::read_code_len).
+    pub async fn read_code_blob(
+        &mut self,
+        code_slot: SlotID,
+        code_size: u32,
+    ) -> rt::errors::Result<Box<[u8]>> {
         let res = Box::new_uninit_slice(code_size as usize);
         let mut res = unsafe { res.assume_init() };
 
@@ -505,6 +513,100 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── code slot reads (runner load action support) ────────────────────
+
+    /// In-memory host: one slot whose content is `code_len_le ++ code`; reads
+    /// beyond the content are zero-filled (like unwritten storage).
+    #[derive(Clone)]
+    struct FakeHost(std::sync::Arc<Vec<u8>>);
+
+    struct FakeLock(std::sync::Arc<Vec<u8>>);
+
+    impl HostStorage for FakeLock {
+        fn storage_read(
+            &mut self,
+            _slot_id: SlotID,
+            index: u32,
+            buf: &mut [u8],
+        ) -> anyhow::Result<()> {
+            let data = &self.0;
+            for (i, out) in buf.iter_mut().enumerate() {
+                *out = data.get(index as usize + i).copied().unwrap_or(0);
+            }
+            Ok(())
+        }
+    }
+
+    impl HostStorageLocking for FakeHost {
+        type ReturnType<'a> = FakeLock;
+
+        async fn lock(&self) -> FakeLock {
+            FakeLock(self.0.clone())
+        }
+    }
+
+    /// A minimal `DataLimit` whose storage bucket charges one unit per page.
+    fn data_fees(total_pages: u64) -> Limiter {
+        use crate::config::{FeesBucketConfig, FeesConfig};
+        let bucket = |delta: &str| FeesBucketConfig {
+            bucket_no: vec![0],
+            subtract_on_start_expr: "0".to_owned(),
+            delta_expr: delta.to_owned(),
+        };
+        let fees = FeesConfig {
+            expr_prelude: String::new(),
+            storage: bucket("\\attrs = attrs.pages"),
+            message_receipt: bucket("\\attrs = 0"),
+            nondet_output: bucket("\\attrs = 0"),
+            message_fee: bucket("\\attrs = 0"),
+            event: bucket("\\attrs = 0"),
+        };
+        let dl = rt::fees::DataLimit::new(
+            vec![primitive_types::U256::from(total_pages)],
+            fees,
+            Default::default(),
+        )
+        .unwrap();
+        Limiter::new(sync::DArc::new(dl))
+    }
+
+    fn code_storage(code: &[u8]) -> Storage<FakeHost> {
+        let mut slot = (code.len() as u32).to_le_bytes().to_vec();
+        slot.extend_from_slice(code);
+        Storage::new(
+            calldata::Address::zero(),
+            data_fees(u64::MAX),
+            FakeHost(std::sync::Arc::new(slot)),
+        )
+    }
+
+    /// The runner load action reads the 4-byte length prefix first (to know
+    /// what to charge), then the blob at offset 4 — the two reads must
+    /// reassemble exactly the stored code.
+    #[tokio::test]
+    async fn code_len_then_blob_reassembles_the_code() {
+        // A length that is not 32-aligned exercises the page-offset math.
+        let code: Vec<u8> = (0u16..77).map(|i| i as u8).collect();
+        let mut storage = code_storage(&code);
+        let slot = default_code_slot();
+
+        let len = storage.read_code_len(slot).await.unwrap();
+        assert_eq!(len, 77);
+
+        let blob = storage.read_code_blob(slot, len).await.unwrap();
+        assert_eq!(&blob[..], &code[..], "blob must skip the 4-byte prefix");
+    }
+
+    #[tokio::test]
+    async fn code_len_of_empty_code_is_zero() {
+        let mut storage = code_storage(&[]);
+        let slot = default_code_slot();
+        assert_eq!(storage.read_code_len(slot).await.unwrap(), 0);
+        assert!(storage.read_code_blob(slot, 0).await.unwrap().is_empty());
+    }
+
+    // ── page id ordering ────────────────────────────────────────────────
 
     #[test]
     fn pages_sorted_correctly_1_byte() {

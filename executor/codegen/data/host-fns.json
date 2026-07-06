@@ -43,5 +43,11 @@
     "name": "current_major_str",
     "repr": "str",
     "value": "v0.0.0"
+  },
+  {
+    "type": "const",
+    "name": "load_const",
+    "repr": "u32",
+    "value": 4096
   }
 ]

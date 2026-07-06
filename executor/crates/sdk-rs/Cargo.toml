@@ -59,4 +59,5 @@ version = "0.0.2"
 
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
+bytes = { version = "1.11.0", features = ["serde"] }
 primitive-types = { version = "0.13", features = ["impl-serde"] }

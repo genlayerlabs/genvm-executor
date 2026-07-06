@@ -396,10 +396,6 @@ pub struct VMDataAccumulator {
     pub messages_value_decremented: primitive_types::U256,
     pub emissions: Vec<domain::ExecutionEmission>,
     pub message_fee_allocation: Vec<domain::fees::MessageAllocationNode>,
-    /// Custom runner hashes registered in (and inherited into) this execution
-    /// scope. Only these may be resolved via `custom:<hash>`. A nondet sub-VM
-    /// starts empty, so it cannot see runners the deterministic scope registered.
-    pub custom_runners: rpds::HashTrieSet<Bytes32Hash, archery::ArcTK>,
 }
 
 impl VMDataAccumulator {
@@ -426,10 +422,29 @@ pub struct SingleVMData {
     pub storage: rt::vm::storage::Storage<StorageHostHolder>,
     pub accumulator: VMDataAccumulator,
     pub det_subvm_hashes: sha3::Sha3_256,
+    /// `custom:` runner pins granted to this VM by its parent, carried from the
+    /// spawning gl_call (so the content survives the parent's death for a queued
+    /// nondet VM). The child's spawn performs a load action for each, charging its
+    /// own limiter, before its main runner loads (ADR-012 §1/§4). Empty for the
+    /// root VM. Drained at spawn.
+    pub granted_custom: Vec<crate::runners::cache::ArchivePin>,
 }
 
 pub struct Context {
     pub data: SingleVMData,
+
+    /// This VM's **loaded set**: the charge-dedup set and pin holder for every
+    /// runner it has loaded (ADR-012 §1). A sibling of `data` (not inside its
+    /// accumulator), so it does not round-trip through sandbox children and is
+    /// dropped when this VM's store is torn down — coinciding with the VM
+    /// limiter's refund of the load charges.
+    pub loaded: crate::runners::cache::LoadedSet,
+
+    /// A handle to this VM's own memory limiter (a clone of its store limiter, so
+    /// it refunds at VM death). Runtime load actions (`RegisterRunner`, `MapFile`)
+    /// charge it directly, since a gl_call handler cannot otherwise reach the
+    /// store limiter.
+    pub limiter: rt::memlimiter::Limiter,
 
     pub start_time: std::time::Instant,
     pub prev_time: std::time::Instant,
@@ -439,6 +454,15 @@ pub struct ContextVFS<'a> {
     pub(super) vfs: &'a mut vfs::VFS,
     pub(super) preview1: &'a mut super::preview1::Context,
     pub(super) context: &'a mut Context,
+}
+
+async fn spawn_sub_vm(
+    supervisor: Arc<rt::supervisor::Supervisor>,
+    vm_data: Box<SingleVMData>,
+) -> anyhow::Result<rt::vm::RunResult> {
+    tokio::task::spawn(async move { rt::spawn_apply_run(&supervisor, vm_data).await })
+        .await
+        .map_err(|e| anyhow::anyhow!("sub-VM task failed to join: {e}"))?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -530,11 +554,13 @@ fn read_owned_vec(
 }
 
 impl Context {
-    pub fn new(data: Box<SingleVMData>) -> Self {
+    pub fn new(data: Box<SingleVMData>, limiter: rt::memlimiter::Limiter) -> Self {
         let now = std::time::Instant::now();
 
         Self {
             data: *data,
+            loaded: Default::default(),
+            limiter,
             start_time: now,
             prev_time: now,
         }
@@ -947,14 +973,14 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                             .messages_value_decremented,
                         emissions: Vec::new(),
                         message_fee_allocation: Vec::new(),
-                        // CallContract is a deterministic sub-call: inherit the
-                        // runners registered so far.
-                        custom_runners: self.context.data.accumulator.custom_runners.clone(),
                     },
                     det_subvm_hashes: Default::default(),
+                    // A CallContract child is granted the caller's full custom set
+                    // (ADR-012 §4); its spawn load-actions each into the child.
+                    granted_custom: self.context.loaded.custom_pins(),
                 });
 
-                let res = rt::spawn_apply_run(&supervisor, vm_data)
+                let res = spawn_sub_vm(supervisor.clone(), vm_data)
                     .await
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
@@ -1633,13 +1659,19 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
             gl_call::Message::RunNondet {
                 data_leader,
                 data_validator,
-            } => self.run_nondet(data_leader, data_validator).await,
+                runner,
+                custom_runners,
+            } => {
+                self.run_nondet(data_leader, data_validator, runner, custom_runners)
+                    .await
+            }
             gl_call::Message::Sandbox {
                 data,
                 runner,
                 allow_write_storage,
                 allow_send_messages,
                 allow_register_runners,
+                custom_runners,
             } => {
                 self.sandbox(
                     data,
@@ -1647,6 +1679,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     allow_write_storage,
                     allow_send_messages,
                     allow_register_runners,
+                    custom_runners,
                 )
                 .await
             }
@@ -1930,17 +1963,23 @@ impl ContextVFS<'_> {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
-        let is_det = self.context.data.conf.is_deterministic;
+        // The load action registers the content (weak registry, dedup while
+        // alive), charges `LOAD_CONST + code.len()` to this VM before parsing, and
+        // pins it into this VM's loaded set — scoping it to this execution and its
+        // deterministic children only (ADR-012 §3). RegisterRunner is det-only, so
+        // the load folds into the det fingerprint.
         let supervisor = self.context.data.supervisor.clone();
-        let hash = crate::runners::custom_runner_hash(&code);
-        let id = supervisor
-            .register_custom_runner(code, supervisor.limiter.get(is_det))
-            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-        // Scope the runner to this execution (and its deterministic children) so
-        // it cannot be resolved from an unrelated scope (e.g. a nondet sub-VM).
-        self.context.data.accumulator.custom_runners =
-            self.context.data.accumulator.custom_runners.insert(hash);
+        let limiter = self.context.limiter.clone();
+        let Context { loaded, data, .. } = &mut *self.context;
+        let id = rt::supervisor::actions::register_runner_load(
+            &supervisor,
+            &limiter,
+            loaded,
+            Some(&mut data.det_subvm_hashes),
+            code,
+        )
+        .await
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         let data = calldata::encode(&calldata::Value::Str(id.as_str().to_owned()));
         self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
@@ -1961,23 +2000,30 @@ impl ContextVFS<'_> {
 
         let supervisor = self.context.data.supervisor.clone();
         let is_det = self.context.data.conf.is_deterministic;
-        let limiter = supervisor.limiter.get(is_det);
+        // Charge the VM's own limiter (refunded at VM death, coinciding with the
+        // pin drop), not the long-lived root limiter.
+        let limiter = self.context.limiter.clone();
         let topmost_runner_id = self.context.data.conf.topmost_runner_id.clone();
-        let available_custom = self.context.data.accumulator.custom_runners.clone();
 
         let runner =
             rt::supervisor::actions::resolve_runner_id(&supervisor, &topmost_runner_id, &runner)
                 .await
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
+        // The load action pins the archive into this VM's loaded set (keeping the
+        // mapped files' backing bytes resident) and charges once for it.
+        let preview1 = &mut *self.preview1;
+        let Context { loaded, data, .. } = &mut *self.context;
+        let det_fingerprint = is_det.then_some(&mut data.det_subvm_hashes);
         rt::supervisor::actions::map_runner_file(
             &supervisor,
-            self.preview1,
-            limiter,
+            preview1,
+            &limiter,
+            loaded,
+            det_fingerprint,
             runner,
             &path_in_runner,
             &path_in_vfs,
-            &available_custom,
         )
         .await
         .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
@@ -1989,10 +2035,32 @@ impl ContextVFS<'_> {
         &mut self,
         data_leader: bytes::Bytes,
         data_validator: bytes::Bytes,
+        runner: Option<String>,
+        custom_runners: Option<Vec<String>>,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         if !self.context.data.conf.can_spawn_nondet {
             return Err(generated::types::Errno::Forbidden.into());
         }
+
+        // Resolve the runner to execute and the child's custom-runner visibility
+        // in this (deterministic parent) scope, so malformed inputs fail
+        // deterministically at gl_call time (ADR-012 §4).
+        let supervisor = self.context.data.supervisor.clone();
+        let parent_runner_id = self.context.data.conf.topmost_runner_id.clone();
+        let child_topmost_id = match &runner {
+            None => parent_runner_id.clone(),
+            Some(r) => {
+                rt::supervisor::actions::resolve_runner_id(&supervisor, &parent_runner_id, r)
+                    .await
+                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?
+            }
+        };
+        let child_custom = rt::supervisor::actions::resolve_child_custom_runners(
+            &self.context.loaded,
+            custom_runners,
+            &child_topmost_id,
+        )
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         let call_no = self
             .context
@@ -2118,8 +2186,6 @@ impl ContextVFS<'_> {
                 }
             };
 
-            let supervisor = self.context.data.supervisor.clone();
-
             let fake_accum = VMDataAccumulator {
                 data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
                 messages_value_decremented: self
@@ -2129,9 +2195,6 @@ impl ContextVFS<'_> {
                     .messages_value_decremented,
                 emissions: Vec::new(),
                 message_fee_allocation: Vec::new(),
-                // Nondet is an isolated execution scope: it must NOT see custom
-                // runners registered by the deterministic scope.
-                custom_runners: Default::default(),
             };
 
             let vm_data = Box::new(SingleVMData {
@@ -2148,13 +2211,17 @@ impl ContextVFS<'_> {
                     can_register_runners: false,
                     can_use_balance_for_message_fees: false,
                     state_mode: public_abi::StorageType::Default,
-                    topmost_runner_id: self.context.data.conf.topmost_runner_id.clone(),
+                    topmost_runner_id: child_topmost_id,
                 },
                 message_data,
                 supervisor: supervisor.clone(),
                 storage: storage_checkpoint,
                 accumulator: fake_accum,
                 det_subvm_hashes: Default::default(), // won't be used
+                // The nondet child is granted exactly the parent-computed set; the
+                // pins keep the content alive until the (possibly queued) child
+                // spawns and load-actions them against its own limiter (ADR-012 §4).
+                granted_custom: child_custom,
             });
 
             let task_done = Arc::new(tokio::sync::Notify::new());
@@ -2204,6 +2271,7 @@ impl ContextVFS<'_> {
         allow_write_storage: bool,
         allow_send_messages: bool,
         allow_register_runners: bool,
+        custom_runners: Option<Vec<String>>,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         let supervisor = self.context.data.supervisor.clone();
 
@@ -2212,6 +2280,17 @@ impl ContextVFS<'_> {
             rt::supervisor::actions::resolve_runner_id(&supervisor, &parent_runner_id, &runner)
                 .await
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        // Grants are validated against, and drawn from, this VM's loaded set (§4).
+        // No flow-back is possible by construction: the child's own loaded set (and
+        // any runner it registers) dies with it, and the parent's loaded set is
+        // never mutated here (§5).
+        let child_custom = rt::supervisor::actions::resolve_child_custom_runners(
+            &self.context.loaded,
+            custom_runners,
+            &topmost_runner_id,
+        )
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         let message_data = self
             .context
@@ -2228,8 +2307,6 @@ impl ContextVFS<'_> {
             messages_value_decremented: primitive_types::U256::max_value(),
             emissions: Vec::new(),
             message_fee_allocation: Vec::new(),
-            // Sandbox is a deterministic sub-VM: inherit the registered runners.
-            custom_runners: self.context.data.accumulator.custom_runners.clone(),
         };
 
         std::mem::swap(&mut self.context.data.accumulator, &mut fake_my_data);
@@ -2257,9 +2334,10 @@ impl ContextVFS<'_> {
             storage: storage_checkpoint,
             accumulator: stolen_data,
             det_subvm_hashes: Default::default(),
+            granted_custom: child_custom,
         });
 
-        let my_res = rt::spawn_apply_run(&supervisor, vm_data)
+        let my_res = spawn_sub_vm(supervisor.clone(), vm_data)
             .await
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 

@@ -1,5 +1,7 @@
 # { "Depends": "py-genlayer:test" }
 import genlayer as gl
+import genlayer._internal.on_chain.gl_call as gl_call
+from genlayer.vm import _decode_sub_vm_result
 from genlayer.vm import map_file, register_runner
 
 
@@ -11,9 +13,9 @@ class Contract(gl.contract.Contract):
 
 		def leader():
 			# burn a long loop first, then try to use the det-registered custom
-			# runner from inside nondet. Custom runners should be scoped to the
-			# execution that registered them, so this map MUST fail — but with a
-			# shared registry it may leak.
+			# runner from inside nondet. Passing custom_runners=[] grants no
+			# custom runners, so this map MUST fail. The default Python SDK path
+			# omits the field, which ADR-012 defines as grant-all for compatibility.
 			for _ in range(10**4):
 				pass
 			try:
@@ -22,4 +24,20 @@ class Contract(gl.contract.Contract):
 			except Exception as e:
 				return f'nondet map failed: {type(e).__name__}'
 
-		print(gl.vm.run_nondet(leader, lambda r: True))
+		import cloudpickle
+
+		def validator_fn_mapped(_stage_data):
+			return True
+
+		print(
+			gl_call.gl_call_generic(
+				{
+					'RunNondet': {
+						'data_leader': cloudpickle.dumps(lambda _: leader()),
+						'data_validator': cloudpickle.dumps(validator_fn_mapped),
+						'custom_runners': [],
+					}
+				},
+				_decode_sub_vm_result,
+			)
+		)

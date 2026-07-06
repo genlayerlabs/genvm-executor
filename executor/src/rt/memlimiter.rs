@@ -99,9 +99,19 @@ impl Limiter {
 
     pub fn release(&self, delta: u32) {
         self.0.release_no_consumed(delta);
-        self.0
+        let prev_consumed = self
+            .0
             .consumed_memory
             .fetch_sub(delta, std::sync::atomic::Ordering::SeqCst);
+        // A limiter only ever releases something it consumed, so `consumed_memory`
+        // never underflows. Asserting on the atomic's return value (the value
+        // right before the subtraction) is race-free under concurrent
+        // consume/release on the same limiter.
+        debug_assert!(
+            prev_consumed >= delta,
+            "limiter {} release underflow: released {delta} with only {prev_consumed} consumed",
+            self.0.id
+        );
     }
 
     pub fn consume(&self, delta: u32) -> bool {
@@ -130,9 +140,20 @@ impl Limiter {
                         .data
                         .least_remaining_memory
                         .fetch_min(least_for_test, std::sync::atomic::Ordering::SeqCst);
-                    self.0
+                    let prev_consumed = self
+                        .0
                         .consumed_memory
                         .fetch_add(delta, std::sync::atomic::Ordering::SeqCst);
+                    // A single limiter's outstanding charge never exceeds the
+                    // shared budget: `remaining_memory` stays >= 0 (the CAS above
+                    // rejects delta > remaining), so the sum of every limiter's
+                    // `consumed_memory` is <= u32::MAX and no single limiter can
+                    // overflow. Return-value form keeps this race-free.
+                    debug_assert!(
+                        prev_consumed.checked_add(delta).is_some(),
+                        "limiter {} consumed_memory overflow: {prev_consumed} + {delta}",
+                        self.0.id
+                    );
                     break;
                 }
                 Err(new_remaining) => remaining = new_remaining,

@@ -591,6 +591,16 @@ pub enum Message {
         data_leader: Bytes,
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
         data_validator: Bytes,
+        /// Runner to execute in the nondet block, as a full runner id. `None`
+        /// (old SDKs) runs the parent's `contract`; a `custom:<hash>` must be
+        /// visible to the parent and is auto-granted to the child (ADR-012 §4).
+        #[calldata(default = default_none)]
+        runner: Option<String>,
+        /// Custom runners visible to the nondet child, each a full `custom:<hash>`
+        /// id. `None` inherits the parent's entire set (a behavior change: nondet
+        /// blocks used to start empty); `Some(list)` grants exactly that subset.
+        #[calldata(default = default_none)]
+        custom_runners: Option<Vec<String>>,
     },
 
     Sandbox {
@@ -602,6 +612,11 @@ pub enum Message {
         allow_write_storage: bool,
         allow_send_messages: bool,
         allow_register_runners: bool,
+        /// Custom runners visible to the sandbox child, each a full `custom:<hash>`
+        /// id. `None` inherits the parent's entire set; `Some(list)` grants exactly
+        /// that subset (every element must be in the parent's set) (ADR-012 §4).
+        #[calldata(default = default_none)]
+        custom_runners: Option<Vec<String>>,
     },
 
     RegisterRunner {

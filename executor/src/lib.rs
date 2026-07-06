@@ -150,6 +150,7 @@ pub async fn run_with_impl(
     entry_data: domain::ExecutionData,
     supervisor: Arc<rt::supervisor::Supervisor>,
     permissions: &str,
+    deploy_pin: &mut Option<runners::cache::ArchivePin>,
 ) -> anyhow::Result<rt::vm::FullResult> {
     let storage_pages_limit = supervisor.get_storage_limiter();
 
@@ -184,11 +185,11 @@ pub async fn run_with_impl(
             let archive = runners::parse(code.clone()).map_err(|e| {
                 rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
             })?;
-            supervisor.prepopulate_deploy_runner(
+            *deploy_pin = Some(supervisor.prepopulate_deploy_runner(
                 entry_data.message.contract_address,
                 code_slot,
                 archive,
-            );
+            ));
 
             runners::Id::Chain {
                 address: entry_data.message.contract_address,
@@ -259,9 +260,10 @@ pub async fn run_with_impl(
             messages_value_decremented: primitive_types::U256::zero(),
             emissions: Vec::new(),
             message_fee_allocation: entry_data.message_fee_allocation,
-            custom_runners: Default::default(),
         },
         det_subvm_hashes: Default::default(),
+        // The root VM inherits no custom runners; it loads its own tree at init.
+        granted_custom: Vec::new(),
     });
 
     let run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
@@ -292,13 +294,21 @@ pub async fn run_with(
     supervisor: Arc<rt::supervisor::Supervisor>,
     permissions: &str,
 ) -> anyhow::Result<host::FullResult> {
-    let res = run_with_impl(entry_data, supervisor.clone(), permissions).await;
+    // Deploy-time weak-cache bridge (ADR-012): the prepopulated deploy-runner
+    // entry must outlive not just the deterministic run but also the secondary
+    // nondet validator queue — a queued nondet VM whose runner is `contract`
+    // during deploy attaches to this very entry at spawn. Dropping the pin
+    // earlier would make that load's outcome depend on which queue processed it.
+    let mut deploy_pin: Option<runners::cache::ArchivePin> = None;
+
+    let res = run_with_impl(entry_data, supervisor.clone(), permissions, &mut deploy_pin).await;
 
     log_debug!("deterministic execution done");
 
     let nondet_disagree_res = rt::supervisor::await_nondet_vms(&supervisor).await;
 
     log_debug!("non-deterministic execution done");
+    drop(deploy_pin);
 
     let merged_result = match (res, nondet_disagree_res) {
         (Err(e_res), Err(e_nondet)) => {

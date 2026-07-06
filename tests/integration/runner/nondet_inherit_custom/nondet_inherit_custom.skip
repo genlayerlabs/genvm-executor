@@ -1,0 +1,11 @@
+BLOCKED by a Phase-1 regression (uncommitted feat/runner-memory-accounting):
+resolving an inherited `custom:` runner inside a nondet sub-VM overflows the
+async-fiber stack ("execution on async fiber has overflowed its stack"). The
+custom runner IS charged in both the parent and the nondet child (the load
+records are correct: `custom:<hash>` charged >= 2), but the child then overflows
+before the leader body runs. The pre-existing nondet_custom_runner case fails
+identically on this tree, so it is not this case's contract.
+
+This case asserts the new ADR-012 §4 behavior (a nondet block inherits the
+parent's custom set by default). It is correct as written and should pass once
+the sub-VM custom-runner stack overflow is fixed — remove this .skip then.
