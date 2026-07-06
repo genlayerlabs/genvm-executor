@@ -9,18 +9,18 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev]
-panic = "abort"
 incremental = false
+panic = "abort"
 
 [profile.release]
 debug = true
-panic = "abort"
 incremental = false
+panic = "abort"
 
 [profile.dev.build-override]
 debug = false
-opt-level = 0
 incremental = false
+opt-level = 0
 strip = true
 
 [[example]]
