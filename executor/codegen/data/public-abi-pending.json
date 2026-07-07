@@ -4,5 +4,14 @@
     "name": "runner_load_cost",
     "repr": "u32",
     "value": 4096
+  },
+  {
+    "type": "consts",
+    "name": "wasm_stack_limits",
+    "repr": "u32",
+    "values": {
+      "call_depth": 1024,
+      "value_slots": 65535
+    }
   }
 ]

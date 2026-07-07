@@ -7,7 +7,7 @@ use anyhow::Context as _;
 use genvm_common::*;
 
 use crate::{
-    config, host, public_abi,
+    config, host, public_abi, public_abi_pending,
     rt::{self, memlimiter, DetNondet},
     runners, wasi,
 };
@@ -95,6 +95,19 @@ impl Drop for Supervisor {
     }
 }
 
+const fn get_native_stack_size() -> u32 {
+    let native_stack_size = (6 as u32) << 20;
+
+    let approximation = public_abi_pending::wasm_stack_limits::VALUE_SLOTS * 8 * 4
+        + public_abi_pending::wasm_stack_limits::CALL_DEPTH * 64;
+
+    if native_stack_size < approximation {
+        panic!("native stack size is smaller than the configured call depth limit");
+    }
+
+    native_stack_size
+}
+
 pub fn create_engines(
     config_base: impl FnOnce(&mut wasmtime::Config) -> anyhow::Result<()>,
 ) -> anyhow::Result<rt::DetNondet<wasmtime::Engine>> {
@@ -106,7 +119,11 @@ pub fn create_engines(
         .consume_fuel(false)
         .cranelift_opt_level(wasmtime::OptLevel::None)
         .async_stack_size(8 << 20)
-        .max_wasm_stack(6 << 20);
+        .max_wasm_stack(get_native_stack_size())
+        .wasm_stack_limits(
+            public_abi_pending::wasm_stack_limits::CALL_DEPTH,
+            public_abi_pending::wasm_stack_limits::VALUE_SLOTS,
+        );
 
     base_conf
         .wasm_tail_call(true)
