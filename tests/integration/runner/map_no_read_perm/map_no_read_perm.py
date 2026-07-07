@@ -1,7 +1,7 @@
 # { "Depends": "py-genlayer:test" }
 from genlayer.vm import map_file
 
-# permissions for this case omit `r` (read_storage), so map_file must be refused
+# The storage-read permission was removed; map_file works without an `r` grant.
 try:
 	map_file('contract', 'file', '/mapped')
 	print('mapped')

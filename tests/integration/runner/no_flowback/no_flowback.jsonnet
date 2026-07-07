@@ -7,7 +7,7 @@ local util = import 'templates/util.jsonnet';
 {tags: util.features([['runner', 'custom'], ['sandbox']], 'stable'),
 	entry: util.addPaths([simple.run('${jsonnetDir}/${fileBaseName}.py') {
 		stable_hash: false,
-		permissions: 'rwscnu',
+		permissions: 'wscn',
 		runner_load_asserts: [
 			{runner_prefix: 'custom:', match: {status: 'charged'}, count: 1},
 		],

@@ -5,6 +5,10 @@ pub use genlayer_sdk::abi::entry::MessageData;
 
 pub mod fees;
 
+fn default_record_actions() -> Vec<String> {
+    Vec::new()
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Eq, genlayer_calldata::Encode)]
 #[calldata(tag = "type")]
@@ -79,4 +83,8 @@ pub struct ExecutionData {
     pub message_fee_allocation: Vec<fees::MessageAllocationNode>,
     /// Initial time-unit budget for this execution.
     pub initial_time_units_allocation: u32,
+    /// Auditable supervisor action kinds to return in the execution result.
+    #[serde(default)]
+    #[calldata(default = default_record_actions)]
+    pub record_actions: Vec<String>,
 }

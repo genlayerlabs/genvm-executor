@@ -1222,7 +1222,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
 
         let mut mem: Vec<u8> = std::iter::repeat_n(0, buf_len as usize).collect();
 
-        if self.context.conf.is_deterministic {
+        if self.context.conf.permissions.deterministic {
             use rand_core::RngCore as _;
 
             self.context.mt19937_rng.fill_bytes(&mut mem[..]);

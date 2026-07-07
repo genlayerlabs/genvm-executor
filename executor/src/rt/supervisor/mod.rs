@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     sync::{atomic::AtomicU32, Arc},
 };
 
@@ -58,6 +58,46 @@ pub struct Ctor {
     pub locked_slots: host::LockedSlotsSet,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
     pub multi_host: host::MultiHost,
+    pub record_actions: Vec<String>,
+}
+
+#[derive(Clone, Debug, genlayer_calldata::Encode)]
+pub struct RecordedAction {
+    pub kind: String,
+    pub fields: BTreeMap<String, String>,
+}
+
+pub struct ActionRecorder {
+    enabled: BTreeSet<String>,
+    records: tokio::sync::Mutex<Vec<RecordedAction>>,
+}
+
+impl ActionRecorder {
+    fn new(enabled: Vec<String>) -> Self {
+        Self {
+            enabled: enabled.into_iter().collect(),
+            records: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn is_enabled(&self, kind: &str) -> bool {
+        self.enabled.contains(kind)
+    }
+
+    pub async fn record_or_log(&self, kind: &'static str, fields: BTreeMap<String, String>) {
+        if self.is_enabled(kind) {
+            self.records.lock().await.push(RecordedAction {
+                kind: kind.to_owned(),
+                fields,
+            });
+        } else {
+            log_debug!(kind = kind, fields:serde = fields; "auditable action");
+        }
+    }
+
+    pub async fn take(&self) -> Vec<RecordedAction> {
+        std::mem::take(&mut *self.records.lock().await)
+    }
 }
 
 pub struct Supervisor {
@@ -83,6 +123,7 @@ pub struct Supervisor {
 
     pub(crate) engines: rt::DetNondet<wasmtime::Engine>,
     pub(crate) host: Arc<host::MultiHost>,
+    pub(crate) action_recorder: ActionRecorder,
 }
 
 #[cfg(debug_assertions)]
@@ -119,7 +160,7 @@ pub fn create_engines(
         .consume_fuel(false)
         .cranelift_opt_level(wasmtime::OptLevel::None)
         .async_stack_size(8 << 20)
-        .max_wasm_stack(get_native_stack_size())
+        .max_wasm_stack(get_native_stack_size() as usize)
         .wasm_stack_limits(
             public_abi_pending::wasm_stack_limits::CALL_DEPTH,
             public_abi_pending::wasm_stack_limits::VALUE_SLOTS,
@@ -242,6 +283,10 @@ impl Supervisor {
         self.nondet_results.lock().await.clone()
     }
 
+    pub async fn take_recorded_actions(&self) -> Vec<RecordedAction> {
+        self.action_recorder.take().await
+    }
+
     pub fn get_leader_nondet_result(&self, call_no: u32) -> Option<bytes::Bytes> {
         self.leader_nondet_results
             .as_ref()
@@ -350,6 +395,7 @@ impl Supervisor {
             custom_runners: runners::cache::WeakCache::new(),
             host: Arc::new(ctor.multi_host),
             engines,
+            action_recorder: ActionRecorder::new(ctor.record_actions),
         });
 
         let read_permit = zelf
@@ -381,9 +427,23 @@ pub async fn spawn(
         });
     }
 
+    zelf.action_recorder
+        .record_or_log(
+            "vm_spawn",
+            BTreeMap::from([
+                ("spawn_kind".to_owned(), vm.spawn_kind.clone()),
+                ("depth".to_owned(), vm.depth.to_string()),
+                (
+                    "runner_id".to_owned(),
+                    vm.conf.execution.topmost_runner_id.to_string(),
+                ),
+            ]),
+        )
+        .await;
+
     let config_copy = vm.conf.clone();
 
-    let engine = zelf.engines.get(vm.conf.is_deterministic);
+    let engine = zelf.engines.get(vm.conf.permissions.deterministic);
 
     let mut store = wasmtime::Store::new(
         engine,
@@ -429,7 +489,7 @@ pub async fn spawn(
     // The pins were carried in `SingleVMData`, so the content survives even if the
     // granting parent has died (queued nondet VMs).
     {
-        let is_det = vm_base.config_copy.is_deterministic;
+        let is_det = vm_base.config_copy.permissions.deterministic;
         let child_limiter = vm_base.store.data().limits.clone();
         let store_data = vm_base.store.data_mut();
         let wasi::genlayer_sdk::Context { loaded, data, .. } =
@@ -437,6 +497,13 @@ pub async fn spawn(
         let grants = std::mem::take(&mut data.granted_custom);
         let mut det_fingerprint = is_det.then_some(&mut data.det_subvm_hashes);
         for grant in grants {
+            let runner_id = grant.runner_id();
+            let size = grant.total_size();
+            let status = if loaded.contains(runner_id) {
+                "cached"
+            } else {
+                "charged"
+            };
             if let Err(e) = actions::inherit_load(
                 &child_limiter,
                 loaded,
@@ -448,6 +515,16 @@ pub async fn spawn(
                     state: Box::new(rt::SpawnErrorState::Spawned(vm_base)),
                 });
             }
+            zelf.action_recorder
+                .record_or_log(
+                    "runner_load",
+                    BTreeMap::from([
+                        ("runner_id".to_owned(), runner_id.as_str().to_owned()),
+                        ("size".to_owned(), size.to_string()),
+                        ("status".to_owned(), status.to_owned()),
+                    ]),
+                )
+                .await;
         }
     }
 
@@ -481,7 +558,7 @@ async fn apply_contract_actions_inner(
 ) -> anyhow::Result<wasmtime::Instance> {
     let data = &mut vm.vm_base.store.data_mut().genlayer_ctx.genlayer_sdk.data;
 
-    let topmost_runner_id = data.conf.topmost_runner_id.clone();
+    let topmost_runner_id = data.conf.execution.topmost_runner_id.clone();
     let contract_major = data
         .storage
         .read_major()
@@ -496,13 +573,13 @@ async fn apply_contract_actions_inner(
         .into());
     }
 
-    let topmost_runner_id = data.conf.topmost_runner_id.clone();
+    let topmost_runner_id = data.conf.execution.topmost_runner_id.clone();
 
     // Main-runner load action (ADR-012 §1). Runs *after* the spawn-time inherit
     // loads, so a custom entry point granted to this VM is already loaded (free
     // here, not double charged). Charges this VM's own limiter.
     let arch = {
-        let is_det = vm.vm_base.config_copy.is_deterministic;
+        let is_det = vm.vm_base.config_copy.permissions.deterministic;
         let store_data = vm.vm_base.store.data_mut();
         let wasi::genlayer_sdk::Context { loaded, data, .. } =
             &mut store_data.genlayer_ctx.genlayer_sdk;

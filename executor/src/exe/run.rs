@@ -36,10 +36,16 @@ pub struct Args {
     sync: bool,
     #[clap(
         long,
-        default_value = "rwscn",
-        help = "r?w?s?c?n?u?, read/write/send messages/call contracts/spawn nondet/register runners"
+        default_value = "wscn",
+        help = "w?s?c?n?, write/send messages/call contracts/spawn nondet"
     )]
     permissions: String,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "record auditable actions: runner_load,vm_spawn"
+    )]
+    record_actions: Vec<String>,
     #[clap(long, help = "override LLM module address from config")]
     module_llm: Option<String>,
     #[clap(long, help = "override web module address from config")]
@@ -79,6 +85,15 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
 
     let execution_data = calldata::decode_obj::<domain::ExecutionData>(&execution_data_bytes)
         .with_context(|| "decoding execution data")?;
+    let mut execution_data = execution_data;
+    execution_data
+        .record_actions
+        .extend(args.record_actions.iter().cloned());
+    for action in &execution_data.record_actions {
+        if !matches!(action.as_str(), "runner_load" | "vm_spawn") {
+            anyhow::bail!("Invalid action recorder kind {action}");
+        }
+    }
     let message = &execution_data.message;
     let host_data = rt::parse_host_data(&execution_data)?;
 
@@ -210,6 +225,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             data_fees_remaining,
             data_fees_consumed,
             primitive_types::U256::zero(),
+            Vec::new(),
         ));
 
         hosts[host_for(genvm::host::host_fns::Methods::ConsumeResult)]
@@ -228,7 +244,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     }
 
     let mut perm_size = 0;
-    for perm in ["r", "w", "s", "c", "n", "u"] {
+    for perm in ["w", "s", "c", "n"] {
         if args.permissions.contains(perm) {
             perm_size += 1;
         }
@@ -250,6 +266,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             gas_data: execution_data.gas_data.clone(),
             initial_time_units_allocation: execution_data.initial_time_units_allocation,
             leader_nondet_results: execution_data.leader_nondet_results.clone(),
+            record_actions: execution_data.record_actions.clone(),
         },
         host_data,
         shared_data,

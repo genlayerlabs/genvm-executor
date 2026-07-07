@@ -7,7 +7,7 @@ class Contract(gl.contract.Contract):
 	def __init__(self):
 		def leader():
 			# register_runner is deterministic-only; calling it from inside a
-			# nondet block must be refused even though `u` (register) is granted,
+			# nondet block must be refused even though register_runner is granted,
 			# i.e. the rejection comes from the is_deterministic gate, not perms.
 			try:
 				register_runner(b'# { "Depends": "py-genlayer:test" }\nx\n')

@@ -49,7 +49,7 @@ let
       };
 
       genlayer-std = {
-        hash = "sha256-x4U4R5V/KgdDj5GW5l8gZq3id+51GR2O/1PiodyTlj0=";
+        hash = "test";
         depends = [
           top
         ];

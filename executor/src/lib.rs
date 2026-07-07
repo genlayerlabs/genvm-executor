@@ -67,6 +67,7 @@ pub struct CreateSupervisorNamedArgs {
     pub gas_data: std::collections::BTreeMap<String, String>,
     pub initial_time_units_allocation: u32,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    pub record_actions: Vec<String>,
 }
 
 pub fn create_supervisor(
@@ -141,6 +142,7 @@ pub fn create_supervisor(
         locked_slots,
         leader_nondet_results: named.leader_nondet_results,
         multi_host,
+        record_actions: named.record_actions,
     };
 
     rt::supervisor::Supervisor::start(config, ctor)
@@ -232,19 +234,23 @@ pub async fn run_with_impl(
 
     let essential_data = Box::new(wasi::genlayer_sdk::SingleVMData {
         depth: 0,
-        // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+        spawn_kind: "initial".to_owned(),
+        // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
         conf: wasi::base::Config {
             needs_error_fingerprint: true,
-            is_deterministic: true,
-            can_read_storage: permissions.contains("r"),
-            can_write_storage: permissions.contains("w"),
-            can_send_messages: permissions.contains("s"),
-            can_call_others: permissions.contains("c"),
-            can_spawn_nondet: permissions.contains("n"),
-            can_register_runners: permissions.contains("u"),
-            can_use_balance_for_message_fees,
-            state_mode: crate::public_abi::StorageType::Default,
-            topmost_runner_id,
+            permissions: wasi::base::Permissions {
+                deterministic: true,
+                write_storage: permissions.contains("w"),
+                send_messages: permissions.contains("s"),
+                call_others: permissions.contains("c"),
+                spawn_nondet: permissions.contains("n"),
+                register_runners: true,
+                can_use_balance_for_message_fees,
+            },
+            execution: wasi::base::Execution {
+                state_mode: crate::public_abi::StorageType::Default,
+                topmost_runner_id,
+            },
         },
         message_data: ExtendedMessage {
             message: entry_data.message,
@@ -354,6 +360,7 @@ pub async fn run_with(
             data_fees_remaining,
             data_fees_consumed,
             llm_consumption,
+            supervisor.take_recorded_actions().await,
         )),
         Err(e) => Err(e),
     };

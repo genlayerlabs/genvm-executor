@@ -349,6 +349,25 @@ fn log_runner_load(id: symbol_table::GlobalSymbol, size: u32, status: &'static s
     );
 }
 
+async fn record_runner_load(
+    supervisor: &rt::supervisor::Supervisor,
+    id: symbol_table::GlobalSymbol,
+    size: u32,
+    status: &'static str,
+) {
+    supervisor
+        .action_recorder
+        .record_or_log(
+            "runner_load",
+            BTreeMap::from([
+                ("runner_id".to_owned(), id.as_str().to_owned()),
+                ("size".to_owned(), size.to_string()),
+                ("status".to_owned(), status.to_owned()),
+            ]),
+        )
+        .await;
+}
+
 fn out_of_memory() -> anyhow::Error {
     rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into()
 }
@@ -418,6 +437,7 @@ pub(crate) async fn load_action(
 ) -> anyhow::Result<runners::cache::ArchivePin> {
     if let Some(pin) = loaded.get(resolved.id) {
         log_runner_load(resolved.id, pin.total_size(), "cached");
+        record_runner_load(supervisor, resolved.id, pin.total_size(), "cached").await;
         return Ok(pin.clone());
     }
 
@@ -429,12 +449,14 @@ pub(crate) async fn load_action(
         ResolvedKind::Disk { name, hash } => {
             let cell = supervisor.runner_cache.cell(id);
             if cell.initialized() {
-                return attach_load(
+                let pin = attach_load(
                     limiter,
                     loaded,
                     det_fingerprint,
                     runners::cache::pin_of(cell),
-                );
+                )?;
+                record_runner_load(supervisor, id, pin.total_size(), "charged").await;
+                return Ok(pin);
             }
             // Miss: learn the size from the file, charge, then materialize (so the
             // charge precedes the resident copy).
@@ -463,17 +485,20 @@ pub(crate) async fn load_action(
                 "materialized disk archive size differs from the charged size"
             );
             record_charged_load(loaded, det_fingerprint, pin.clone());
+            record_runner_load(supervisor, id, pin.total_size(), "charged").await;
             Ok(pin)
         }
         ResolvedKind::Chain { address, on, slot } => {
             let cell = supervisor.runner_cache.cell(id);
             if cell.initialized() {
-                return attach_load(
+                let pin = attach_load(
                     limiter,
                     loaded,
                     det_fingerprint,
                     runners::cache::pin_of(cell),
-                );
+                )?;
+                record_runner_load(supervisor, id, pin.total_size(), "charged").await;
+                return Ok(pin);
             }
             let mode = on.host_storage_type().ok_or_else(|| {
                 make_malformed_runner_error("deploy-state chain runner is not available on chain")
@@ -530,6 +555,7 @@ pub(crate) async fn load_action(
                 "chain archive total_size differs from the charged code size"
             );
             record_charged_load(loaded, det_fingerprint, pin.clone());
+            record_runner_load(supervisor, id, pin.total_size(), "charged").await;
             Ok(pin)
         }
     }
@@ -577,14 +603,26 @@ pub(crate) async fn register_runner_load(
     det_fingerprint: Option<&mut sha3::Sha3_256>,
     code: bytes::Bytes,
 ) -> anyhow::Result<symbol_table::GlobalSymbol> {
-    register_runner_load_into(
+    let hash = runners::custom_runner_hash(&code);
+    let id = runners::Id::Custom { hash }.canonical();
+    let was_loaded = loaded.get(id).map(|pin| pin.total_size());
+    let id = register_runner_load_into(
         &supervisor.custom_runners,
         limiter,
         loaded,
         det_fingerprint,
         code,
     )
-    .await
+    .await?;
+    let (status, size) = match was_loaded {
+        Some(size) => ("cached", size),
+        None => (
+            "charged",
+            loaded.get(id).map(|pin| pin.total_size()).unwrap_or(0),
+        ),
+    };
+    record_runner_load(supervisor, id, size, status).await;
+    Ok(id)
 }
 
 /// Core of [`register_runner_load`], parameterized by the weak registry for
@@ -725,7 +763,7 @@ impl Ctx<'_, '_> {
         // `custom:` dependency resolves against this VM's loaded set only —
         // a granted `custom:` runner cannot pull in a non-granted one (ADR-012 §4).
         let id = resolved.id;
-        let is_det = self.vm.config_copy.is_deterministic;
+        let is_det = self.vm.config_copy.permissions.deterministic;
         let data = self.vm.store.data_mut();
         let limiter = data.limits.clone();
         let crate::wasi::genlayer_sdk::Context { loaded, data, .. } =
@@ -940,7 +978,8 @@ impl Ctx<'_, '_> {
                             .with_context(|| format!("linking wasm {path:?}")),
                         &contexts
                     );
-                    let module = module.into_gep(|x| x.get(self.vm.config_copy.is_deterministic));
+                    let module =
+                        module.into_gep(|x| x.get(self.vm.config_copy.permissions.deterministic));
 
                     let instance = {
                         let instance = try_context!(
@@ -1015,7 +1054,8 @@ impl Ctx<'_, '_> {
                         &contexts
                     );
 
-                    let module = module.into_gep(|x| x.get(self.vm.config_copy.is_deterministic));
+                    let module =
+                        module.into_gep(|x| x.get(self.vm.config_copy.permissions.deterministic));
 
                     return Ok(Some(try_context!(
                         self.vm
@@ -1027,7 +1067,9 @@ impl Ctx<'_, '_> {
                     )));
                 }
                 InitAction::When { cond, action: next } => {
-                    if (cond == runners::WasmMode::Det) == self.vm.config_copy.is_deterministic {
+                    if (cond == runners::WasmMode::Det)
+                        == self.vm.config_copy.permissions.deterministic
+                    {
                         stack.push(Work::Action(*next));
                     }
                 }

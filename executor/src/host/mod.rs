@@ -169,6 +169,7 @@ pub struct FullResult {
     pub data_fees_consumed: rt::fees::BucketsConsumed,
 
     pub llm_consumption: primitive_types::U256,
+    pub recorded_actions: Vec<rt::supervisor::RecordedAction>,
 }
 
 impl FullResult {
@@ -186,6 +187,7 @@ impl FullResult {
             data_fees_remaining: Vec::new(),
             data_fees_consumed: rt::fees::BucketsConsumed::default(),
             llm_consumption: primitive_types::U256::zero(),
+            recorded_actions: Vec::new(),
         }
     }
 }
@@ -198,6 +200,7 @@ impl FullResult {
         data_fees_remaining: Vec<primitive_types::U256>,
         data_fees_consumed: rt::fees::BucketsConsumed,
         llm_consumption: primitive_types::U256,
+        recorded_actions: Vec<rt::supervisor::RecordedAction>,
     ) -> Self {
         struct Hashable<'a> {
             backtrace: &'a Option<rt::errors::Backtrace>,
@@ -278,6 +281,7 @@ impl FullResult {
             data_fees_remaining,
             data_fees_consumed,
             llm_consumption,
+            recorded_actions,
         }
     }
 }

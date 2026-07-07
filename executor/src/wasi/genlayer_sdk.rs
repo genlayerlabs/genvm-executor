@@ -345,6 +345,7 @@ impl ExtendedMessageExt for ExtendedMessage {
                 contract_address: self.message.contract_address,
                 sender_address: self.message.sender_address,
                 origin_address: self.message.origin_address,
+                signer_address: self.message.signer_address,
                 stack: self.message.stack.clone(),
                 chain_id: self.message.chain_id.clone(),
                 value: self.message.value.clone(),
@@ -417,6 +418,7 @@ impl VMDataAccumulator {
 pub struct SingleVMData {
     pub conf: base::Config,
     pub depth: u32,
+    pub spawn_kind: String,
     pub message_data: ExtendedMessage,
     pub supervisor: Arc<rt::supervisor::Supervisor>,
     pub storage: rt::vm::storage::Storage<StorageHostHolder>,
@@ -562,8 +564,8 @@ impl Context {
         // non-`Default` state_mode reads bypass the cache, so it must not be able to
         // write (otherwise its writes would hit the cache but never be read back).
         debug_assert!(
-            data.conf.state_mode == public_abi::StorageType::Default
-                || !data.conf.can_write_storage,
+            data.conf.execution.state_mode == public_abi::StorageType::Default
+                || !data.conf.permissions.write_storage,
             "a VM with state_mode != Default must not have can_write_storage"
         );
 
@@ -779,10 +781,10 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 calldata,
                 value,
             } => {
-                if !self.context.data.conf.is_deterministic {
+                if !self.context.data.conf.permissions.deterministic {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
-                if !self.context.data.conf.can_send_messages {
+                if !self.context.data.conf.permissions.send_messages {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
@@ -867,10 +869,10 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 Ok(file_fd_none())
             }
             gl_call::Message::EthCall { address, calldata } => {
-                if !self.context.data.conf.is_deterministic {
+                if !self.context.data.conf.permissions.deterministic {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
-                if !self.context.data.conf.can_call_others {
+                if !self.context.data.conf.permissions.call_others {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
@@ -888,15 +890,11 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 calldata,
                 mut state,
             } => {
-                if !self.context.data.conf.is_deterministic {
+                if !self.context.data.conf.permissions.deterministic {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
-                if !self.context.data.conf.can_call_others {
+                if !self.context.data.conf.permissions.call_others {
                     return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                if state == public_abi::StorageType::Default {
-                    state = public_abi::StorageType::LatestNonFinal;
                 }
 
                 let supervisor = self.context.data.supervisor.clone();
@@ -912,7 +910,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .fork(public_abi::EntryKind::Main, calldata_encoded.into());
                 my_data.message.stack.push(my_data.message.contract_address);
 
-                let calldata_encoded = calldata::encode_obj(&calldata);
+                if state == public_abi::StorageType::Default {
+                    state = my_conf.execution.state_mode;
+                }
 
                 let mut child_storage = rt::vm::storage::Storage::new(
                     address,
@@ -935,26 +935,30 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 let vm_data = Box::new(SingleVMData {
                     depth: self.context.data.depth + 1,
-                    // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+                    spawn_kind: "call_contract".to_owned(),
+                    // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
                     conf: base::Config {
                         needs_error_fingerprint: true,
-                        is_deterministic: true,
-                        can_read_storage: my_conf.can_read_storage,
-                        can_write_storage: false,
-                        can_spawn_nondet: my_conf.can_spawn_nondet,
-                        can_call_others: my_conf.can_call_others,
-                        can_send_messages: false,
-                        can_register_runners: my_conf.can_register_runners,
-                        can_use_balance_for_message_fees: false,
-                        state_mode: state,
-                        topmost_runner_id: runners::Id::Chain {
-                            address,
-                            on: if state == public_abi::StorageType::LatestFinal {
-                                runners::ChainState::Finalized
-                            } else {
-                                runners::ChainState::Accepted
+                        permissions: base::Permissions {
+                            deterministic: true,
+                            write_storage: false,
+                            spawn_nondet: false,
+                            call_others: my_conf.permissions.call_others,
+                            send_messages: false,
+                            register_runners: my_conf.permissions.register_runners,
+                            can_use_balance_for_message_fees: false,
+                        },
+                        execution: base::Execution {
+                            state_mode: state,
+                            topmost_runner_id: runners::Id::Chain {
+                                address,
+                                on: if state == public_abi::StorageType::LatestFinal {
+                                    runners::ChainState::Finalized
+                                } else {
+                                    runners::ChainState::Accepted
+                                },
+                                slot: code_slot,
                             },
-                            slot: code_slot,
                         },
                     },
                     message_data: ExtendedMessage {
@@ -962,6 +966,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                             contract_address: address,
                             sender_address: my_data.message.sender_address,
                             origin_address: my_data.message.origin_address,
+                            signer_address: my_data.message.signer_address,
                             value: num_bigint::BigInt::ZERO,
                             is_init: false,
                             datetime: my_data.message.datetime,
@@ -976,11 +981,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     supervisor: supervisor.clone(),
                     accumulator: VMDataAccumulator {
                         data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
-                        messages_value_decremented: self
-                            .context
-                            .data
-                            .accumulator
-                            .messages_value_decremented,
+                        messages_value_decremented: primitive_types::U256::zero(),
                         emissions: Vec::new(),
                         message_fee_allocation: Vec::new(),
                     },
@@ -1007,7 +1008,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 self.set_vm_run_result(res.run_ok).map(|x| x.0)
             }
             gl_call::Message::EmitEvent { topics, blob } => {
-                if !self.context.data.conf.is_deterministic {
+                if !self.context.data.conf.permissions.deterministic {
                     log_warn!("EmitEvent requires deterministic mode");
 
                     return Err(generated::types::Errno::Forbidden.into());
@@ -1016,7 +1017,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 // same write capability as storage. A read-only sub-VM (e.g. a
                 // `CallContract` child) must not emit events; otherwise the
                 // emission is charged but later discarded with the child.
-                if !self.context.data.conf.can_write_storage {
+                if !self.context.data.conf.permissions.write_storage {
                     log_warn!("EmitEvent requires write_storage permission");
 
                     return Err(generated::types::Errno::Forbidden.into());
@@ -1093,17 +1094,21 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     use_balance = use_balance;
                     "PostMessage dispatched"
                 );
-                if !self.context.data.conf.is_deterministic {
+                if !self.context.data.conf.permissions.deterministic {
                     log_debug!("PostMessage rejected: non-deterministic context (Forbidden)");
                     return Err(generated::types::Errno::Forbidden.into());
                 }
-                if !self.context.data.conf.can_send_messages {
+                if !self.context.data.conf.permissions.send_messages {
                     log_debug!("PostMessage rejected: can_send_messages=false (Forbidden)");
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
                 let balance_params = validate_balance_fee(
-                    self.context.data.conf.can_use_balance_for_message_fees,
+                    self.context
+                        .data
+                        .conf
+                        .permissions
+                        .can_use_balance_for_message_fees,
                     use_balance,
                     fee_params,
                 )?;
@@ -1286,15 +1291,19 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 use_balance,
                 fee_params,
             } => {
-                if !self.context.data.conf.is_deterministic {
+                if !self.context.data.conf.permissions.deterministic {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
-                if !self.context.data.conf.can_send_messages {
+                if !self.context.data.conf.permissions.send_messages {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
                 let balance_params = validate_balance_fee(
-                    self.context.data.conf.can_use_balance_for_message_fees,
+                    self.context
+                        .data
+                        .conf
+                        .permissions
+                        .can_use_balance_for_message_fees,
                     use_balance,
                     fee_params,
                 )?;
@@ -1444,7 +1453,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 Ok(file_fd_none())
             }
             gl_call::Message::WebRender(render_payload) => {
-                let is_det = self.context.data.conf.is_deterministic;
+                let is_det = self.context.data.conf.permissions.deterministic;
                 if is_det {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
@@ -1482,7 +1491,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
             }
             gl_call::Message::WebRequest(request_payload) => {
-                let is_det = self.context.data.conf.is_deterministic;
+                let is_det = self.context.data.conf.permissions.deterministic;
                 if is_det {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
@@ -1520,7 +1529,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
             }
             gl_call::Message::ExecPrompt(prompt_payload) => {
-                if self.context.data.conf.is_deterministic {
+                if self.context.data.conf.permissions.deterministic {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
@@ -1583,7 +1592,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
             }
             gl_call::Message::ExecPromptTemplate(prompt_template_payload) => {
-                if self.context.data.conf.is_deterministic {
+                if self.context.data.conf.permissions.deterministic {
                     return Err(generated::types::Errno::Forbidden.into());
                 }
 
@@ -1715,10 +1724,6 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
     ) -> Result<(), generated::types::Error> {
         let buf = buf.as_array(buf_len);
 
-        if !self.context.data.conf.can_read_storage {
-            return Err(generated::types::Errno::Forbidden.into());
-        }
-
         if index.checked_add(buf_len).is_none() {
             return Err(generated::types::Errno::Inval.into());
         }
@@ -1738,7 +1743,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
             (true, vec_buf.as_mut_slice())
         };
 
-        if self.context.data.conf.state_mode == public_abi::StorageType::Default {
+        if self.context.data.conf.execution.state_mode == public_abi::StorageType::Default {
             self.context
                 .data
                 .storage
@@ -1752,7 +1757,13 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 .host
                 .lock_for(host::host_fns::Methods::StorageRead)
                 .await
-                .storage_read(self.context.data.conf.state_mode, account, slot, index, vec)
+                .storage_read(
+                    self.context.data.conf.execution.state_mode,
+                    account,
+                    slot,
+                    index,
+                    vec,
+                )
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
         }
 
@@ -1773,10 +1784,10 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
     ) -> Result<(), generated::types::Error> {
         let buf = buf.as_array(buf_len);
 
-        if !self.context.data.conf.is_deterministic {
+        if !self.context.data.conf.permissions.deterministic {
             return Err(generated::types::Errno::Forbidden.into());
         }
-        if !self.context.data.conf.can_write_storage {
+        if !self.context.data.conf.permissions.write_storage {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
@@ -1820,7 +1831,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
         mem: &mut wiggle::GuestMemory<'_>,
         result: wiggle::GuestPtr<u8>,
     ) -> Result<(), generated::types::Error> {
-        if !self.context.data.conf.is_deterministic {
+        if !self.context.data.conf.permissions.deterministic {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
@@ -1924,7 +1935,7 @@ impl ContextVFS<'_> {
                 Ok(file_fd_none())
             }
             gl_call::TracePayload::RuntimeMicroSec => {
-                let elapsed_micros = if self.context.data.conf.is_deterministic
+                let elapsed_micros = if self.context.data.conf.permissions.deterministic
                     && !self
                         .context
                         .data
@@ -1950,7 +1961,7 @@ impl ContextVFS<'_> {
     async fn gl_call_get_timestamp(
         &mut self,
     ) -> Result<generated::types::Fd, generated::types::Error> {
-        let timestamp = if self.context.data.conf.is_deterministic {
+        let timestamp = if self.context.data.conf.permissions.deterministic {
             self.context.data.message_data.message.datetime.timestamp()
         } else {
             chrono::Utc::now().timestamp()
@@ -1966,10 +1977,10 @@ impl ContextVFS<'_> {
         &mut self,
         code: bytes::Bytes,
     ) -> Result<generated::types::Fd, generated::types::Error> {
-        if !self.context.data.conf.is_deterministic {
+        if !self.context.data.conf.permissions.deterministic {
             return Err(generated::types::Errno::Forbidden.into());
         }
-        if !self.context.data.conf.can_register_runners {
+        if !self.context.data.conf.permissions.register_runners {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
@@ -2001,19 +2012,12 @@ impl ContextVFS<'_> {
         path_in_runner: String,
         path_in_vfs: String,
     ) -> Result<generated::types::Fd, generated::types::Error> {
-        // Resolving a `chain:` runner reads another contract's storage, so this
-        // is gated on the same permission as `storage_read` to avoid becoming a
-        // read-storage bypass.
-        if !self.context.data.conf.can_read_storage {
-            return Err(generated::types::Errno::Forbidden.into());
-        }
-
         let supervisor = self.context.data.supervisor.clone();
-        let is_det = self.context.data.conf.is_deterministic;
+        let is_det = self.context.data.conf.permissions.deterministic;
         // Charge the VM's own limiter (refunded at VM death, coinciding with the
         // pin drop), not the long-lived root limiter.
         let limiter = self.context.limiter.clone();
-        let topmost_runner_id = self.context.data.conf.topmost_runner_id.clone();
+        let topmost_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
 
         let runner =
             rt::supervisor::actions::resolve_runner_id(&supervisor, &topmost_runner_id, &runner)
@@ -2048,7 +2052,7 @@ impl ContextVFS<'_> {
         runner: Option<String>,
         custom_runners: Option<Vec<String>>,
     ) -> Result<generated::types::Fd, generated::types::Error> {
-        if !self.context.data.conf.can_spawn_nondet {
+        if !self.context.data.conf.permissions.spawn_nondet {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
@@ -2056,7 +2060,7 @@ impl ContextVFS<'_> {
         // in this (deterministic parent) scope, so malformed inputs fail
         // deterministically at gl_call time (ADR-012 §4).
         let supervisor = self.context.data.supervisor.clone();
-        let parent_runner_id = self.context.data.conf.topmost_runner_id.clone();
+        let parent_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
         let child_topmost_id = match &runner {
             None => parent_runner_id.clone(),
             Some(r) => {
@@ -2209,19 +2213,23 @@ impl ContextVFS<'_> {
 
             let vm_data = Box::new(SingleVMData {
                 depth: self.context.data.depth + 1,
-                // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+                spawn_kind: "run_nondet".to_owned(),
+                // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
                 conf: base::Config {
                     needs_error_fingerprint: false,
-                    is_deterministic: false,
-                    can_read_storage: self.context.data.conf.can_read_storage,
-                    can_write_storage: false,
-                    can_spawn_nondet: false,
-                    can_call_others: false,
-                    can_send_messages: false,
-                    can_register_runners: false,
-                    can_use_balance_for_message_fees: false,
-                    state_mode: public_abi::StorageType::Default,
-                    topmost_runner_id: child_topmost_id,
+                    permissions: base::Permissions {
+                        deterministic: false,
+                        write_storage: false,
+                        send_messages: false,
+                        call_others: false,
+                        spawn_nondet: false,
+                        register_runners: false,
+                        can_use_balance_for_message_fees: false,
+                    },
+                    execution: base::Execution {
+                        state_mode: public_abi::StorageType::Default,
+                        topmost_runner_id: child_topmost_id,
+                    },
                 },
                 message_data,
                 supervisor: supervisor.clone(),
@@ -2285,7 +2293,7 @@ impl ContextVFS<'_> {
     ) -> Result<generated::types::Fd, generated::types::Error> {
         let supervisor = self.context.data.supervisor.clone();
 
-        let parent_runner_id = self.context.data.conf.topmost_runner_id.clone();
+        let parent_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
         let topmost_runner_id =
             rt::supervisor::actions::resolve_runner_id(&supervisor, &parent_runner_id, &runner)
                 .await
@@ -2325,19 +2333,27 @@ impl ContextVFS<'_> {
 
         let vm_data = Box::new(SingleVMData {
             depth: self.context.data.depth + 1,
-            // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+            spawn_kind: "sandbox".to_owned(),
+            // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
             conf: base::Config {
                 needs_error_fingerprint: false,
-                is_deterministic: zelf_conf.is_deterministic,
-                can_read_storage: zelf_conf.can_read_storage,
-                can_write_storage: zelf_conf.can_write_storage & allow_write_storage,
-                can_spawn_nondet: false,
-                can_call_others: false,
-                can_send_messages: zelf_conf.can_send_messages & allow_send_messages,
-                can_register_runners: zelf_conf.can_register_runners & allow_register_runners,
-                can_use_balance_for_message_fees: zelf_conf.can_use_balance_for_message_fees,
-                state_mode: zelf_conf.state_mode,
-                topmost_runner_id,
+                permissions: base::Permissions {
+                    deterministic: zelf_conf.permissions.deterministic,
+                    write_storage: zelf_conf.permissions.write_storage & allow_write_storage,
+                    send_messages: zelf_conf.permissions.send_messages & allow_send_messages,
+                    call_others: false,
+                    spawn_nondet: false,
+                    register_runners: zelf_conf.permissions.register_runners
+                        & allow_register_runners,
+                    can_use_balance_for_message_fees: zelf_conf
+                        .permissions
+                        .can_use_balance_for_message_fees
+                        & allow_send_messages,
+                },
+                execution: base::Execution {
+                    state_mode: zelf_conf.execution.state_mode,
+                    topmost_runner_id,
+                },
             },
             message_data,
             supervisor: supervisor.clone(),
@@ -2351,7 +2367,7 @@ impl ContextVFS<'_> {
             .await
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
-        if self.context.data.conf.is_deterministic {
+        if self.context.data.conf.permissions.deterministic {
             let hash = my_res.small_hash();
             self.context.data.det_subvm_hashes.update(&hash);
         }
