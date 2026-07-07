@@ -45,7 +45,9 @@
     "values": {
       "table_entry": 64,
       "file_mapping": 256,
-      "fd_allocation": 96
+      "fd_allocation": 96,
+      "runner_load_cost": 4096,
+      "vm_spawn_cost": 134217728
     }
   },
   {
@@ -73,7 +75,9 @@
       "vm_recursion": 512,
       "web_request_min_space": 65536,
       "web_render_min_space": 134217728,
-      "max_fds": 1024
+      "max_fds": 1024,
+      "wasm_call_depth": 1024,
+      "wasm_stack_value_slots": 65535
     }
   },
   {

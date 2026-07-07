@@ -193,6 +193,8 @@ pub mod memory_limiter_consts {
     pub const TABLE_ENTRY: u32 = 64;
     pub const FILE_MAPPING: u32 = 256;
     pub const FD_ALLOCATION: u32 = 96;
+    pub const RUNNER_LOAD_COST: u32 = 4096;
+    pub const VM_SPAWN_COST: u32 = 134217728;
 }
 
 pub mod root_offsets {
@@ -213,6 +215,8 @@ pub mod top_limits {
     pub const WEB_REQUEST_MIN_SPACE: u32 = 65536;
     pub const WEB_RENDER_MIN_SPACE: u32 = 134217728;
     pub const MAX_FDS: u32 = 1024;
+    pub const WASM_CALL_DEPTH: u32 = 1024;
+    pub const WASM_STACK_VALUE_SLOTS: u32 = 65535;
 }
 
 #[derive(

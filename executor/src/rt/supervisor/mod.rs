@@ -7,7 +7,7 @@ use anyhow::Context as _;
 use genvm_common::*;
 
 use crate::{
-    config, host, public_abi, public_abi_pending,
+    config, host, public_abi,
     rt::{self, memlimiter, DetNondet},
     runners, wasi,
 };
@@ -139,8 +139,8 @@ impl Drop for Supervisor {
 const fn get_native_stack_size() -> u32 {
     let native_stack_size = (6 as u32) << 20;
 
-    let approximation = public_abi_pending::wasm_stack_limits::VALUE_SLOTS * 8 * 4
-        + public_abi_pending::wasm_stack_limits::CALL_DEPTH * 64;
+    let approximation = public_abi::top_limits::WASM_STACK_VALUE_SLOTS * 8 * 4
+        + public_abi::top_limits::WASM_CALL_DEPTH * 64;
 
     if native_stack_size < approximation {
         panic!("native stack size is smaller than the configured call depth limit");
@@ -162,8 +162,8 @@ pub fn create_engines(
         .async_stack_size(8 << 20)
         .max_wasm_stack(get_native_stack_size() as usize)
         .wasm_stack_limits(
-            public_abi_pending::wasm_stack_limits::CALL_DEPTH,
-            public_abi_pending::wasm_stack_limits::VALUE_SLOTS,
+            public_abi::top_limits::WASM_CALL_DEPTH,
+            public_abi::top_limits::WASM_STACK_VALUE_SLOTS,
         );
 
     base_conf
@@ -424,6 +424,13 @@ pub async fn spawn(
         return Err(rt::SpawnError {
             error: rt::errors::Error::vm(public_abi::VmError::out_of().vm_recursion()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
+        });
+    }
+
+    if !limiter.consume(crate::public_abi::memory_limiter_consts::VM_SPAWN_COST) {
+        return Err(SpawnError {
+            error: errors::Error::vm(crate::public_abi::VmError::out_of().memory().val()).into(),
+            state: Box::new(SpawnErrorState::Unspawned(vm)),
         });
     }
 

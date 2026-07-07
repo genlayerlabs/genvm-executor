@@ -342,7 +342,7 @@ fn fold_det_fingerprint(
 fn log_runner_load(id: symbol_table::GlobalSymbol, size: u32, status: &'static str) {
     log_info!(
         runner = id.as_str(),
-        runner_load_cost = public_abi_pending::RUNNER_LOAD_COST,
+        runner_load_cost = public_abi::memory_limiter_consts::RUNNER_LOAD_COST,
         size = size,
         status = status;
         "runner load"
@@ -378,7 +378,7 @@ fn out_of_memory() -> anyhow::Error {
 fn charge_load(limiter: &rt::memlimiter::Limiter, size: usize) -> anyhow::Result<()> {
     let ok = u32::try_from(size)
         .ok()
-        .and_then(|size| public_abi_pending::RUNNER_LOAD_COST.checked_add(size))
+        .and_then(|size| public_abi::memory_limiter_consts::RUNNER_LOAD_COST.checked_add(size))
         .is_some_and(|amount| limiter.consume(amount));
     if !ok {
         return Err(out_of_memory());
@@ -1376,7 +1376,8 @@ mod tests {
 
     #[test]
     fn charge_load_consumes_runner_load_cost_plus_size() {
-        let limiter = limiter_with_budget(public_abi_pending::RUNNER_LOAD_COST + 100);
+        let limiter =
+            limiter_with_budget(public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 100);
         charge_load(&limiter, 100).unwrap();
         assert_eq!(
             limiter.get_remaining_memory(),
@@ -1387,7 +1388,7 @@ mod tests {
 
     #[test]
     fn charge_load_oom_charges_nothing() {
-        let budget = public_abi_pending::RUNNER_LOAD_COST + 99;
+        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 99;
         let limiter = limiter_with_budget(budget);
         let err = charge_load(&limiter, 100).unwrap_err();
         assert!(
@@ -1418,7 +1419,7 @@ mod tests {
     #[test]
     fn inherit_load_charges_once_then_is_free() {
         // Grant pins have total_size 1 (see `pin`).
-        let budget = 2 * (public_abi_pending::RUNNER_LOAD_COST + 1);
+        let budget = 2 * (public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 1);
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
         let granted = pin(custom_id(1));
@@ -1427,7 +1428,7 @@ mod tests {
         let after_first = limiter.get_remaining_memory();
         assert_eq!(
             budget - after_first,
-            public_abi_pending::RUNNER_LOAD_COST + 1
+            public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 1
         );
         assert!(loaded.contains(custom_id(1)), "grant must be pinned");
 
@@ -1443,7 +1444,7 @@ mod tests {
     #[test]
     fn inherit_load_oom_leaves_loaded_set_unchanged() {
         // One short of RUNNER_LOAD_COST + total_size(=1).
-        let budget = public_abi_pending::RUNNER_LOAD_COST;
+        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST;
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1510,7 +1511,7 @@ mod tests {
     async fn register_charges_runner_load_cost_plus_code_len_and_pins() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let budget = 2 * (public_abi_pending::RUNNER_LOAD_COST + code.len() as u32);
+        let budget = 2 * (public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32);
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1521,7 +1522,7 @@ mod tests {
         assert_eq!(id, custom_id_of(&code));
         assert_eq!(
             budget - limiter.get_remaining_memory(),
-            public_abi_pending::RUNNER_LOAD_COST + code.len() as u32
+            public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32
         );
         assert!(loaded.contains(id), "registered runner must be resolvable");
     }
@@ -1556,7 +1557,7 @@ mod tests {
     async fn register_oom_charges_and_registers_nothing() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let budget = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32 - 1;
+        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32 - 1;
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1580,7 +1581,7 @@ mod tests {
         let registry = runners::cache::WeakCache::new();
         // Not a zip, not wasm, not UTF-8 text: parse fails on the bytes alone.
         let code = bytes::Bytes::from_static(b"\xff\xfe\xfd");
-        let budget = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32;
+        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32;
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1632,7 +1633,7 @@ mod tests {
         );
 
         // Child spawn: inherit load actions charge the child's own limiter.
-        let cost = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32;
+        let cost = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32;
         let child_limiter = limiter_with_budget(cost);
         let mut child = runners::cache::LoadedSet::default();
         for grant in grants {
@@ -1650,7 +1651,7 @@ mod tests {
     async fn register_dead_content_reparses_and_recharges_identically() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let cost = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32;
+        let cost = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32;
         let limiter = limiter_with_budget(2 * cost);
 
         let mut loaded = runners::cache::LoadedSet::default();
