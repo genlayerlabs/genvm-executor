@@ -20,6 +20,7 @@ pub mod version;
 
 pub mod expr;
 pub mod host_fns;
+pub mod public_abi_pending;
 pub mod util;
 
 pub mod domain;

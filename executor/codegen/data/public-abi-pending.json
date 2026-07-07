@@ -1,0 +1,8 @@
+[
+  {
+    "type": "const",
+    "name": "runner_load_cost",
+    "repr": "u32",
+    "value": 4096
+  }
+]

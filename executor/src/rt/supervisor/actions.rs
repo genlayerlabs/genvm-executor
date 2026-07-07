@@ -338,11 +338,11 @@ fn fold_det_fingerprint(
 
 /// The stable per-load-action observability line (ADR-012): operators and the
 /// integration harness grep for the `runner load` message. `status` is
-/// `charged` or `cached`. (`const` is a Rust keyword, hence `load_const`.)
+/// `charged` or `cached`. (`const` is a Rust keyword, hence `runner_load_cost`.)
 fn log_runner_load(id: symbol_table::GlobalSymbol, size: u32, status: &'static str) {
     log_info!(
         runner = id.as_str(),
-        load_const = host_fns::LOAD_CONST,
+        runner_load_cost = public_abi_pending::RUNNER_LOAD_COST,
         size = size,
         status = status;
         "runner load"
@@ -353,13 +353,13 @@ fn out_of_memory() -> anyhow::Error {
     rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into()
 }
 
-/// Charges `LOAD_CONST + size` to the VM's limiter, OOM on failure (ADR-012 §1).
+/// Charges `RUNNER_LOAD_COST + size` to the VM's limiter, OOM on failure (ADR-012 §1).
 /// A `size` past `u32::MAX`, or a sum that overflows, cannot fit any budget and
 /// maps to the same OOM.
 fn charge_load(limiter: &rt::memlimiter::Limiter, size: usize) -> anyhow::Result<()> {
     let ok = u32::try_from(size)
         .ok()
-        .and_then(|size| host_fns::LOAD_CONST.checked_add(size))
+        .and_then(|size| public_abi_pending::RUNNER_LOAD_COST.checked_add(size))
         .is_some_and(|amount| limiter.consume(amount));
     if !ok {
         return Err(out_of_memory());
@@ -383,7 +383,7 @@ fn record_charged_load(
     log_runner_load(id, size, "charged");
 }
 
-/// Attaches to an already-materialized shared cell: charges `LOAD_CONST + size`
+/// Attaches to an already-materialized shared cell: charges `RUNNER_LOAD_COST + size`
 /// then records the load. Its charge equals a miss's by content-determinism, so
 /// a VM cannot observe whether it materialized or attached (ADR-012 §1).
 fn attach_load(
@@ -401,7 +401,7 @@ fn attach_load(
 /// The **load action**: the single way any runner enters a VM (ADR-012 §1).
 ///
 /// 1. already in the VM's loaded set → free, done;
-/// 2. else charge `LOAD_CONST + size` to `limiter` (OOM on failure),
+/// 2. else charge `RUNNER_LOAD_COST + size` to `limiter` (OOM on failure),
 ///    materialize-or-attach the content, insert the pin, fold the det
 ///    fingerprint.
 ///
@@ -504,7 +504,7 @@ pub(crate) async fn load_action(
                 .into());
             }
             // Read the 4-byte length prefix, charge, then fetch the blob inside
-            // the creator: a single `LOAD_CONST + code_size` charge covers the peak
+            // the creator: a single `RUNNER_LOAD_COST + code_size` charge covers the peak
             // (ADR-012 §1) — the old chain double-charge is gone.
             let code_size = storage
                 .read_code_len(slot)
@@ -558,7 +558,7 @@ pub(crate) fn inherit_load(
 /// guarantees), in check order:
 ///
 /// 1. already in this VM's loaded set → free no-op, same id;
-/// 2. charge `LOAD_CONST + code.len()` → OOM error, nothing charged or
+/// 2. charge `RUNNER_LOAD_COST + code.len()` → OOM error, nothing charged or
 ///    registered;
 /// 3. parse (attach to a live registry entry, or parse and insert) → a parse
 ///    failure is a deterministic invalid-contract error; the charge is retained
@@ -1333,19 +1333,19 @@ mod tests {
     }
 
     #[test]
-    fn charge_load_consumes_load_const_plus_size() {
-        let limiter = limiter_with_budget(host_fns::LOAD_CONST + 100);
+    fn charge_load_consumes_runner_load_cost_plus_size() {
+        let limiter = limiter_with_budget(public_abi_pending::RUNNER_LOAD_COST + 100);
         charge_load(&limiter, 100).unwrap();
         assert_eq!(
             limiter.get_remaining_memory(),
             0,
-            "charge must be exactly LOAD_CONST + size"
+            "charge must be exactly RUNNER_LOAD_COST + size"
         );
     }
 
     #[test]
     fn charge_load_oom_charges_nothing() {
-        let budget = host_fns::LOAD_CONST + 99;
+        let budget = public_abi_pending::RUNNER_LOAD_COST + 99;
         let limiter = limiter_with_budget(budget);
         let err = charge_load(&limiter, 100).unwrap_err();
         assert!(
@@ -1361,7 +1361,7 @@ mod tests {
 
     #[test]
     fn charge_load_size_overflow_is_oom() {
-        // LOAD_CONST + u32::MAX overflows; must map to OOM, not wrap.
+        // RUNNER_LOAD_COST + u32::MAX overflows; must map to OOM, not wrap.
         let limiter = rt::memlimiter::Limiter::new("actions-test");
         let err = charge_load(&limiter, u32::MAX as usize).unwrap_err();
         assert!(
@@ -1376,14 +1376,17 @@ mod tests {
     #[test]
     fn inherit_load_charges_once_then_is_free() {
         // Grant pins have total_size 1 (see `pin`).
-        let budget = 2 * (host_fns::LOAD_CONST + 1);
+        let budget = 2 * (public_abi_pending::RUNNER_LOAD_COST + 1);
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
         let granted = pin(custom_id(1));
 
         inherit_load(&limiter, &mut loaded, None, granted.clone()).unwrap();
         let after_first = limiter.get_remaining_memory();
-        assert_eq!(budget - after_first, host_fns::LOAD_CONST + 1);
+        assert_eq!(
+            budget - after_first,
+            public_abi_pending::RUNNER_LOAD_COST + 1
+        );
         assert!(loaded.contains(custom_id(1)), "grant must be pinned");
 
         // Same id again (e.g. also the child's custom entry point): free.
@@ -1397,8 +1400,8 @@ mod tests {
 
     #[test]
     fn inherit_load_oom_leaves_loaded_set_unchanged() {
-        // One short of LOAD_CONST + total_size(=1).
-        let budget = host_fns::LOAD_CONST;
+        // One short of RUNNER_LOAD_COST + total_size(=1).
+        let budget = public_abi_pending::RUNNER_LOAD_COST;
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1462,10 +1465,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_charges_load_const_plus_code_len_and_pins() {
+    async fn register_charges_runner_load_cost_plus_code_len_and_pins() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let budget = 2 * (host_fns::LOAD_CONST + code.len() as u32);
+        let budget = 2 * (public_abi_pending::RUNNER_LOAD_COST + code.len() as u32);
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1476,7 +1479,7 @@ mod tests {
         assert_eq!(id, custom_id_of(&code));
         assert_eq!(
             budget - limiter.get_remaining_memory(),
-            host_fns::LOAD_CONST + code.len() as u32
+            public_abi_pending::RUNNER_LOAD_COST + code.len() as u32
         );
         assert!(loaded.contains(id), "registered runner must be resolvable");
     }
@@ -1511,7 +1514,7 @@ mod tests {
     async fn register_oom_charges_and_registers_nothing() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let budget = host_fns::LOAD_CONST + code.len() as u32 - 1;
+        let budget = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32 - 1;
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1535,7 +1538,7 @@ mod tests {
         let registry = runners::cache::WeakCache::new();
         // Not a zip, not wasm, not UTF-8 text: parse fails on the bytes alone.
         let code = bytes::Bytes::from_static(b"\xff\xfe\xfd");
-        let budget = host_fns::LOAD_CONST + code.len() as u32;
+        let budget = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32;
         let limiter = limiter_with_budget(budget);
         let mut loaded = runners::cache::LoadedSet::default();
 
@@ -1587,7 +1590,7 @@ mod tests {
         );
 
         // Child spawn: inherit load actions charge the child's own limiter.
-        let cost = host_fns::LOAD_CONST + code.len() as u32;
+        let cost = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32;
         let child_limiter = limiter_with_budget(cost);
         let mut child = runners::cache::LoadedSet::default();
         for grant in grants {
@@ -1605,7 +1608,7 @@ mod tests {
     async fn register_dead_content_reparses_and_recharges_identically() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let cost = host_fns::LOAD_CONST + code.len() as u32;
+        let cost = public_abi_pending::RUNNER_LOAD_COST + code.len() as u32;
         let limiter = limiter_with_budget(2 * cost);
 
         let mut loaded = runners::cache::LoadedSet::default();

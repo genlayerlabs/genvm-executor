@@ -100,3 +100,21 @@ impl std::fmt::Display for SlotID {
         f.write_str(&genlayer_sdk::gvm32::encode(&self.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Golden vector for the slot indirection derivation
+    /// `sha3_256(slot_id || offset.to_le_bytes(4))`. The exact same constant is pinned
+    /// in the Python SDK test (`tests/test_slot_indirection_golden.py`) so the two
+    /// derivations can never silently diverge.
+    #[test]
+    fn slot_indirection_golden_vector() {
+        let derived = SlotID::ZERO.indirection(2);
+        assert_eq!(
+            hex::encode(derived.0),
+            "ba005630745acf3014aaf162e9933040302ca0bef3f56fe2d73c0a08f82c610b"
+        );
+    }
+}

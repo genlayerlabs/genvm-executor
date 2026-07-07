@@ -251,6 +251,15 @@ static BUILTINS: std::sync::LazyLock<std::collections::HashMap<&'static str, Arc
                         .magnitude()
                         .try_into()
                         .map_err(|_| EvalError::ExponentTooLarge)?;
+                    // `pow` takes a `usize`; `exp as usize` would silently truncate on a
+                    // <64-bit host. GenVM only targets 64-bit hosts (asserted below), and
+                    // we additionally reject exponents that do not fit `usize` rather than
+                    // truncate. On 64-bit `usize::MAX as u64 == u64::MAX`, so this check is
+                    // never taken and behavior is unchanged.
+                    const _: () = assert!(usize::BITS >= 64);
+                    if exp > usize::MAX as u64 {
+                        return Err(EvalError::ExponentTooLarge);
+                    }
                     let result = num_traits::pow::pow(base.clone(), exp as usize);
                     if negative {
                         if result.is_zero() {

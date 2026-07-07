@@ -557,6 +557,16 @@ impl Context {
     pub fn new(data: Box<SingleVMData>, limiter: rt::memlimiter::Limiter) -> Self {
         let now = std::time::Instant::now();
 
+        // Every VM's config passes through here. Invariant: only a `Default`-state
+        // VM reads through its local storage cache (read-your-writes); a VM with a
+        // non-`Default` state_mode reads bypass the cache, so it must not be able to
+        // write (otherwise its writes would hit the cache but never be read back).
+        debug_assert!(
+            data.conf.state_mode == public_abi::StorageType::Default
+                || !data.conf.can_write_storage,
+            "a VM with state_mode != Default must not have can_write_storage"
+        );
+
         Self {
             data: *data,
             loaded: Default::default(),
@@ -1964,7 +1974,7 @@ impl ContextVFS<'_> {
         }
 
         // The load action registers the content (weak registry, dedup while
-        // alive), charges `LOAD_CONST + code.len()` to this VM before parsing, and
+        // alive), charges `RUNNER_LOAD_COST + code.len()` to this VM before parsing, and
         // pins it into this VM's loaded set — scoping it to this execution and its
         // deterministic children only (ADR-012 §3). RegisterRunner is det-only, so
         // the load folds into the det fingerprint.

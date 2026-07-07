@@ -10,6 +10,6 @@ local util = import 'templates/util.jsonnet';
 		runner_load_asserts: [
 			{runner_prefix: 'custom:', match: {status: 'charged'}, count: 1},
 			{runner_prefix: 'custom:', match: {status: 'cached'}, count: 1},
-			{runner_prefix: 'custom:', match: {load_const: 4096}, min: 1},
+			{runner_prefix: 'custom:', match: {runner_load_cost: 4096}, min: 1},
 		],
 	}])}

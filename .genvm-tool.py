@@ -167,6 +167,15 @@ def configure(line):
 	which imports every active line's runners.
 	"""
 	line.register_standard_codegen()
+	# Pending public-abi constants (ADR-012): constants that logically belong to
+	# the public ABI but are parked here so they do not regenerate the runner
+	# `public_abi.py` (which would change frozen runner hashes). Generated into the
+	# `common` crate only — never the runner tree.
+	line.codegen(
+		line.exec_root / 'executor/crates/common/src/public_abi_pending.rs',
+		'rust',
+		line.exec_root / 'executor/codegen/data/public-abi-pending.json',
+	)
 	line.register_standard_crates()
 	line.nix_manifests()
 	line.install_tree()

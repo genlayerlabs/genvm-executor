@@ -235,6 +235,13 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
     if name.is_empty() || hash.is_empty() {
         return None;
     }
+    // ADR-011 reserves `contract`, `chain` and `custom` as prefixes. `chain:`/`custom:`
+    // are already handled above; a `contract:<hash>` id must not fall through to the
+    // generic builtin arm (the bare `contract` literal is handled at the top).
+    if matches!(name, "contract" | "chain" | "custom") {
+        log_warn!("`{name}` is a reserved runner name and cannot be used as a builtin");
+        return None;
+    }
     for c in name.chars() {
         if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
             log_warn!("character `{c}` is not allowed in runner id");
@@ -248,6 +255,35 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
         name: name.to_owned(),
         hash: hash.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod parse_runner_id_tests {
+    use super::*;
+
+    #[test]
+    fn bare_contract_literal_is_special_cased() {
+        assert!(matches!(
+            parse_runner_id("contract"),
+            Some(IdUnresolved::Contract)
+        ));
+    }
+
+    #[test]
+    fn contract_is_a_reserved_builtin_name() {
+        // ADR-011 reserves `contract`; a `contract:<hash>` id must not fall through to
+        // the generic `name:hash` builtin arm.
+        assert!(parse_runner_id("contract:abc123").is_none());
+    }
+
+    #[test]
+    fn ordinary_builtin_still_parses() {
+        assert!(matches!(
+            parse_runner_id("py:abc123"),
+            Some(IdUnresolved::Builtin { name, hash })
+                if name == "py" && hash == "abc123"
+        ));
+    }
 }
 
 /// The dev-mode magic builtin/custom runner hash. Its GVM32 form is the literal

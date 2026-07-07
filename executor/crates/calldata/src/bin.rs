@@ -315,7 +315,17 @@ impl Default for Options {
 
 pub fn decode_with(data: &[u8], opts: &Options) -> Result<Value, BinDecodeError> {
     let mut parser = Parser(data);
-    parser.fetch_val(opts)
+
+    let ret = parser.fetch_val(opts)?;
+
+    if !parser.0.is_empty() {
+        return Err(BinDecodeError::UnexpectedEnd {
+            expected: 0,
+            available: parser.0.len(),
+        });
+    }
+
+    Ok(ret)
 }
 
 pub fn decode(data: &[u8]) -> Result<Value, BinDecodeError> {
@@ -405,4 +415,124 @@ pub fn encode(value: &Value) -> Vec<u8> {
     }
 
     ret
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn num(v: i64) -> Value {
+        Value::Number(num_bigint::BigInt::from(v))
+    }
+
+    fn map(entries: &[(&str, Value)]) -> Value {
+        Value::Map(
+            entries
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect::<BTreeMap<_, _>>(),
+        )
+    }
+
+    /// Shared cross-language corpus: `(logical value, expected canonical hex)`.
+    /// The exact same hex is pinned in the Python encoder test
+    /// (`tests/test_calldata_corpus.py`) so the two encoders can never silently diverge.
+    fn corpus() -> Vec<(Value, &'static str)> {
+        vec![
+            // boundary ints
+            (num(0), "01"),
+            (num(-1), "02"),
+            (
+                Value::Number(num_bigint::BigInt::from(1u128 << 64)),
+                "81808080808080808010",
+            ),
+            (
+                Value::Number(-num_bigint::BigInt::from(1u128 << 64)),
+                "faffffffffffffffff0f",
+            ),
+            // strings / bytes
+            (Value::Str(String::new()), "04"),
+            (Value::Str("hello".to_owned()), "2c68656c6c6f"),
+            (Value::Bytes(vec![1, 2, 3]), "1b010203"),
+            // a map whose content-order ("aa" < "z") differs from length-order
+            (map(&[("z", num(1)), ("aa", num(2))]), "1602616111017a09"),
+            // nested containers
+            (
+                map(&[
+                    ("", Value::Null),
+                    (
+                        "a",
+                        Value::Array(vec![num(1), num(2), map(&[("b", Value::Bool(false))])]),
+                    ),
+                ]),
+                "16000001611d09110e016208",
+            ),
+        ]
+    }
+
+    #[test]
+    fn calldata_corpus_encode_and_roundtrip() {
+        for (value, expected_hex) in corpus() {
+            let encoded = encode(&value);
+            assert_eq!(
+                hex::encode(&encoded),
+                expected_hex,
+                "encoding mismatch for {value:?}"
+            );
+            let decoded = decode(&encoded).expect("decode of own encoding must succeed");
+            assert_eq!(decoded, value, "roundtrip mismatch for {value:?}");
+        }
+    }
+
+    #[test]
+    fn decode_rejects_trailing_bytes() {
+        let mut data = encode(&num(0));
+        data.push(0xff);
+        assert!(matches!(
+            decode(&data),
+            Err(BinDecodeError::UnexpectedEnd { .. })
+        ));
+    }
+
+    #[test]
+    fn decode_with_rejects_trailing_bytes() {
+        let mut data = encode(&num(0));
+        data.push(0xff);
+        assert!(matches!(
+            decode_with(&data, &Options::default()),
+            Err(BinDecodeError::UnexpectedEnd { .. })
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_non_minimal_uleb() {
+        // `0x80, 0x00`: a continuation byte followed by an all-zero final octet is a
+        // non-minimal (non-canonical) uleb encoding.
+        assert!(matches!(
+            decode(&[0x80, 0x00]),
+            Err(BinDecodeError::InvalidUlebEncoding)
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_unsorted_map_keys() {
+        // map(2) { "b": null, "a": null } — keys out of order.
+        let data = [0x16, 0x01, b'b', 0x00, 0x01, b'a', 0x00];
+        assert!(matches!(
+            decode(&data),
+            Err(BinDecodeError::InvalidMapOrdering { .. })
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_duplicate_map_keys() {
+        // map(2) { "a": null, "a": null } — duplicate keys are not strictly increasing.
+        let data = [0x16, 0x01, b'a', 0x00, 0x01, b'a', 0x00];
+        assert!(matches!(
+            decode(&data),
+            Err(BinDecodeError::InvalidMapOrdering { .. })
+        ));
+    }
 }

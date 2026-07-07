@@ -2,7 +2,7 @@
 from genlayer.vm import register_runner
 
 # ADR-012 §3 register ladder, malformed path: `RegisterRunner` charges
-# `LOAD_CONST + len(code)` *before* parsing, so a parse failure is a
+# `RUNNER_LOAD_COST + len(code)` *before* parsing, so a parse failure is a
 # deterministic invalid-contract error with the charge retained (released with
 # the VM) and the runner never resolvable. Observable here as: exactly one
 # `charged` custom record (the earlier valid registration) and none for the

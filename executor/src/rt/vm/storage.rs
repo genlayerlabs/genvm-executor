@@ -485,7 +485,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
     /// Reads the 4-byte little-endian length prefix of the code blob at
     /// `code_slot`. Cheap (one slot read, no fee metering) — the runner load
     /// action reads this first to learn the size to charge *before* fetching the
-    /// blob, so a single `LOAD_CONST + code_size` charge covers the peak
+    /// blob, so a single `RUNNER_LOAD_COST + code_size` charge covers the peak
     /// (ADR-012 §1).
     pub async fn read_code_len(&mut self, code_slot: SlotID) -> rt::errors::Result<u32> {
         let mut len_buf = [0; 4];
