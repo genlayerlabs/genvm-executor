@@ -22,8 +22,6 @@ pub mod expr;
 pub mod host_fns;
 pub mod util;
 
-pub mod domain;
-
 #[cfg(not(debug_assertions))]
 fn default_log_level() -> logger::Level {
     logger::Level::Info

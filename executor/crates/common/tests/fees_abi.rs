@@ -1,8 +1,8 @@
-use genlayer_sdk::abi::gl_call::On;
-use genvm_common::domain::fees::{
+use genlayer_sdk::abi::fees::{
     ExternalMessageParams, InternalMessageParams, MessageAllocationNode,
     MessageAllocationNodeParams,
 };
+use genlayer_sdk::abi::gl_call::On;
 use primitive_types::U256;
 
 /// Concatenates 32-byte big-endian ABI words into one buffer.

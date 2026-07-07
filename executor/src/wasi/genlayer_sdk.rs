@@ -9,7 +9,7 @@ use sha3::digest::Update;
 use wiggle::GuestError;
 
 use crate::host::{self, SlotID};
-use crate::{anyhow_to_wasmtime, calldata, public_abi, rt, runners, wasi};
+use crate::{anyhow_to_wasmtime, calldata, domain, public_abi, rt, runners, wasi};
 
 use genlayer_calldata::codec::Encode;
 pub use genlayer_sdk::abi::entry::ExtendedMessage;

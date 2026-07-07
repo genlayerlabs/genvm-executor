@@ -1,4 +1,4 @@
-use crate::{public_abi, rt, wasi};
+use crate::{domain, public_abi, rt, wasi};
 
 use genlayer_calldata::codec::Encode;
 use genlayer_sdk::abi;
