@@ -780,305 +780,17 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 address,
                 calldata,
                 value,
-            } => {
-                if !self.context.data.conf.permissions.deterministic {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-                if !self.context.data.conf.permissions.send_messages {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                if !value.is_zero() {
-                    let my_balance = self
-                        .context
-                        .get_balance_impl(self.context.data.message_data.message.contract_address)
-                        .await?;
-
-                    if !checked_sum_le(
-                        value,
-                        self.context.data.accumulator.messages_value_decremented,
-                        my_balance,
-                    ) {
-                        return Err(generated::types::Errno::Inbalance.into());
-                    }
-                }
-
-                let mut call_key = abi::CallKey([0u8; 32]);
-                if calldata.len() < 4 {
-                    log_warn!(len = calldata.len(); "calldata too short for method selector, using unnamed call key");
-                } else {
-                    call_key.0[..4].copy_from_slice(&calldata[..4]);
-                }
-
-                let Some((matched_node, matched_params)) = self
-                    .context
-                    .data
-                    .accumulator
-                    .message_fee_allocation
-                    .iter_mut()
-                    .find_map(|node| {
-                        node.matches_external(address, call_key)
-                            .map(|params| (node, params))
-                    })
-                else {
-                    log_warn!(
-                        recipient = address,
-                        call_key:? = call_key;
-                        "no matching node for message fee allocation"
-                    );
-
-                    return Err(internal_trap(rt::errors::Error::vm_detailed(
-                        abi::consts::VmError::fee().no_matching_node(),
-                        host_fns::VmErrorDetail::external(),
-                    )));
-                };
-
-                let calldata_length = calldata.len() as u64;
-
-                let fees = consume_message_fee_external(
-                    &self.context.data.supervisor.shared_data,
-                    matched_node,
-                    matched_params,
-                    gl_call::On::Finalized,
-                    ConsumeExternalArgs {
-                        is_deploy: false,
-                        calldata_length,
-                    },
-                )
-                .await?;
-
-                self.context
-                    .data
-                    .accumulator
-                    .emissions
-                    .push(domain::ExecutionEmission::EthSend {
-                        address,
-                        calldata,
-                        value,
-                        message_fee: fees.message_fee.reported_fee(),
-                        receipt_fee: fees.receipt_fee.reported_fee(),
-                        fee_params: matched_params,
-                    });
-
-                self.context.data.accumulator.messages_value_decremented = self
-                    .context
-                    .data
-                    .accumulator
-                    .messages_value_decremented
-                    .saturating_add(value);
-                Ok(file_fd_none())
-            }
+            } => self.gl_call_eth_send(address, calldata, value).await,
             gl_call::Message::EthCall { address, calldata } => {
-                if !self.context.data.conf.permissions.deterministic {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-                if !self.context.data.conf.permissions.call_others {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                let supervisor = self.context.data.supervisor.clone();
-                let data = supervisor
-                    .host
-                    .lock_for(host::host_fns::Methods::EthCall)
-                    .await
-                    .eth_call(address, &calldata)
-                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-                self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
+                self.gl_call_eth_call(address, calldata).await
             }
             gl_call::Message::CallContract {
                 address,
                 calldata,
-                mut state,
-            } => {
-                if !self.context.data.conf.permissions.deterministic {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-                if !self.context.data.conf.permissions.call_others {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                let supervisor = self.context.data.supervisor.clone();
-
-                let my_conf = self.context.data.conf.clone();
-
-                let calldata_encoded = calldata::encode_obj(&calldata);
-
-                let mut my_data = self
-                    .context
-                    .data
-                    .message_data
-                    .fork(public_abi::EntryKind::Main, calldata_encoded.into());
-                my_data.message.stack.push(my_data.message.contract_address);
-
-                if state == public_abi::StorageType::Default {
-                    state = my_conf.execution.state_mode;
-                }
-
-                let mut child_storage = rt::vm::storage::Storage::new(
-                    address,
-                    supervisor.get_storage_limiter(),
-                    StorageHostHolder(
-                        supervisor.host.clone(),
-                        ReadToken {
-                            account: address,
-                            mode: state,
-                        },
-                    ),
-                );
-
-                let code_slot = child_storage
-                    .check_major_and_resolve_code_slot()
-                    .await
-                    .map_err(|e| {
-                        generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into()))
-                    })?;
-
-                let vm_data = Box::new(SingleVMData {
-                    depth: self.context.data.depth + 1,
-                    spawn_kind: "call_contract".to_owned(),
-                    // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
-                    conf: base::Config {
-                        needs_error_fingerprint: true,
-                        permissions: base::Permissions {
-                            deterministic: true,
-                            write_storage: false,
-                            spawn_nondet: false,
-                            call_others: my_conf.permissions.call_others,
-                            send_messages: false,
-                            register_runners: my_conf.permissions.register_runners,
-                            can_use_balance_for_message_fees: false,
-                        },
-                        execution: base::Execution {
-                            state_mode: state,
-                            topmost_runner_id: runners::Id::Chain {
-                                address,
-                                on: if state == public_abi::StorageType::LatestFinal {
-                                    runners::ChainState::Finalized
-                                } else {
-                                    runners::ChainState::Accepted
-                                },
-                                slot: code_slot,
-                            },
-                        },
-                    },
-                    message_data: ExtendedMessage {
-                        message: genlayer_sdk::abi::entry::MessageData {
-                            contract_address: address,
-                            sender_address: my_data.message.sender_address,
-                            origin_address: my_data.message.origin_address,
-                            signer_address: my_data.message.signer_address,
-                            value: num_bigint::BigInt::ZERO,
-                            is_init: false,
-                            datetime: my_data.message.datetime,
-                            chain_id: my_data.message.chain_id,
-                            stack: my_data.message.stack,
-                        },
-                        entry_kind: my_data.entry_kind,
-                        entry_data: my_data.entry_data,
-                        entry_stage_data: default_entry_stage_data(),
-                    },
-                    storage: child_storage,
-                    supervisor: supervisor.clone(),
-                    accumulator: VMDataAccumulator {
-                        data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
-                        messages_value_decremented: primitive_types::U256::zero(),
-                        emissions: Vec::new(),
-                        message_fee_allocation: Vec::new(),
-                    },
-                    det_subvm_hashes: Default::default(),
-                    // A CallContract child is granted the caller's full custom set
-                    // (ADR-012 §4); its spawn load-actions each into the child.
-                    granted_custom: self.context.loaded.custom_pins(),
-                });
-
-                let res = spawn_sub_vm(supervisor.clone(), vm_data)
-                    .await
-                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                // The child is read-only (static), so its accumulator must be
-                // empty — otherwise an effect was charged but discarded here.
-                res.vm_data
-                    .accumulator
-                    .check_empty()
-                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                let hash = res.small_hash();
-                self.context.data.det_subvm_hashes.update(&hash);
-
-                self.set_vm_run_result(res.run_ok).map(|x| x.0)
-            }
+                state,
+            } => self.gl_call_contract(address, calldata, state).await,
             gl_call::Message::EmitEvent { topics, blob } => {
-                if !self.context.data.conf.permissions.deterministic {
-                    log_warn!("EmitEvent requires deterministic mode");
-
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-                // Events are state-mutating log emissions, so they require the
-                // same write capability as storage. A read-only sub-VM (e.g. a
-                // `CallContract` child) must not emit events; otherwise the
-                // emission is charged but later discarded with the child.
-                if !self.context.data.conf.permissions.write_storage {
-                    log_warn!("EmitEvent requires write_storage permission");
-
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                if topics.len() > public_abi::EVENT_MAX_TOPICS as usize {
-                    log_warn!(cnt = topics.len(), max = public_abi::EVENT_MAX_TOPICS; "too many topics");
-                    return Err(generated::types::Errno::Inval.into());
-                }
-
-                let mut real_topics: Vec<bytes::Bytes> =
-                    Vec::with_capacity(public_abi::EVENT_MAX_TOPICS as usize + 1);
-
-                for (i, t) in topics.iter().enumerate() {
-                    if t.len() != 32 {
-                        log_warn!(len = t.len(); "invalid topic length");
-
-                        return Err(generated::types::Errno::Inval.into());
-                    }
-
-                    real_topics.push(t.clone());
-                }
-
-                struct CountingWriter(usize);
-                impl calldata::Writer for CountingWriter {
-                    type Error = std::convert::Infallible;
-
-                    fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-                        self.0 += data.len();
-                        Ok(())
-                    }
-                }
-
-                let mut enc = calldata::Encoder::new(CountingWriter(0));
-                blob.encode(&mut enc).unwrap_or_else(|e| match e {});
-                let blob_size = enc.into_inner().0 as u64;
-
-                let supervisor = self.context.data.supervisor.clone();
-                let topics_count = topics.len() as u64;
-
-                let storage_fee = supervisor
-                    .shared_data
-                    .data_fees_limit
-                    .consume_event(blob_size, topics_count)
-                    .await
-                    .map_err(internal_trap)?
-                    .ok_or_else(|| {
-                        internal_trap(rt::errors::Error::vm(
-                            abi::consts::VmError::out_of().receipt().event(),
-                        ))
-                    })?;
-
-                self.context.data.accumulator.emissions.push(
-                    domain::ExecutionEmission::EmitEvent {
-                        topics: real_topics,
-                        blob,
-                        storage_fee,
-                    },
-                );
-
-                Ok(file_fd_none())
+                self.gl_call_emit_event(topics, blob).await
             }
             gl_call::Message::PostMessage {
                 address,
@@ -1088,199 +800,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 use_balance,
                 fee_params,
             } => {
-                log_debug!(
-                    recipient = address,
-                    on:? = on,
-                    use_balance = use_balance;
-                    "PostMessage dispatched"
-                );
-                if !self.context.data.conf.permissions.deterministic {
-                    log_debug!("PostMessage rejected: non-deterministic context (Forbidden)");
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-                if !self.context.data.conf.permissions.send_messages {
-                    log_debug!("PostMessage rejected: can_send_messages=false (Forbidden)");
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                let balance_params = validate_balance_fee(
-                    self.context
-                        .data
-                        .conf
-                        .permissions
-                        .can_use_balance_for_message_fees,
-                    use_balance,
-                    fee_params,
-                )?;
-
-                // Peek the (possibly deferred) calldata to derive the fee call key.
-                let calldata_materialized = calldata.clone().materialize().ok();
-                let method_name = calldata_materialized
-                    .as_ref()
-                    .and_then(|x| x.as_map())
-                    .and_then(|x| x.get(""))
-                    .and_then(|x| x.as_str());
-                let call_key = if let Some(method_name) = method_name {
-                    abi::CallKey::for_method(method_name)
-                } else {
-                    abi::CallKey::UNNAMED
-                };
-
-                if let Some(params) = balance_params {
-                    let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
-                    calldata::codec::Encode::encode(&calldata, &mut enc)
-                        .unwrap_or_else(|e| match e {});
-                    let calldata_length = enc.into_inner().0;
-
-                    let my_balance = self
-                        .context
-                        .get_balance_impl(self.context.data.message_data.message.contract_address)
-                        .await?;
-                    let messages_value_decremented =
-                        self.context.data.accumulator.messages_value_decremented;
-
-                    let fees = consume_message_fee_internal(
-                        &self.context.data.supervisor.shared_data,
-                        FeeFunding::Balance {
-                            value,
-                            messages_value_decremented,
-                            my_balance,
-                        },
-                        Arc::new(params.clone()),
-                        on,
-                        ConsumeInternalArgs {
-                            is_deploy: false,
-                            calldata_length,
-                            code_length: 0,
-                            subtree_length: 0,
-                        },
-                    )
-                    .await?;
-
-                    let metered_fee = fees.message_fee.reported_fee();
-
-                    // Empty subtree: use_balance nesting is fail-closed on-chain.
-                    self.context.data.accumulator.emissions.push(
-                        domain::ExecutionEmission::PostMessage {
-                            call_key,
-                            address,
-                            calldata,
-                            value,
-                            on,
-                            message_fee: metered_fee,
-                            receipt_fee: fees.receipt_fee.reported_fee(),
-                            fee_params: params,
-                            subtree: bytes::Bytes::new(),
-                            use_balance: true,
-                        },
-                    );
-
-                    self.context.data.accumulator.messages_value_decremented =
-                        messages_value_decremented
-                            .saturating_add(value)
-                            .saturating_add(metered_fee);
-
-                    return Ok(file_fd_none());
-                }
-
-                if !value.is_zero() {
-                    let my_balance = self
-                        .context
-                        .get_balance_impl(self.context.data.message_data.message.contract_address)
-                        .await?;
-
-                    if !checked_sum_le(
-                        value,
-                        self.context.data.accumulator.messages_value_decremented,
-                        my_balance,
-                    ) {
-                        return Err(generated::types::Errno::Inbalance.into());
-                    }
-                }
-
-                let Some((matched_node, matched_params)) = self
-                    .context
-                    .data
-                    .accumulator
-                    .message_fee_allocation
-                    .iter_mut()
-                    .find_map(|node| {
-                        node.matches_internal(on, address, call_key)
-                            .map(|params| (node, params))
-                    })
-                else {
-                    log_warn!(
-                        recipient = address,
-                        call_key:? = call_key,
-                        on:? = on;
-                        "no matching node for message fee allocation"
-                    );
-
-                    return Err(internal_trap(rt::errors::Error::vm_detailed(
-                        abi::consts::VmError::fee().no_matching_node(),
-                        host_fns::VmErrorDetail::internal(),
-                    )));
-                };
-
-                log_debug!(
-                    recipient = address,
-                    call_key:? = call_key,
-                    on:? = on;
-                    "PostMessage matched fee allocation node"
-                );
-
-                let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
-                calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
-                let calldata_length = enc.into_inner().0;
-
-                let fee_params = (*matched_params).clone();
-                let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
-                    &matched_node.children,
-                ));
-
-                let fees = consume_message_fee_internal(
-                    &self.context.data.supervisor.shared_data,
-                    FeeFunding::Allocation(matched_node),
-                    matched_params,
-                    on,
-                    ConsumeInternalArgs {
-                        is_deploy: false,
-                        calldata_length,
-                        code_length: 0,
-                        subtree_length: subtree.len() as u64,
-                    },
-                )
-                .await?;
-
-                self.context.data.accumulator.emissions.push(
-                    domain::ExecutionEmission::PostMessage {
-                        call_key,
-                        address,
-                        calldata,
-                        value,
-                        on,
-                        message_fee: fees.message_fee.reported_fee(),
-                        receipt_fee: fees.receipt_fee.reported_fee(),
-                        fee_params,
-                        subtree,
-                        use_balance: false,
-                    },
-                );
-
-                log_debug!(
-                    depth = self.context.data.depth,
-                    emissions_total = self.context.data.accumulator.emissions.len();
-                    "PostMessage emission pushed to accumulator"
-                );
-
-                self.context.data.accumulator.messages_value_decremented = self
-                    .context
-                    .data
-                    .accumulator
-                    .messages_value_decremented
-                    .saturating_add(value);
-
-                Ok(file_fd_none())
+                self.gl_call_post_message(address, calldata, value, on, use_balance, fee_params)
+                    .await
             }
             gl_call::Message::DeployContract {
                 calldata,
@@ -1291,383 +812,29 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 use_balance,
                 fee_params,
             } => {
-                if !self.context.data.conf.permissions.deterministic {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-                if !self.context.data.conf.permissions.send_messages {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                let balance_params = validate_balance_fee(
-                    self.context
-                        .data
-                        .conf
-                        .permissions
-                        .can_use_balance_for_message_fees,
+                self.gl_call_deploy_contract(
+                    calldata,
+                    code,
+                    value,
+                    on,
+                    salt_nonce,
                     use_balance,
                     fee_params,
-                )?;
-
-                if let Some(params) = balance_params {
-                    let code_length = code.len() as u64;
-                    let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
-                    calldata::codec::Encode::encode(&calldata, &mut enc)
-                        .unwrap_or_else(|e| match e {});
-                    let calldata_length = enc.into_inner().0;
-
-                    let my_balance = self
-                        .context
-                        .get_balance_impl(self.context.data.message_data.message.contract_address)
-                        .await?;
-                    let messages_value_decremented =
-                        self.context.data.accumulator.messages_value_decremented;
-
-                    let fees = consume_message_fee_internal(
-                        &self.context.data.supervisor.shared_data,
-                        FeeFunding::Balance {
-                            value,
-                            messages_value_decremented,
-                            my_balance,
-                        },
-                        Arc::new(params.clone()),
-                        on,
-                        ConsumeInternalArgs {
-                            is_deploy: true,
-                            calldata_length,
-                            code_length,
-                            subtree_length: 0,
-                        },
-                    )
-                    .await?;
-
-                    let metered_fee = fees.message_fee.reported_fee();
-
-                    self.context.data.accumulator.emissions.push(
-                        domain::ExecutionEmission::DeployContract {
-                            calldata,
-                            code,
-                            value,
-                            on,
-                            salt_nonce,
-                            receipt_fee: fees.receipt_fee.reported_fee(),
-                            message_fee: metered_fee,
-                            fee_params: params,
-                            subtree: bytes::Bytes::new(),
-                            use_balance: true,
-                        },
-                    );
-
-                    self.context.data.accumulator.messages_value_decremented =
-                        messages_value_decremented
-                            .saturating_add(value)
-                            .saturating_add(metered_fee);
-
-                    return Ok(file_fd_none());
-                }
-
-                if !value.is_zero() {
-                    let my_balance = self
-                        .context
-                        .get_balance_impl(self.context.data.message_data.message.contract_address)
-                        .await?;
-
-                    if !checked_sum_le(
-                        value,
-                        self.context.data.accumulator.messages_value_decremented,
-                        my_balance,
-                    ) {
-                        return Err(generated::types::Errno::Inbalance.into());
-                    }
-                }
-
-                let Some((matched_node, matched_params)) = self
-                    .context
-                    .data
-                    .accumulator
-                    .message_fee_allocation
-                    .iter_mut()
-                    .find_map(|node| {
-                        node.matches_internal(on, calldata::Address::zero(), abi::CallKey::DEPLOY)
-                            .map(|params| (node, params))
-                    })
-                else {
-                    log_warn!(
-                        recipient = calldata::Address::zero(),
-                        call_key:? = abi::CallKey::DEPLOY,
-                        on:? = on;
-                        "no matching node for message fee allocation"
-                    );
-
-                    return Err(internal_trap(rt::errors::Error::vm_detailed(
-                        abi::consts::VmError::fee().no_matching_node(),
-                        host_fns::VmErrorDetail::internal(),
-                    )));
-                };
-
-                let code_length = code.len() as u64;
-                let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
-                calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
-                let calldata_length = enc.into_inner().0;
-
-                let fee_params = (*matched_params).clone();
-                let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
-                    &matched_node.children,
-                ));
-
-                let fees = consume_message_fee_internal(
-                    &self.context.data.supervisor.shared_data,
-                    FeeFunding::Allocation(matched_node),
-                    matched_params,
-                    on,
-                    ConsumeInternalArgs {
-                        is_deploy: true,
-                        calldata_length,
-                        code_length,
-                        subtree_length: subtree.len() as u64,
-                    },
                 )
-                .await?;
-
-                self.context.data.accumulator.emissions.push(
-                    domain::ExecutionEmission::DeployContract {
-                        calldata,
-                        code,
-                        value,
-                        on,
-                        salt_nonce,
-                        receipt_fee: fees.receipt_fee.reported_fee(),
-                        message_fee: fees.message_fee.reported_fee(),
-                        fee_params,
-                        subtree,
-                        use_balance: false,
-                    },
-                );
-
-                self.context.data.accumulator.messages_value_decremented = self
-                    .context
-                    .data
-                    .accumulator
-                    .messages_value_decremented
-                    .saturating_add(value);
-
-                Ok(file_fd_none())
+                .await
             }
             gl_call::Message::WebRender(render_payload) => {
-                let is_det = self.context.data.conf.permissions.deterministic;
-                if is_det {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                let space_left = self
-                    .context
-                    .data
-                    .supervisor
-                    .limiter
-                    .get(is_det)
-                    .get_remaining_memory();
-
-                if space_left < abi::consts::top_limits::WEB_RENDER_MIN_SPACE {
-                    log_warn!(space_left = space_left; "not enough memory for web render");
-                    return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
-                    )));
-                }
-
-                let space_left_with_overhead = (space_left as u64 * 3 / 4) as u32;
-
-                let web = self.context.data.supervisor.modules.web.clone();
-                let task = taskify(async move {
-                    web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
-                        genvm_modules_interfaces::web::Message::Render(
-                            gl_call_to_mi::render_payload(render_payload),
-                            space_left_with_overhead,
-                        ),
-                    )
-                    .await
-                })
-                .await
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
+                self.gl_call_web_render(render_payload).await
             }
             gl_call::Message::WebRequest(request_payload) => {
-                let is_det = self.context.data.conf.permissions.deterministic;
-                if is_det {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                let space_left = self
-                    .context
-                    .data
-                    .supervisor
-                    .limiter
-                    .get(is_det)
-                    .get_remaining_memory();
-
-                if space_left < abi::consts::top_limits::WEB_REQUEST_MIN_SPACE {
-                    log_warn!(space_left = space_left; "not enough memory for web request");
-                    return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
-                    )));
-                }
-
-                let space_left_with_overhead = (space_left as u64 * 3 / 4) as u32;
-
-                let web = self.context.data.supervisor.modules.web.clone();
-                let task = taskify(async move {
-                    web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
-                        genvm_modules_interfaces::web::Message::Request(
-                            gl_call_to_mi::request_payload(request_payload),
-                            space_left_with_overhead,
-                        ),
-                    )
-                    .await
-                })
-                .await
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
+                self.gl_call_web_request(request_payload).await
             }
             gl_call::Message::ExecPrompt(prompt_payload) => {
-                if self.context.data.conf.permissions.deterministic {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                if prompt_payload.images.len() > 2 {
-                    return Err(generated::types::Errno::Inval.into());
-                }
-
-                let remaining_fuel_as_gen = self
-                    .context
-                    .data
-                    .supervisor
-                    .host
-                    .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
-                    .await
-                    .remaining_fuel_as_gen()
-                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                let sup = self.context.data.supervisor.clone();
-
-                let task = taskify(async move {
-                    let result = sup
-                        .modules
-                        .llm
-                        .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
-                            genvm_modules_interfaces::llm::Message::Prompt {
-                                payload: gl_call_to_mi::prompt_payload(prompt_payload),
-                                remaining_fuel_as_gen,
-                            },
-                        )
-                        .await?;
-
-                    let result = match result {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return Ok(Err(e));
-                        }
-                    };
-
-                    sup.host
-                        .lock_for(host::host_fns::Methods::ConsumeFuel)
-                        .await
-                        .consume_fuel(result.consumed_gen)?;
-
-                    if result.consumed_gen == primitive_types::U256::MAX {
-                        return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
-                    }
-
-                    {
-                        let mut acc = sup.shared_data.llm_consumption.lock().await;
-                        *acc = acc.saturating_add(result.consumed_gen);
-                    }
-
-                    let result = result.data;
-
-                    Ok(Ok(result))
-                })
-                .await
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
+                self.gl_call_exec_prompt(prompt_payload).await
             }
             gl_call::Message::ExecPromptTemplate(prompt_template_payload) => {
-                if self.context.data.conf.permissions.deterministic {
-                    return Err(generated::types::Errno::Forbidden.into());
-                }
-
-                let expect_bool = !matches!(
-                    &prompt_template_payload,
-                    gl_call::llm_iface::PromptTemplatePayload::EqNonComparativeLeader(_)
-                );
-
-                // Get remaining fuel from host
-                let remaining_fuel_as_gen = self
-                    .context
-                    .data
-                    .supervisor
-                    .host
-                    .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+                self.gl_call_exec_prompt_template(prompt_template_payload)
                     .await
-                    .remaining_fuel_as_gen()
-                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                let sup = self.context.data.supervisor.clone();
-                let task = taskify(async move {
-                    let answer = sup
-                        .modules
-                        .llm
-                        .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
-                            genvm_modules_interfaces::llm::Message::PromptTemplate {
-                                payload: gl_call_to_mi::prompt_template_payload(
-                                    prompt_template_payload,
-                                ),
-                                remaining_fuel_as_gen,
-                            },
-                        )
-                        .await?;
-                    use genvm_modules_interfaces::llm::{PromptAnswer, PromptAnswerData};
-
-                    if let Ok(PromptAnswer { consumed_gen, .. }) = &answer {
-                        sup.host
-                            .lock_for(host::host_fns::Methods::ConsumeFuel)
-                            .await
-                            .consume_fuel(*consumed_gen)?;
-                        if *consumed_gen == primitive_types::U256::MAX {
-                            return Err(
-                                rt::errors::Error::vm(abi::consts::VmError::timeout()).into()
-                            );
-                        }
-
-                        {
-                            let mut acc = sup.shared_data.llm_consumption.lock().await;
-                            *acc = acc.saturating_add(*consumed_gen);
-                        }
-                    }
-
-                    match (expect_bool, answer) {
-                        (_, Err(e)) => Ok(Err(e)),
-                        (
-                            true,
-                            Ok(PromptAnswer {
-                                data: PromptAnswerData::Bool(answer),
-                                ..
-                            }),
-                        ) => Ok(Ok(PromptAnswerData::Bool(answer))),
-                        (
-                            false,
-                            Ok(PromptAnswer {
-                                data: PromptAnswerData::Text(answer),
-                                ..
-                            }),
-                        ) => Ok(Ok(PromptAnswerData::Text(answer))),
-                        (_, Ok(_)) => Err(anyhow::anyhow!("unmatched result")),
-                    }
-                })
-                .await
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
             }
             gl_call::Message::UserError(msg) => Err(generated::types::Error::trap(
                 crate::anyhow_to_wasmtime(rt::errors::Error::user(msg).into()),
@@ -1902,6 +1069,922 @@ impl Context {
 }
 
 impl ContextVFS<'_> {
+    async fn gl_call_eth_send(
+        &mut self,
+        address: calldata::Address,
+        calldata: bytes::Bytes,
+        value: primitive_types::U256,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if !self.context.data.conf.permissions.deterministic {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+        if !self.context.data.conf.permissions.send_messages {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        if !value.is_zero() {
+            let my_balance = self
+                .context
+                .get_balance_impl(self.context.data.message_data.message.contract_address)
+                .await?;
+
+            if !checked_sum_le(
+                value,
+                self.context.data.accumulator.messages_value_decremented,
+                my_balance,
+            ) {
+                return Err(generated::types::Errno::Inbalance.into());
+            }
+        }
+
+        let mut call_key = abi::CallKey([0u8; 32]);
+        if calldata.len() < 4 {
+            log_warn!(len = calldata.len(); "calldata too short for method selector, using unnamed call key");
+        } else {
+            call_key.0[..4].copy_from_slice(&calldata[..4]);
+        }
+
+        let Some((matched_node, matched_params)) = self
+            .context
+            .data
+            .accumulator
+            .message_fee_allocation
+            .iter_mut()
+            .find_map(|node| {
+                node.matches_external(address, call_key)
+                    .map(|params| (node, params))
+            })
+        else {
+            log_warn!(
+                recipient = address,
+                call_key:? = call_key;
+                "no matching node for message fee allocation"
+            );
+
+            return Err(internal_trap(rt::errors::Error::vm_detailed(
+                abi::consts::VmError::fee().no_matching_node(),
+                host_fns::VmErrorDetail::external(),
+            )));
+        };
+
+        let calldata_length = calldata.len() as u64;
+
+        let fees = consume_message_fee_external(
+            &self.context.data.supervisor.shared_data,
+            matched_node,
+            matched_params,
+            gl_call::On::Finalized,
+            ConsumeExternalArgs {
+                is_deploy: false,
+                calldata_length,
+            },
+        )
+        .await?;
+
+        self.context
+            .data
+            .accumulator
+            .emissions
+            .push(domain::ExecutionEmission::EthSend {
+                address,
+                calldata,
+                value,
+                message_fee: fees.message_fee.reported_fee(),
+                receipt_fee: fees.receipt_fee.reported_fee(),
+                fee_params: matched_params,
+            });
+
+        self.context.data.accumulator.messages_value_decremented = self
+            .context
+            .data
+            .accumulator
+            .messages_value_decremented
+            .saturating_add(value);
+        Ok(file_fd_none())
+    }
+    async fn gl_call_eth_call(
+        &mut self,
+        address: calldata::Address,
+        calldata: bytes::Bytes,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if !self.context.data.conf.permissions.deterministic {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+        if !self.context.data.conf.permissions.call_others {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let supervisor = self.context.data.supervisor.clone();
+        let data = supervisor
+            .host
+            .lock_for(host::host_fns::Methods::EthCall)
+            .await
+            .eth_call(address, &calldata)
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+        self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
+    }
+    async fn gl_call_contract(
+        &mut self,
+        address: calldata::Address,
+        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        mut state: public_abi::StorageType,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if !self.context.data.conf.permissions.deterministic {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+        if !self.context.data.conf.permissions.call_others {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let supervisor = self.context.data.supervisor.clone();
+
+        let my_conf = self.context.data.conf.clone();
+
+        let calldata_encoded = calldata::encode_obj(&calldata);
+
+        let mut my_data = self
+            .context
+            .data
+            .message_data
+            .fork(public_abi::EntryKind::Main, calldata_encoded.into());
+        my_data.message.stack.push(my_data.message.contract_address);
+
+        if state == public_abi::StorageType::Default {
+            state = my_conf.execution.state_mode;
+        }
+
+        let mut child_storage = rt::vm::storage::Storage::new(
+            address,
+            supervisor.get_storage_limiter(),
+            StorageHostHolder(
+                supervisor.host.clone(),
+                ReadToken {
+                    account: address,
+                    mode: state,
+                },
+            ),
+        );
+
+        let code_slot = child_storage
+            .check_major_and_resolve_code_slot()
+            .await
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+
+        let vm_data = Box::new(SingleVMData {
+            depth: self.context.data.depth + 1,
+            spawn_kind: "call_contract".to_owned(),
+            // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
+            conf: base::Config {
+                needs_error_fingerprint: true,
+                permissions: base::Permissions {
+                    deterministic: true,
+                    write_storage: false,
+                    spawn_nondet: false,
+                    call_others: my_conf.permissions.call_others,
+                    send_messages: false,
+                    register_runners: my_conf.permissions.register_runners,
+                    can_use_balance_for_message_fees: false,
+                },
+                execution: base::Execution {
+                    state_mode: state,
+                    topmost_runner_id: runners::Id::Chain {
+                        address,
+                        on: if state == public_abi::StorageType::LatestFinal {
+                            runners::ChainState::Finalized
+                        } else {
+                            runners::ChainState::Accepted
+                        },
+                        slot: code_slot,
+                    },
+                },
+            },
+            message_data: ExtendedMessage {
+                message: genlayer_sdk::abi::entry::MessageData {
+                    contract_address: address,
+                    sender_address: my_data.message.sender_address,
+                    origin_address: my_data.message.origin_address,
+                    signer_address: my_data.message.signer_address,
+                    value: num_bigint::BigInt::ZERO,
+                    is_init: false,
+                    datetime: my_data.message.datetime,
+                    chain_id: my_data.message.chain_id,
+                    stack: my_data.message.stack,
+                },
+                entry_kind: my_data.entry_kind,
+                entry_data: my_data.entry_data,
+                entry_stage_data: default_entry_stage_data(),
+            },
+            storage: child_storage,
+            supervisor: supervisor.clone(),
+            accumulator: VMDataAccumulator {
+                data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
+                messages_value_decremented: primitive_types::U256::zero(),
+                emissions: Vec::new(),
+                message_fee_allocation: Vec::new(),
+            },
+            det_subvm_hashes: Default::default(),
+            // A CallContract child is granted the caller's full custom set
+            // (ADR-012 §4); its spawn load-actions each into the child.
+            granted_custom: self.context.loaded.custom_pins(),
+        });
+
+        let res = spawn_sub_vm(supervisor.clone(), vm_data)
+            .await
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        // The child is read-only (static), so its accumulator must be
+        // empty — otherwise an effect was charged but discarded here.
+        res.vm_data
+            .accumulator
+            .check_empty()
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        let hash = res.small_hash();
+        self.context.data.det_subvm_hashes.update(&hash);
+
+        self.set_vm_run_result(res.run_ok).map(|x| x.0)
+    }
+    async fn gl_call_emit_event(
+        &mut self,
+        topics: Vec<bytes::Bytes>,
+        blob: calldata::unparsed::Maybe<calldata::Map<calldata::Value>>,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if !self.context.data.conf.permissions.deterministic {
+            log_warn!("EmitEvent requires deterministic mode");
+
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+        // Events are state-mutating log emissions, so they require the
+        // same write capability as storage. A read-only sub-VM (e.g. a
+        // `CallContract` child) must not emit events; otherwise the
+        // emission is charged but later discarded with the child.
+        if !self.context.data.conf.permissions.write_storage {
+            log_warn!("EmitEvent requires write_storage permission");
+
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        if topics.len() > public_abi::EVENT_MAX_TOPICS as usize {
+            log_warn!(cnt = topics.len(), max = public_abi::EVENT_MAX_TOPICS; "too many topics");
+            return Err(generated::types::Errno::Inval.into());
+        }
+
+        let mut real_topics: Vec<bytes::Bytes> =
+            Vec::with_capacity(public_abi::EVENT_MAX_TOPICS as usize + 1);
+
+        for t in topics.iter() {
+            if t.len() != 32 {
+                log_warn!(len = t.len(); "invalid topic length");
+
+                return Err(generated::types::Errno::Inval.into());
+            }
+
+            real_topics.push(t.clone());
+        }
+
+        struct CountingWriter(usize);
+        impl calldata::Writer for CountingWriter {
+            type Error = std::convert::Infallible;
+
+            fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+                self.0 += data.len();
+                Ok(())
+            }
+        }
+
+        let mut enc = calldata::Encoder::new(CountingWriter(0));
+        blob.encode(&mut enc).unwrap_or_else(|e| match e {});
+        let blob_size = enc.into_inner().0 as u64;
+
+        let supervisor = self.context.data.supervisor.clone();
+        let topics_count = topics.len() as u64;
+
+        let storage_fee = supervisor
+            .shared_data
+            .data_fees_limit
+            .consume_event(blob_size, topics_count)
+            .await
+            .map_err(internal_trap)?
+            .ok_or_else(|| {
+                internal_trap(rt::errors::Error::vm(
+                    abi::consts::VmError::out_of().receipt().event(),
+                ))
+            })?;
+
+        self.context
+            .data
+            .accumulator
+            .emissions
+            .push(domain::ExecutionEmission::EmitEvent {
+                topics: real_topics,
+                blob,
+                storage_fee,
+            });
+
+        Ok(file_fd_none())
+    }
+    async fn gl_call_post_message(
+        &mut self,
+        address: calldata::Address,
+        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        value: primitive_types::U256,
+        on: gl_call::On,
+        use_balance: bool,
+        fee_params: Option<domain::fees::InternalMessageParams>,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        log_debug!(
+            recipient = address,
+            on:? = on,
+            use_balance = use_balance;
+            "PostMessage dispatched"
+        );
+        if !self.context.data.conf.permissions.deterministic {
+            log_debug!("PostMessage rejected: non-deterministic context (Forbidden)");
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+        if !self.context.data.conf.permissions.send_messages {
+            log_debug!("PostMessage rejected: can_send_messages=false (Forbidden)");
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let balance_params = validate_balance_fee(
+            self.context
+                .data
+                .conf
+                .permissions
+                .can_use_balance_for_message_fees,
+            use_balance,
+            fee_params,
+        )?;
+
+        // Peek the (possibly deferred) calldata to derive the fee call key.
+        let calldata_materialized = calldata.clone().materialize().ok();
+        let method_name = calldata_materialized
+            .as_ref()
+            .and_then(|x| x.as_map())
+            .and_then(|x| x.get(""))
+            .and_then(|x| x.as_str());
+        let call_key = if let Some(method_name) = method_name {
+            abi::CallKey::for_method(method_name)
+        } else {
+            abi::CallKey::UNNAMED
+        };
+
+        if let Some(params) = balance_params {
+            let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
+            calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
+            let calldata_length = enc.into_inner().0;
+
+            let my_balance = self
+                .context
+                .get_balance_impl(self.context.data.message_data.message.contract_address)
+                .await?;
+            let messages_value_decremented =
+                self.context.data.accumulator.messages_value_decremented;
+
+            let fees = consume_message_fee_internal(
+                &self.context.data.supervisor.shared_data,
+                FeeFunding::Balance {
+                    value,
+                    messages_value_decremented,
+                    my_balance,
+                },
+                Arc::new(params.clone()),
+                on,
+                ConsumeInternalArgs {
+                    is_deploy: false,
+                    calldata_length,
+                    code_length: 0,
+                    subtree_length: 0,
+                },
+            )
+            .await?;
+
+            let metered_fee = fees.message_fee.reported_fee();
+
+            // Empty subtree: use_balance nesting is fail-closed on-chain.
+            self.context
+                .data
+                .accumulator
+                .emissions
+                .push(domain::ExecutionEmission::PostMessage {
+                    call_key,
+                    address,
+                    calldata,
+                    value,
+                    on,
+                    message_fee: metered_fee,
+                    receipt_fee: fees.receipt_fee.reported_fee(),
+                    fee_params: params,
+                    subtree: bytes::Bytes::new(),
+                    use_balance: true,
+                });
+
+            self.context.data.accumulator.messages_value_decremented = messages_value_decremented
+                .saturating_add(value)
+                .saturating_add(metered_fee);
+
+            return Ok(file_fd_none());
+        }
+
+        if !value.is_zero() {
+            let my_balance = self
+                .context
+                .get_balance_impl(self.context.data.message_data.message.contract_address)
+                .await?;
+
+            if !checked_sum_le(
+                value,
+                self.context.data.accumulator.messages_value_decremented,
+                my_balance,
+            ) {
+                return Err(generated::types::Errno::Inbalance.into());
+            }
+        }
+
+        let Some((matched_node, matched_params)) = self
+            .context
+            .data
+            .accumulator
+            .message_fee_allocation
+            .iter_mut()
+            .find_map(|node| {
+                node.matches_internal(on, address, call_key)
+                    .map(|params| (node, params))
+            })
+        else {
+            log_warn!(
+                recipient = address,
+                call_key:? = call_key,
+                on:? = on;
+                "no matching node for message fee allocation"
+            );
+
+            return Err(internal_trap(rt::errors::Error::vm_detailed(
+                abi::consts::VmError::fee().no_matching_node(),
+                host_fns::VmErrorDetail::internal(),
+            )));
+        };
+
+        log_debug!(
+            recipient = address,
+            call_key:? = call_key,
+            on:? = on;
+            "PostMessage matched fee allocation node"
+        );
+
+        let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
+        calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
+        let calldata_length = enc.into_inner().0;
+
+        let fee_params = (*matched_params).clone();
+        let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
+            &matched_node.children,
+        ));
+
+        let fees = consume_message_fee_internal(
+            &self.context.data.supervisor.shared_data,
+            FeeFunding::Allocation(matched_node),
+            matched_params,
+            on,
+            ConsumeInternalArgs {
+                is_deploy: false,
+                calldata_length,
+                code_length: 0,
+                subtree_length: subtree.len() as u64,
+            },
+        )
+        .await?;
+
+        self.context
+            .data
+            .accumulator
+            .emissions
+            .push(domain::ExecutionEmission::PostMessage {
+                call_key,
+                address,
+                calldata,
+                value,
+                on,
+                message_fee: fees.message_fee.reported_fee(),
+                receipt_fee: fees.receipt_fee.reported_fee(),
+                fee_params,
+                subtree,
+                use_balance: false,
+            });
+
+        log_debug!(
+            depth = self.context.data.depth,
+            emissions_total = self.context.data.accumulator.emissions.len();
+            "PostMessage emission pushed to accumulator"
+        );
+
+        self.context.data.accumulator.messages_value_decremented = self
+            .context
+            .data
+            .accumulator
+            .messages_value_decremented
+            .saturating_add(value);
+
+        Ok(file_fd_none())
+    }
+    async fn gl_call_deploy_contract(
+        &mut self,
+        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        code: bytes::Bytes,
+        value: primitive_types::U256,
+        on: gl_call::On,
+        salt_nonce: primitive_types::U256,
+        use_balance: bool,
+        fee_params: Option<domain::fees::InternalMessageParams>,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if !self.context.data.conf.permissions.deterministic {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+        if !self.context.data.conf.permissions.send_messages {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let balance_params = validate_balance_fee(
+            self.context
+                .data
+                .conf
+                .permissions
+                .can_use_balance_for_message_fees,
+            use_balance,
+            fee_params,
+        )?;
+
+        if let Some(params) = balance_params {
+            let code_length = code.len() as u64;
+            let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
+            calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
+            let calldata_length = enc.into_inner().0;
+
+            let my_balance = self
+                .context
+                .get_balance_impl(self.context.data.message_data.message.contract_address)
+                .await?;
+            let messages_value_decremented =
+                self.context.data.accumulator.messages_value_decremented;
+
+            let fees = consume_message_fee_internal(
+                &self.context.data.supervisor.shared_data,
+                FeeFunding::Balance {
+                    value,
+                    messages_value_decremented,
+                    my_balance,
+                },
+                Arc::new(params.clone()),
+                on,
+                ConsumeInternalArgs {
+                    is_deploy: true,
+                    calldata_length,
+                    code_length,
+                    subtree_length: 0,
+                },
+            )
+            .await?;
+
+            let metered_fee = fees.message_fee.reported_fee();
+
+            self.context.data.accumulator.emissions.push(
+                domain::ExecutionEmission::DeployContract {
+                    calldata,
+                    code,
+                    value,
+                    on,
+                    salt_nonce,
+                    receipt_fee: fees.receipt_fee.reported_fee(),
+                    message_fee: metered_fee,
+                    fee_params: params,
+                    subtree: bytes::Bytes::new(),
+                    use_balance: true,
+                },
+            );
+
+            self.context.data.accumulator.messages_value_decremented = messages_value_decremented
+                .saturating_add(value)
+                .saturating_add(metered_fee);
+
+            return Ok(file_fd_none());
+        }
+
+        if !value.is_zero() {
+            let my_balance = self
+                .context
+                .get_balance_impl(self.context.data.message_data.message.contract_address)
+                .await?;
+
+            if !checked_sum_le(
+                value,
+                self.context.data.accumulator.messages_value_decremented,
+                my_balance,
+            ) {
+                return Err(generated::types::Errno::Inbalance.into());
+            }
+        }
+
+        let Some((matched_node, matched_params)) = self
+            .context
+            .data
+            .accumulator
+            .message_fee_allocation
+            .iter_mut()
+            .find_map(|node| {
+                node.matches_internal(on, calldata::Address::zero(), abi::CallKey::DEPLOY)
+                    .map(|params| (node, params))
+            })
+        else {
+            log_warn!(
+                recipient = calldata::Address::zero(),
+                call_key:? = abi::CallKey::DEPLOY,
+                on:? = on;
+                "no matching node for message fee allocation"
+            );
+
+            return Err(internal_trap(rt::errors::Error::vm_detailed(
+                abi::consts::VmError::fee().no_matching_node(),
+                host_fns::VmErrorDetail::internal(),
+            )));
+        };
+
+        let code_length = code.len() as u64;
+        let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
+        calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
+        let calldata_length = enc.into_inner().0;
+
+        let fee_params = (*matched_params).clone();
+        let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
+            &matched_node.children,
+        ));
+
+        let fees = consume_message_fee_internal(
+            &self.context.data.supervisor.shared_data,
+            FeeFunding::Allocation(matched_node),
+            matched_params,
+            on,
+            ConsumeInternalArgs {
+                is_deploy: true,
+                calldata_length,
+                code_length,
+                subtree_length: subtree.len() as u64,
+            },
+        )
+        .await?;
+
+        self.context
+            .data
+            .accumulator
+            .emissions
+            .push(domain::ExecutionEmission::DeployContract {
+                calldata,
+                code,
+                value,
+                on,
+                salt_nonce,
+                receipt_fee: fees.receipt_fee.reported_fee(),
+                message_fee: fees.message_fee.reported_fee(),
+                fee_params,
+                subtree,
+                use_balance: false,
+            });
+
+        self.context.data.accumulator.messages_value_decremented = self
+            .context
+            .data
+            .accumulator
+            .messages_value_decremented
+            .saturating_add(value);
+
+        Ok(file_fd_none())
+    }
+    async fn gl_call_web_render(
+        &mut self,
+        render_payload: gl_call::web_iface::RenderPayload,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        let is_det = self.context.data.conf.permissions.deterministic;
+        if is_det {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let space_left = self
+            .context
+            .data
+            .supervisor
+            .limiter
+            .get(is_det)
+            .get_remaining_memory();
+
+        if space_left < abi::consts::top_limits::WEB_RENDER_MIN_SPACE {
+            log_warn!(space_left = space_left; "not enough memory for web render");
+            return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
+                rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
+            )));
+        }
+
+        let space_left_with_overhead = (space_left as u64 * 3 / 4) as u32;
+
+        let web = self.context.data.supervisor.modules.web.clone();
+        let task = taskify(async move {
+            web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
+                genvm_modules_interfaces::web::Message::Render(
+                    gl_call_to_mi::render_payload(render_payload),
+                    space_left_with_overhead,
+                ),
+            )
+            .await
+        })
+        .await
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
+    }
+    async fn gl_call_web_request(
+        &mut self,
+        request_payload: gl_call::web_iface::RequestPayload,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        let is_det = self.context.data.conf.permissions.deterministic;
+        if is_det {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let space_left = self
+            .context
+            .data
+            .supervisor
+            .limiter
+            .get(is_det)
+            .get_remaining_memory();
+
+        if space_left < abi::consts::top_limits::WEB_REQUEST_MIN_SPACE {
+            log_warn!(space_left = space_left; "not enough memory for web request");
+            return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
+                rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
+            )));
+        }
+
+        let space_left_with_overhead = (space_left as u64 * 3 / 4) as u32;
+
+        let web = self.context.data.supervisor.modules.web.clone();
+        let task = taskify(async move {
+            web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
+                genvm_modules_interfaces::web::Message::Request(
+                    gl_call_to_mi::request_payload(request_payload),
+                    space_left_with_overhead,
+                ),
+            )
+            .await
+        })
+        .await
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
+    }
+    async fn gl_call_exec_prompt(
+        &mut self,
+        prompt_payload: gl_call::llm_iface::PromptPayload,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if self.context.data.conf.permissions.deterministic {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        if prompt_payload.images.len() > 2 {
+            return Err(generated::types::Errno::Inval.into());
+        }
+
+        let remaining_fuel_as_gen = self
+            .context
+            .data
+            .supervisor
+            .host
+            .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+            .await
+            .remaining_fuel_as_gen()
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        let sup = self.context.data.supervisor.clone();
+
+        let task = taskify(async move {
+            let result = sup
+                .modules
+                .llm
+                .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
+                    genvm_modules_interfaces::llm::Message::Prompt {
+                        payload: gl_call_to_mi::prompt_payload(prompt_payload),
+                        remaining_fuel_as_gen,
+                    },
+                )
+                .await?;
+
+            let result = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(Err(e));
+                }
+            };
+
+            sup.host
+                .lock_for(host::host_fns::Methods::ConsumeFuel)
+                .await
+                .consume_fuel(result.consumed_gen)?;
+
+            if result.consumed_gen == primitive_types::U256::MAX {
+                return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
+            }
+
+            {
+                let mut acc = sup.shared_data.llm_consumption.lock().await;
+                *acc = acc.saturating_add(result.consumed_gen);
+            }
+
+            let result = result.data;
+
+            Ok(Ok(result))
+        })
+        .await
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
+    }
+    async fn gl_call_exec_prompt_template(
+        &mut self,
+        prompt_template_payload: gl_call::llm_iface::PromptTemplatePayload,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if self.context.data.conf.permissions.deterministic {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let expect_bool = !matches!(
+            &prompt_template_payload,
+            gl_call::llm_iface::PromptTemplatePayload::EqNonComparativeLeader(_)
+        );
+
+        // Get remaining fuel from host
+        let remaining_fuel_as_gen = self
+            .context
+            .data
+            .supervisor
+            .host
+            .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+            .await
+            .remaining_fuel_as_gen()
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        let sup = self.context.data.supervisor.clone();
+        let task = taskify(async move {
+            let answer = sup
+                .modules
+                .llm
+                .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
+                    genvm_modules_interfaces::llm::Message::PromptTemplate {
+                        payload: gl_call_to_mi::prompt_template_payload(prompt_template_payload),
+                        remaining_fuel_as_gen,
+                    },
+                )
+                .await?;
+            use genvm_modules_interfaces::llm::{PromptAnswer, PromptAnswerData};
+
+            if let Ok(PromptAnswer { consumed_gen, .. }) = &answer {
+                sup.host
+                    .lock_for(host::host_fns::Methods::ConsumeFuel)
+                    .await
+                    .consume_fuel(*consumed_gen)?;
+                if *consumed_gen == primitive_types::U256::MAX {
+                    return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
+                }
+
+                {
+                    let mut acc = sup.shared_data.llm_consumption.lock().await;
+                    *acc = acc.saturating_add(*consumed_gen);
+                }
+            }
+
+            match (expect_bool, answer) {
+                (_, Err(e)) => Ok(Err(e)),
+                (
+                    true,
+                    Ok(PromptAnswer {
+                        data: PromptAnswerData::Bool(answer),
+                        ..
+                    }),
+                ) => Ok(Ok(PromptAnswerData::Bool(answer))),
+                (
+                    false,
+                    Ok(PromptAnswer {
+                        data: PromptAnswerData::Text(answer),
+                        ..
+                    }),
+                ) => Ok(Ok(PromptAnswerData::Text(answer))),
+                (_, Ok(_)) => Err(anyhow::anyhow!("unmatched result")),
+            }
+        })
+        .await
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
+    }
+
     async fn gl_call_trace(
         &mut self,
         msg: gl_call::TracePayload,
