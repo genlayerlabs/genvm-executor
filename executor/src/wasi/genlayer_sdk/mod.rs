@@ -134,6 +134,7 @@ impl VMDataAccumulator {
 
 pub struct SingleVMData {
     pub conf: base::Config,
+    pub limiter: rt::memlimiter::Limiter,
     pub depth: u32,
     pub spawn_kind: String,
     pub message_data: ExtendedMessage,
@@ -155,14 +156,12 @@ pub struct Context {
     /// This VM's **loaded set**: the charge-dedup set and pin holder for every
     /// runner it has loaded (ADR-012 §1). A sibling of `data` (not inside its
     /// accumulator), so it does not round-trip through sandbox children and is
-    /// dropped when this VM's store is torn down — coinciding with the VM
-    /// limiter's refund of the load charges.
+    /// dropped when this VM's store is torn down.
     pub loaded: crate::runners::cache::LoadedSet,
 
-    /// A handle to this VM's own memory limiter (a clone of its store limiter, so
-    /// it refunds at VM death). Runtime load actions (`RegisterRunner`, `MapFile`)
-    /// charge it directly, since a gl_call handler cannot otherwise reach the
-    /// store limiter.
+    /// A handle to this VM's own memory limiter. Runtime load actions
+    /// (`RegisterRunner`, `MapFile`) charge it directly, since a gl_call handler
+    /// cannot otherwise reach the store limiter.
     pub limiter: rt::memlimiter::Limiter,
 
     pub start_time: std::time::Instant,
@@ -795,13 +794,7 @@ impl ContextVFS<'_> {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
-        let space_left = self
-            .context
-            .data
-            .supervisor
-            .limiter
-            .get(is_det)
-            .get_remaining_memory();
+        let space_left = self.context.limiter.get_remaining_memory();
 
         if space_left < abi::consts::top_limits::WEB_RENDER_MIN_SPACE {
             log_warn!(space_left = space_left; "not enough memory for web render");
@@ -836,13 +829,7 @@ impl ContextVFS<'_> {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
-        let space_left = self
-            .context
-            .data
-            .supervisor
-            .limiter
-            .get(is_det)
-            .get_remaining_memory();
+        let space_left = self.context.limiter.get_remaining_memory();
 
         if space_left < abi::consts::top_limits::WEB_REQUEST_MIN_SPACE {
             log_warn!(space_left = space_left; "not enough memory for web request");
@@ -1124,8 +1111,8 @@ impl ContextVFS<'_> {
     ) -> Result<generated::types::Fd, generated::types::Error> {
         let supervisor = self.context.data.supervisor.clone();
         let is_det = self.context.data.conf.permissions.deterministic;
-        // Charge the VM's own limiter (refunded at VM death, coinciding with the
-        // pin drop), not the long-lived root limiter.
+        // Charge the VM's own limiter, not the long-lived root limiter. The pin
+        // drops with this VM's loaded set when the store is torn down.
         let limiter = self.context.limiter.clone();
         let topmost_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
 

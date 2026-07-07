@@ -8,7 +8,7 @@ use genvm_common::*;
 
 use crate::{
     config, host, public_abi,
-    rt::{self, memlimiter, DetNondet},
+    rt::{self, DetNondet},
     runners, wasi,
 };
 
@@ -28,7 +28,7 @@ pub struct NonDetVMTask {
 
 impl NonDetVMTask {
     pub async fn run_now(self, sup: &Arc<Supervisor>) -> anyhow::Result<rt::vm::RunOk> {
-        run_single_nondet(sup, self, sup.limiter.get(false).derived()).await
+        run_single_nondet(sup, self).await
     }
 }
 
@@ -54,7 +54,6 @@ pub struct Ctor {
 
     pub modules: crate::modules::All,
 
-    pub limiter: rt::DetNondet<rt::memlimiter::Limiter>,
     pub locked_slots: host::LockedSlotsSet,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
     pub multi_host: host::MultiHost,
@@ -103,7 +102,6 @@ impl ActionRecorder {
 pub struct Supervisor {
     pub shared_data: sync::DArc<rt::SharedData>,
     pub modules: crate::modules::All,
-    pub limiter: rt::DetNondet<rt::memlimiter::Limiter>,
     pub locked_slots: host::LockedSlotsSet,
 
     pub nondet_call_no: AtomicU32,
@@ -220,17 +218,11 @@ pub async fn await_nondet_vms(zelf: &Arc<Supervisor>) -> anyhow::Result<Option<u
             .clone()
             .try_read_owned()
             .expect("tasks_loop_done already held by writer");
-        // Secondary nondet validator queue runs after the deterministic VM has
-        // finished, so it reuses the memory that VM freed. Each queued nondet VM
-        // carries its own granted custom-runner pins and pays for them via its
-        // spawn-time inherit load actions (ADR-012 §3) — no registry pre-charge.
-        // Note a pre-existing asymmetry: this fresh limiter's budget (u32::MAX)
-        // is not the configured nondet pool the main processor uses, so which
-        // processor drains a task decides its OOM boundary. Nondet results are
-        // compared, not trusted, so this is a validator-local liveness quirk,
-        // not a consensus hazard.
-        let limiter = memlimiter::Limiter::new("nondet-secondary");
-        nondet_vm_processor(zelf.clone(), read_permit, limiter).await;
+        // Each queued nondet VM carries its own granted custom-runner pins and
+        // pays for them via its spawn-time inherit load actions (ADR-012 §3).
+        // Nondet VMs do not inherit the deterministic limiter; each starts with
+        // a fresh RAM limiter when spawned.
+        nondet_vm_processor(zelf.clone(), read_permit).await;
     }
 
     let _ = zelf.queue.tasks_loop_done.write().await;
@@ -368,7 +360,6 @@ impl Supervisor {
         let zelf = Arc::new(Self {
             shared_data: ctor.shared_data,
             modules: ctor.modules,
-            limiter: ctor.limiter,
             locked_slots: ctor.locked_slots,
             nondet_call_no: AtomicU32::new(0),
             balances: dashmap::DashMap::new(),
@@ -404,12 +395,7 @@ impl Supervisor {
             .clone()
             .try_read_owned()
             .expect("tasks_loop_done already held by writer");
-        let main_nondet_limiter = zelf.limiter.get(false).derived();
-        tokio::spawn(nondet_vm_processor(
-            zelf.clone(),
-            read_permit,
-            main_nondet_limiter,
-        ));
+        tokio::spawn(nondet_vm_processor(zelf.clone(), read_permit));
 
         Ok(zelf)
     }
@@ -418,7 +404,6 @@ impl Supervisor {
 pub async fn spawn(
     zelf: &Arc<Supervisor>,
     vm: Box<wasi::genlayer_sdk::SingleVMData>,
-    limiter: rt::memlimiter::Limiter,
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
     if vm.depth >= public_abi::top_limits::VM_RECURSION {
         return Err(rt::SpawnError {
@@ -427,10 +412,14 @@ pub async fn spawn(
         });
     }
 
-    if !limiter.consume(crate::public_abi::memory_limiter_consts::VM_SPAWN_COST) {
-        return Err(SpawnError {
-            error: errors::Error::vm(crate::public_abi::VmError::out_of().memory().val()).into(),
-            state: Box::new(SpawnErrorState::Unspawned(vm)),
+    if !vm
+        .limiter
+        .consume(crate::public_abi::memory_limiter_consts::VM_SPAWN_COST)
+    {
+        return Err(rt::SpawnError {
+            error: rt::errors::Error::vm(crate::public_abi::VmError::out_of().memory().val())
+                .into(),
+            state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
         });
     }
 
@@ -452,10 +441,11 @@ pub async fn spawn(
 
     let engine = zelf.engines.get(vm.conf.permissions.deterministic);
 
+    let limiter = vm.limiter.clone();
     let mut store = wasmtime::Store::new(
         engine,
         rt::vm::WasmtimeStoreData {
-            limits: limiter.clone(),
+            limits: vm.limiter.clone(),
             genlayer_ctx: wasi::Context::new(vm, limiter).map_err(|(a, b)| rt::SpawnError {
                 error: anyhow::Error::from(a),
                 state: Box::new(rt::SpawnErrorState::Unspawned(b)),
@@ -639,13 +629,11 @@ async fn apply_contract_actions_inner(
 async fn run_single_nondet(
     zelf: &std::sync::Arc<Supervisor>,
     task: NonDetVMTask,
-    limiter: memlimiter::Limiter,
 ) -> anyhow::Result<rt::vm::RunOk> {
     let zelf = zelf.clone();
-    let res =
-        tokio::task::spawn(async move { run_single_nondet_inner(&zelf, task, limiter).await })
-            .await
-            .map_err(|e| anyhow::anyhow!("nondet VM task failed to join: {e}"))?;
+    let res = tokio::task::spawn(async move { run_single_nondet_inner(&zelf, task).await })
+        .await
+        .map_err(|e| anyhow::anyhow!("nondet VM task failed to join: {e}"))?;
 
     match res {
         Ok(v) => Ok(v.run_ok),
@@ -656,19 +644,13 @@ async fn run_single_nondet(
 async fn run_single_nondet_inner(
     zelf: &std::sync::Arc<Supervisor>,
     task: NonDetVMTask,
-    limiter: memlimiter::Limiter,
 ) -> anyhow::Result<rt::vm::RunResult> {
-    let vm = spawn(zelf, task.task, limiter).await.map_err(|e| e.error)?;
-    let vm = apply_contract_actions(zelf, vm)
-        .await
-        .map_err(|e| e.error)?;
-    vm.run().await.map_err(|e| e.error)
+    rt::spawn_apply_run(zelf, task.task).await
 }
 
 async fn nondet_vm_processor(
     zelf: std::sync::Arc<Supervisor>,
     read_permit: tokio::sync::OwnedRwLockReadGuard<()>,
-    limiter: memlimiter::Limiter,
 ) {
     let mut count = 0;
     loop {
@@ -700,7 +682,7 @@ async fn nondet_vm_processor(
                 let call_no = task.call_no;
 
                 let (task, tok) = task.deconstruct();
-                let res = run_single_nondet(&zelf, task, limiter.derived()).await;
+                let res = run_single_nondet(&zelf, task).await;
 
                 let do_disagree = match res {
                     Ok(rt::vm::RunOk::Return(v)) => {

@@ -258,7 +258,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
 
     let rt = runtime.enter();
 
-    let supervisor = genvm::create_supervisor(
+    let context = genvm::create_supervisor(
         &config,
         hosts,
         genvm::CreateSupervisorNamedArgs {
@@ -273,15 +273,12 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         message,
     )
     .with_context(|| format!("creating supervisor for genvm_id {genvm_id}"))?;
+    let supervisor = context.supervisor.clone();
 
     std::mem::drop(rt);
 
     let res = runtime
-        .block_on(genvm::run_with(
-            execution_data,
-            supervisor.clone(),
-            &args.permissions,
-        ))
+        .block_on(genvm::run_with(execution_data, context, &args.permissions))
         .with_context(|| "running genvm");
 
     if let Err(err) = &res {

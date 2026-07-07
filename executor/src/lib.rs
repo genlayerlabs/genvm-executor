@@ -70,6 +70,11 @@ pub struct CreateSupervisorNamedArgs {
     pub record_actions: Vec<String>,
 }
 
+pub struct ExecutionContext {
+    pub supervisor: Arc<rt::supervisor::Supervisor>,
+    det_limiter: rt::memlimiter::Limiter,
+}
+
 pub fn create_supervisor(
     config: &config::Config,
     mut hosts: Vec<Host>,
@@ -77,7 +82,7 @@ pub fn create_supervisor(
     host_data: genvm_modules_interfaces::HostData,
     shared_data: sync::DArc<rt::SharedData>,
     message: &domain::MessageData,
-) -> Result<Arc<rt::supervisor::Supervisor>> {
+) -> Result<ExecutionContext> {
     let metrics = shared_data.gep(|x| &x.metrics);
 
     let role = if named.leader_nondet_results.is_none() {
@@ -113,7 +118,8 @@ pub fn create_supervisor(
         )),
     };
 
-    let limiter_det = rt::memlimiter::Limiter::new("det");
+    // has locked slots
+    let limiter_det = rt::memlimiter::Limiter::new();
 
     let storage_host_idx =
         if (host::host_fns::Methods::StorageRead as usize) < named.method_hosts.len() {
@@ -135,25 +141,25 @@ pub fn create_supervisor(
     let ctor = rt::supervisor::Ctor {
         shared_data,
         modules,
-        limiter: rt::DetNondet {
-            det: limiter_det,
-            non_det: rt::memlimiter::Limiter::new("nondet"),
-        },
         locked_slots,
         leader_nondet_results: named.leader_nondet_results,
         multi_host,
         record_actions: named.record_actions,
     };
 
-    rt::supervisor::Supervisor::start(config, ctor)
+    Ok(ExecutionContext {
+        supervisor: rt::supervisor::Supervisor::start(config, ctor)?,
+        det_limiter: limiter_det,
+    })
 }
 
 pub async fn run_with_impl(
     entry_data: domain::ExecutionData,
-    supervisor: Arc<rt::supervisor::Supervisor>,
+    context: &ExecutionContext,
     permissions: &str,
     deploy_pin: &mut Option<runners::cache::ArchivePin>,
 ) -> anyhow::Result<rt::vm::FullResult> {
+    let supervisor = context.supervisor.clone();
     let storage_pages_limit = supervisor.get_storage_limiter();
 
     let mut topmost_storage = rt::vm::storage::Storage::new(
@@ -233,6 +239,7 @@ pub async fn run_with_impl(
     let data_fees_limit = supervisor.shared_data.gep(|x| &x.data_fees_limit);
 
     let essential_data = Box::new(wasi::genlayer_sdk::SingleVMData {
+        limiter: context.det_limiter.derived(),
         depth: 0,
         spawn_kind: "initial".to_owned(),
         // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
@@ -297,7 +304,7 @@ pub async fn run_with_impl(
 
 pub async fn run_with(
     entry_data: domain::ExecutionData,
-    supervisor: Arc<rt::supervisor::Supervisor>,
+    context: ExecutionContext,
     permissions: &str,
 ) -> anyhow::Result<host::FullResult> {
     // Deploy-time weak-cache bridge (ADR-012): the prepopulated deploy-runner
@@ -307,7 +314,9 @@ pub async fn run_with(
     // earlier would make that load's outcome depend on which queue processed it.
     let mut deploy_pin: Option<runners::cache::ArchivePin> = None;
 
-    let res = run_with_impl(entry_data, supervisor.clone(), permissions, &mut deploy_pin).await;
+    let supervisor = context.supervisor.clone();
+
+    let res = run_with_impl(entry_data, &context, permissions, &mut deploy_pin).await;
 
     log_debug!("deterministic execution done");
 

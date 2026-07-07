@@ -13,9 +13,8 @@ pub type Cell = Arc<tokio::sync::OnceCell<ArchiveCache>>;
 /// A strong reference (pin) to loaded runner content. While at least one pin is
 /// held the content stays resident; when the last pin drops the weak map's entry
 /// becomes dead and is purged on next access, freeing the bytes. Pins live in a
-/// VM's [`LoadedSet`] (its store data) and thus die with the VM, so the limiter
-/// refund at VM death coincides with the memory actually becoming freeable
-/// (ADR-012).
+/// VM's [`LoadedSet`] (its store data) and thus die with the VM, when the bytes
+/// become freeable (ADR-012).
 #[derive(Clone)]
 pub struct ArchivePin(Cell);
 

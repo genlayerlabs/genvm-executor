@@ -90,6 +90,7 @@ impl ContextVFS<'_> {
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
 
         let vm_data = Box::new(SingleVMData {
+            limiter: self.context.limiter.derived(),
             depth: self.context.data.depth + 1,
             spawn_kind: "call_contract".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
@@ -330,6 +331,7 @@ impl ContextVFS<'_> {
             };
 
             let vm_data = Box::new(SingleVMData {
+                limiter: Default::default(),
                 depth: self.context.data.depth + 1,
                 spawn_kind: "run_nondet".to_owned(),
                 // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
@@ -450,6 +452,7 @@ impl ContextVFS<'_> {
         let stolen_data = fake_my_data;
 
         let vm_data = Box::new(SingleVMData {
+            limiter: self.context.limiter.derived(),
             depth: self.context.data.depth + 1,
             spawn_kind: "sandbox".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst

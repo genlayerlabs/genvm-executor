@@ -4,70 +4,43 @@ use std::sync::{atomic::AtomicU32, Arc};
 
 use crate::rt;
 
-struct LimiterInnerData {
-    remaining_memory: Arc<AtomicU32>,
-    least_remaining_memory: Arc<AtomicU32>,
-}
-
 struct LimiterInner {
-    data: Arc<LimiterInnerData>,
-    id: &'static str,
-    consumed_memory: AtomicU32,
+    remaining_memory: AtomicU32,
 }
 
 #[derive(Clone)]
 pub struct Limiter(Arc<LimiterInner>);
 
-impl Drop for LimiterInner {
-    fn drop(&mut self) {
-        let consumed = self
-            .consumed_memory
-            .load(std::sync::atomic::Ordering::SeqCst);
-
-        log_debug!(id = self.id, consumed = consumed; "limiter drop");
-
-        self.release_no_consumed(consumed);
-    }
-}
-
 impl LimiterInner {
     fn release_no_consumed(&self, delta: u32) {
         #[allow(dead_code)]
         let previous = self
-            .data
             .remaining_memory
             .fetch_add(delta, std::sync::atomic::Ordering::SeqCst);
         assert!(previous.checked_add(delta).is_some());
     }
 }
 
-impl Limiter {
-    pub fn get_least_remaining_memory(&self) -> u32 {
-        self.0
-            .data
-            .least_remaining_memory
-            .load(std::sync::atomic::Ordering::SeqCst)
+impl Default for Limiter {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    pub fn new(id: &'static str) -> Self {
+impl Limiter {
+    pub fn new() -> Self {
         Self(Arc::new(LimiterInner {
-            id,
-            consumed_memory: AtomicU32::new(0),
-            data: Arc::new(LimiterInnerData {
-                remaining_memory: Arc::new(AtomicU32::new(u32::MAX)),
-                least_remaining_memory: Arc::new(AtomicU32::new(u32::MAX)),
-            }),
+            remaining_memory: AtomicU32::new(u32::MAX),
         }))
     }
 
     pub fn derived(&self) -> Self {
         Self(Arc::new(LimiterInner {
-            id: self.0.id,
-            consumed_memory: AtomicU32::new(0),
-            data: Arc::new(LimiterInnerData {
-                remaining_memory: self.0.data.remaining_memory.clone(),
-                least_remaining_memory: self.0.data.least_remaining_memory.clone(),
-            }),
+            remaining_memory: AtomicU32::new(
+                self.0
+                    .remaining_memory
+                    .load(std::sync::atomic::Ordering::SeqCst),
+            ),
         }))
     }
 
@@ -92,67 +65,37 @@ impl Limiter {
 
     pub fn get_remaining_memory(&self) -> u32 {
         self.0
-            .data
             .remaining_memory
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn release(&self, delta: u32) {
         self.0.release_no_consumed(delta);
-        let prev_consumed = self
-            .0
-            .consumed_memory
-            .fetch_sub(delta, std::sync::atomic::Ordering::SeqCst);
-        // A limiter only ever releases something it consumed, so `consumed_memory`
-        // never underflows. Asserting on the atomic's return value (the value
-        // right before the subtraction) is race-free under concurrent
-        // consume/release on the same limiter.
-        debug_assert!(
-            prev_consumed >= delta,
-            "limiter {} release underflow: released {delta} with only {prev_consumed} consumed",
-            self.0.id
-        );
     }
 
     pub fn consume(&self, delta: u32) -> bool {
         let mut remaining = self
             .0
-            .data
             .remaining_memory
             .load(std::sync::atomic::Ordering::SeqCst);
 
-        log_debug!(delta = delta, remaining_at_op_start = remaining, id = self.0.id; "consume");
+        log_trace!(delta = delta, remaining_at_op_start = remaining; "consume");
 
         loop {
             if delta > remaining {
                 return false;
             }
 
-            match self.0.data.remaining_memory.compare_exchange(
+            match self.0.remaining_memory.compare_exchange(
                 remaining,
                 remaining - delta,
                 std::sync::atomic::Ordering::SeqCst,
                 std::sync::atomic::Ordering::SeqCst,
             ) {
-                Ok(_) => {
-                    let least_for_test = remaining - delta;
-                    self.0
-                        .data
-                        .least_remaining_memory
-                        .fetch_min(least_for_test, std::sync::atomic::Ordering::SeqCst);
-                    let prev_consumed = self
-                        .0
-                        .consumed_memory
-                        .fetch_add(delta, std::sync::atomic::Ordering::SeqCst);
-                    // A single limiter's outstanding charge never exceeds the
-                    // shared budget: `remaining_memory` stays >= 0 (the CAS above
-                    // rejects delta > remaining), so the sum of every limiter's
-                    // `consumed_memory` is <= u32::MAX and no single limiter can
-                    // overflow. Return-value form keeps this race-free.
+                Ok(prev_remaining) => {
                     debug_assert!(
-                        prev_consumed.checked_add(delta).is_some(),
-                        "limiter {} consumed_memory overflow: {prev_consumed} + {delta}",
-                        self.0.id
+                        prev_remaining.checked_sub(delta).is_some(),
+                        "limiter remaining_memory overflow: {prev_remaining} - {delta}",
                     );
                     break;
                 }

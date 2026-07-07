@@ -1364,7 +1364,7 @@ mod tests {
     // ── load-action charging ────────────────────────────────────────────
 
     fn limiter_with_budget(budget: u32) -> rt::memlimiter::Limiter {
-        let limiter = rt::memlimiter::Limiter::new("actions-test");
+        let limiter = rt::memlimiter::Limiter::new();
         assert!(limiter.consume(u32::MAX - budget));
         limiter
     }
@@ -1405,7 +1405,7 @@ mod tests {
     #[test]
     fn charge_load_size_overflow_is_oom() {
         // RUNNER_LOAD_COST + u32::MAX overflows; must map to OOM, not wrap.
-        let limiter = rt::memlimiter::Limiter::new("actions-test");
+        let limiter = rt::memlimiter::Limiter::new();
         let err = charge_load(&limiter, u32::MAX as usize).unwrap_err();
         assert!(
             err.to_string().contains("out_of memory"),
@@ -1462,7 +1462,7 @@ mod tests {
     #[test]
     fn det_fingerprint_folds_charged_loads_in_execution_order() {
         let load = |ids: &[u8]| {
-            let limiter = rt::memlimiter::Limiter::new("actions-test");
+            let limiter = rt::memlimiter::Limiter::new();
             let mut loaded = runners::cache::LoadedSet::default();
             let mut fp = sha3::Sha3_256::default();
             for &n in ids {
@@ -1482,7 +1482,7 @@ mod tests {
 
     #[test]
     fn det_fingerprint_ignores_cached_loads() {
-        let limiter = rt::memlimiter::Limiter::new("actions-test");
+        let limiter = rt::memlimiter::Limiter::new();
         let mut loaded = runners::cache::LoadedSet::default();
         let mut fp = sha3::Sha3_256::default();
 
@@ -1531,7 +1531,7 @@ mod tests {
     async fn register_same_code_in_same_vm_is_free() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let limiter = rt::memlimiter::Limiter::new("actions-test");
+        let limiter = rt::memlimiter::Limiter::new();
         let mut loaded = runners::cache::LoadedSet::default();
 
         let id = register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
@@ -1615,7 +1615,7 @@ mod tests {
     async fn granted_pins_keep_content_alive_after_parent_death() {
         let registry = runners::cache::WeakCache::new();
         let code = valid_code();
-        let parent_limiter = rt::memlimiter::Limiter::new("actions-test-parent");
+        let parent_limiter = rt::memlimiter::Limiter::new();
         let mut parent = runners::cache::LoadedSet::default();
         let id =
             register_runner_load_into(&registry, &parent_limiter, &mut parent, None, code.clone())

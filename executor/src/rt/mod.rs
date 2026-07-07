@@ -97,12 +97,7 @@ async fn spawn_apply_run_inner(
     supervisor: &Arc<supervisor::Supervisor>,
     vm: Box<wasi::genlayer_sdk::SingleVMData>,
 ) -> std::result::Result<vm::RunResult, SpawnError> {
-    let limiter = supervisor
-        .limiter
-        .get(vm.conf.permissions.deterministic)
-        .derived();
-
-    let vm = supervisor::spawn(supervisor, vm, limiter).await?;
+    let vm = supervisor::spawn(supervisor, vm).await?;
 
     let vm = supervisor::apply_contract_actions(supervisor, vm).await?;
 
