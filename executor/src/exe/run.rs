@@ -83,17 +83,18 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             .with_context(|| format!("reading execution data from {}", args.execution_data))?
     };
 
-    let execution_data = calldata::decode_obj::<domain::ExecutionData>(&execution_data_bytes)
-        .with_context(|| "decoding execution data")?;
-    let mut execution_data = execution_data;
-    execution_data
+    let mut execution_data_iface =
+        calldata::decode_obj::<genvm_modules_interfaces::ExecutionData>(&execution_data_bytes)
+            .with_context(|| "decoding execution data")?;
+    execution_data_iface
         .record_actions
         .extend(args.record_actions.iter().cloned());
-    for action in &execution_data.record_actions {
+    for action in &execution_data_iface.record_actions {
         if !matches!(action.as_str(), "runner_load" | "vm_spawn") {
             anyhow::bail!("Invalid action recorder kind {action}");
         }
     }
+    let execution_data = execution_data_iface;
     let message = &execution_data.message;
     let host_data = rt::parse_host_data(&execution_data)?;
 

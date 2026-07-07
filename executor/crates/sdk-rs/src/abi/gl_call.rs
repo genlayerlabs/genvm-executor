@@ -7,7 +7,7 @@ use bytes::Bytes;
 use genlayer_calldata::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::calldata;
+use genlayer_calldata as calldata;
 
 use super::consts as public_abi;
 use super::fees;

@@ -381,18 +381,18 @@ pub struct StorageAddress {
 }
 
 impl StorageAddress {
-    pub fn get(&self) -> crate::calldata::Address {
+    pub fn get(&self) -> genlayer_calldata::Address {
         let mut buf = [0u8; 20];
         self.slot.read(self.offset, &mut buf);
-        crate::calldata::Address::from(buf)
+        genlayer_calldata::Address::from(buf)
     }
 
-    pub fn set(&self, val: crate::calldata::Address) {
+    pub fn set(&self, val: genlayer_calldata::Address) {
         self.slot.write(self.offset, &val.raw());
     }
 }
 
-impl StorageType for crate::calldata::Address {
+impl StorageType for genlayer_calldata::Address {
     const SIZE: u32 = 20;
     type Handle = StorageAddress;
     fn handle_at(slot: Slot, offset: u32) -> Self::Handle {
@@ -400,12 +400,12 @@ impl StorageType for crate::calldata::Address {
     }
 }
 
-impl StorageValue for crate::calldata::Address {
-    type Value = crate::calldata::Address;
-    fn storage_get(handle: &StorageAddress) -> crate::calldata::Address {
+impl StorageValue for genlayer_calldata::Address {
+    type Value = genlayer_calldata::Address;
+    fn storage_get(handle: &StorageAddress) -> genlayer_calldata::Address {
         handle.get()
     }
-    fn storage_set(handle: &StorageAddress, val: &crate::calldata::Address) {
+    fn storage_set(handle: &StorageAddress, val: &genlayer_calldata::Address) {
         handle.set(*val)
     }
 }

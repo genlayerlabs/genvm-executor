@@ -7,15 +7,15 @@ use genvm_common::*;
 use crate::public_abi;
 use crate::public_abi::root_offsets;
 use crate::public_abi::{ResultCode, StorageType};
-use genvm_common::calldata::Address;
-use genvm_common::calldata::ADDRESS_SIZE;
+use genlayer_sdk::calldata::Address;
+use genlayer_sdk::calldata::ADDRESS_SIZE;
 
 use core::str;
 use std::os::fd::FromRawFd;
 
 use anyhow::{Context, Result};
 
-use crate::{calldata, rt};
+use crate::{calldata, domain, rt};
 pub use message::SlotID;
 
 pub trait Sock: std::io::Read + std::io::Write + Send + Sync {}
@@ -116,7 +116,7 @@ fn handle_host_error(sock: &mut dyn Sock, context: &str) -> Result<()> {
 pub fn encode_result(res: &Result<FullResult>) -> Result<Vec<u8>> {
     match res {
         Ok(d) => {
-            let mut encoded = Vec::from([d.kind as u8]);
+            let mut encoded = Vec::from([d.reported.kind as u8]);
             let as_value = calldata::to_value(d);
             calldata::encode_to(&mut calldata::Encoder::new(&mut encoded), &as_value)?;
             Ok(encoded)
@@ -150,43 +150,45 @@ pub fn all_useful_work_done() {
     std::process::exit(0);
 }
 
-#[derive(Debug, Clone, genlayer_calldata::Encode)]
+#[derive(Debug, Clone)]
 pub struct FullResult {
-    pub execution_hash: bytes::Bytes,
-
-    pub kind: public_abi::ResultCode,
-    pub data: calldata::unparsed::Maybe<calldata::Value>,
-    pub backtrace: Option<rt::errors::Backtrace>,
-    pub wasm_store_hashes: rt::errors::WasmStoreHashes,
-    pub storage_changes: Vec<rt::vm::storage::Delta>,
-
-    pub emissions: Vec<domain::ExecutionEmission>,
-
-    pub nondet_disagreement: Option<u32>,
-    pub nondet_results: Vec<bytes::Bytes>,
-
-    pub data_fees_remaining: Vec<primitive_types::U256>,
-    pub data_fees_consumed: rt::fees::BucketsConsumed,
-
-    pub llm_consumption: primitive_types::U256,
+    pub reported: genvm_modules_interfaces::ReportedResult,
     pub recorded_actions: Vec<rt::supervisor::RecordedAction>,
+}
+
+impl std::ops::Deref for FullResult {
+    type Target = genvm_modules_interfaces::ReportedResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.reported
+    }
+}
+
+impl<W: calldata::Writer> calldata::codec::Encode<W> for FullResult {
+    type Error = W::Error;
+
+    fn encode(&self, enc: &mut calldata::Encoder<W>) -> std::result::Result<(), Self::Error> {
+        calldata::codec::Encode::encode(&self.reported, enc)
+    }
 }
 
 impl FullResult {
     pub fn new_internal_error(msg: String) -> Self {
         Self {
-            execution_hash: bytes::Bytes::new(),
-            kind: public_abi::ResultCode::InternalError,
-            data: calldata::Value::Str(msg).into(),
-            backtrace: None,
-            wasm_store_hashes: rt::errors::WasmStoreHashes::default(),
-            storage_changes: Vec::new(),
-            emissions: Vec::new(),
-            nondet_disagreement: None,
-            nondet_results: Vec::new(),
-            data_fees_remaining: Vec::new(),
-            data_fees_consumed: rt::fees::BucketsConsumed::default(),
-            llm_consumption: primitive_types::U256::zero(),
+            reported: genvm_modules_interfaces::ReportedResult {
+                execution_hash: bytes::Bytes::new(),
+                kind: genvm_modules_interfaces::ResultCode::InternalError,
+                data: calldata::Value::Str(msg).into(),
+                backtrace: None,
+                wasm_store_hashes: genvm_modules_interfaces::WasmStoreHashes::default(),
+                storage_changes: Vec::new(),
+                emissions: Vec::new(),
+                nondet_disagreement: None,
+                nondet_results: Vec::new(),
+                data_fees_remaining: Vec::new(),
+                data_fees_consumed: genvm_modules_interfaces::BucketsConsumed::default(),
+                llm_consumption: primitive_types::U256::zero(),
+            },
             recorded_actions: Vec::new(),
         }
     }
@@ -268,21 +270,206 @@ impl FullResult {
         let execution_hash = bytes::Bytes::from(sha3::Digest::finalize(hasher.0).to_vec());
 
         Self {
-            execution_hash,
+            reported: genvm_modules_interfaces::ReportedResult {
+                execution_hash,
 
-            data: rt_result.data,
-            backtrace: rt_result.backtrace,
-            wasm_store_hashes: rt_result.wasm_store_hashes,
-            kind: rt_result.kind,
-            storage_changes: rt_result.storage_changes,
-            emissions: rt_result.emissions,
-            nondet_results,
-            nondet_disagreement,
-            data_fees_remaining,
-            data_fees_consumed,
-            llm_consumption,
+                data: rt_result.data,
+                backtrace: rt_result.backtrace.map(convert_backtrace),
+                wasm_store_hashes: convert_wasm_store_hashes(rt_result.wasm_store_hashes),
+                kind: convert_result_code(rt_result.kind),
+                storage_changes: rt_result
+                    .storage_changes
+                    .iter()
+                    .map(convert_storage_delta)
+                    .collect(),
+                emissions: rt_result
+                    .emissions
+                    .into_iter()
+                    .map(convert_emission)
+                    .collect(),
+                nondet_results,
+                nondet_disagreement,
+                data_fees_remaining,
+                data_fees_consumed: convert_buckets_consumed(data_fees_consumed),
+                llm_consumption,
+            },
             recorded_actions,
         }
+    }
+}
+
+fn convert_result_code(code: public_abi::ResultCode) -> genvm_modules_interfaces::ResultCode {
+    match code {
+        public_abi::ResultCode::Return => genvm_modules_interfaces::ResultCode::Return,
+        public_abi::ResultCode::UserError => genvm_modules_interfaces::ResultCode::UserError,
+        public_abi::ResultCode::VmError => genvm_modules_interfaces::ResultCode::VmError,
+        public_abi::ResultCode::InternalError => {
+            genvm_modules_interfaces::ResultCode::InternalError
+        }
+    }
+}
+
+fn convert_backtrace(backtrace: rt::errors::Backtrace) -> genvm_modules_interfaces::Backtrace {
+    genvm_modules_interfaces::Backtrace {
+        frames: backtrace
+            .frames
+            .into_iter()
+            .map(|frame| genvm_modules_interfaces::Frame {
+                module_name: frame.module_name,
+                func: frame.func,
+            })
+            .collect(),
+    }
+}
+
+fn convert_wasm_store_hashes(
+    hashes: rt::errors::WasmStoreHashes,
+) -> genvm_modules_interfaces::WasmStoreHashes {
+    genvm_modules_interfaces::WasmStoreHashes(
+        hashes
+            .0
+            .into_iter()
+            .map(|(module, fingerprint)| {
+                (
+                    module,
+                    genvm_modules_interfaces::ModuleFingerprint {
+                        memories: fingerprint
+                            .memories
+                            .into_iter()
+                            .map(|memory| memory.0)
+                            .collect(),
+                    },
+                )
+            })
+            .collect(),
+    )
+}
+
+fn convert_storage_delta(delta: &rt::vm::storage::Delta) -> genvm_modules_interfaces::StorageDelta {
+    let (key, value) = delta.cloned_parts();
+    genvm_modules_interfaces::StorageDelta::new(key, value)
+}
+
+fn convert_buckets_consumed(
+    consumed: rt::fees::BucketsConsumed,
+) -> genvm_modules_interfaces::BucketsConsumed {
+    genvm_modules_interfaces::BucketsConsumed {
+        storage: consumed.storage,
+        message_receipt: consumed.message_receipt,
+        nondet_output: consumed.nondet_output,
+        message_fee: consumed.message_fee,
+        event: consumed.event,
+    }
+}
+
+fn convert_on(on: genlayer_sdk::abi::gl_call::On) -> genvm_modules_interfaces::On {
+    match on {
+        genlayer_sdk::abi::gl_call::On::Finalized => genvm_modules_interfaces::On::Finalized,
+        genlayer_sdk::abi::gl_call::On::Accepted => genvm_modules_interfaces::On::Accepted,
+    }
+}
+
+fn convert_call_key(call_key: genlayer_sdk::abi::CallKey) -> genvm_modules_interfaces::CallKey {
+    genvm_modules_interfaces::CallKey(call_key.0)
+}
+
+fn convert_internal_message_params(
+    params: genlayer_sdk::abi::fees::InternalMessageParams,
+) -> genvm_modules_interfaces::fees::InternalMessageParams {
+    genvm_modules_interfaces::fees::InternalMessageParams {
+        leader_timeunits_allocation: params.leader_timeunits_allocation,
+        validator_timeunits_allocation: params.validator_timeunits_allocation,
+        execution_budget_per_round: params.execution_budget_per_round,
+        rotations: params.rotations,
+        max_price_gen_per_time_unit: params.max_price_gen_per_time_unit,
+        storage_fee_max_gas_price: params.storage_fee_max_gas_price,
+        receipt_fee_max_gas_price: params.receipt_fee_max_gas_price,
+    }
+}
+
+fn convert_external_message_params(
+    params: genlayer_sdk::abi::fees::ExternalMessageParams,
+) -> genvm_modules_interfaces::fees::ExternalMessageParams {
+    genvm_modules_interfaces::fees::ExternalMessageParams {
+        gas_limit: params.gas_limit,
+        max_gas_price: params.max_gas_price,
+    }
+}
+
+fn convert_emission(
+    emission: domain::ExecutionEmission,
+) -> genvm_modules_interfaces::ExecutionEmission {
+    match emission {
+        domain::ExecutionEmission::EthSend {
+            address,
+            calldata,
+            value,
+            message_fee,
+            receipt_fee,
+            fee_params,
+        } => genvm_modules_interfaces::ExecutionEmission::EthSend {
+            address,
+            calldata,
+            value,
+            message_fee,
+            receipt_fee,
+            fee_params: convert_external_message_params(fee_params),
+        },
+        domain::ExecutionEmission::PostMessage {
+            call_key,
+            address,
+            calldata,
+            value,
+            on,
+            message_fee,
+            receipt_fee,
+            fee_params,
+            subtree,
+            use_balance,
+        } => genvm_modules_interfaces::ExecutionEmission::PostMessage {
+            call_key: convert_call_key(call_key),
+            address,
+            calldata,
+            value,
+            on: convert_on(on),
+            message_fee,
+            receipt_fee,
+            fee_params: convert_internal_message_params(fee_params),
+            subtree,
+            use_balance,
+        },
+        domain::ExecutionEmission::DeployContract {
+            calldata,
+            code,
+            value,
+            on,
+            salt_nonce,
+            message_fee,
+            receipt_fee,
+            fee_params,
+            subtree,
+            use_balance,
+        } => genvm_modules_interfaces::ExecutionEmission::DeployContract {
+            calldata,
+            code,
+            value,
+            on: convert_on(on),
+            salt_nonce,
+            message_fee,
+            receipt_fee,
+            fee_params: convert_internal_message_params(fee_params),
+            subtree,
+            use_balance,
+        },
+        domain::ExecutionEmission::EmitEvent {
+            topics,
+            blob,
+            storage_fee,
+        } => genvm_modules_interfaces::ExecutionEmission::EmitEvent {
+            topics,
+            blob,
+            storage_fee,
+        },
     }
 }
 

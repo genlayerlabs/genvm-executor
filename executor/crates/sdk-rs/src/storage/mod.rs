@@ -9,7 +9,7 @@ pub use self::array::*;
 pub use self::core::*;
 pub use self::tree_map::*;
 
-use crate::calldata::Address;
+use genlayer_calldata::Address;
 
 // Field order defines slot offsets; must match `root_offsets` in the public ABI
 // and `Root` in runners/genlayer-py-std/.../storage/root.py:

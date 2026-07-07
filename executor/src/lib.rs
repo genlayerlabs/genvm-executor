@@ -1,5 +1,6 @@
 pub mod caching;
 pub mod config;
+pub mod domain;
 pub mod host;
 pub mod modules;
 pub mod rt;
@@ -8,7 +9,7 @@ pub mod wasi;
 
 pub use genlayer_sdk::abi::consts as public_abi;
 
-pub use genvm_common::calldata;
+pub use genlayer_sdk::calldata;
 use genvm_common::*;
 
 pub use host::{Host, SlotID};
@@ -81,7 +82,7 @@ pub fn create_supervisor(
     named: CreateSupervisorNamedArgs,
     host_data: genvm_modules_interfaces::HostData,
     shared_data: sync::DArc<rt::SharedData>,
-    message: &domain::MessageData,
+    message: &genvm_modules_interfaces::MessageData,
 ) -> Result<ExecutionContext> {
     let metrics = shared_data.gep(|x| &x.metrics);
 
@@ -153,8 +154,24 @@ pub fn create_supervisor(
     })
 }
 
+fn convert_message_data(
+    message: genvm_modules_interfaces::MessageData,
+) -> genlayer_sdk::abi::entry::MessageData {
+    genlayer_sdk::abi::entry::MessageData {
+        contract_address: message.contract_address,
+        sender_address: message.sender_address,
+        origin_address: message.origin_address,
+        signer_address: message.signer_address,
+        stack: Vec::new(),
+        chain_id: message.chain_id,
+        value: message.value,
+        is_init: message.is_init,
+        datetime: message.datetime,
+    }
+}
+
 pub async fn run_with_impl(
-    entry_data: domain::ExecutionData,
+    entry_data: genvm_modules_interfaces::ExecutionData,
     context: &ExecutionContext,
     permissions: &str,
     deploy_pin: &mut Option<runners::cache::ArchivePin>,
@@ -260,7 +277,7 @@ pub async fn run_with_impl(
             },
         },
         message_data: ExtendedMessage {
-            message: entry_data.message,
+            message: convert_message_data(entry_data.message),
             entry_kind: public_abi::EntryKind::Main,
             entry_data: entry_data.calldata,
             entry_stage_data: calldata::Value::Null,
@@ -303,7 +320,7 @@ pub async fn run_with_impl(
 }
 
 pub async fn run_with(
-    entry_data: domain::ExecutionData,
+    entry_data: genvm_modules_interfaces::ExecutionData,
     context: ExecutionContext,
     permissions: &str,
 ) -> anyhow::Result<host::FullResult> {

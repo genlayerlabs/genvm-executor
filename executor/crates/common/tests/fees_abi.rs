@@ -1,5 +1,5 @@
 use genlayer_sdk::abi::gl_call::On;
-use genvm_common::domain::fees::{
+use genvm_modules_interfaces::domain::{
     ExternalMessageParams, InternalMessageParams, MessageAllocationNode,
     MessageAllocationNodeParams,
 };

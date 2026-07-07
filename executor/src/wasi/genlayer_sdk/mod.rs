@@ -8,7 +8,7 @@ use genvm_modules_interfaces::GenericValue;
 use wiggle::GuestError;
 
 use crate::host::{self, SlotID};
-use crate::{anyhow_to_wasmtime, calldata, public_abi, rt, wasi};
+use crate::{anyhow_to_wasmtime, calldata, domain, public_abi, rt, wasi};
 
 pub use genlayer_sdk::abi::entry::ExtendedMessage;
 use genlayer_sdk::abi::{self, gl_call};
@@ -113,7 +113,7 @@ pub struct VMDataAccumulator {
     pub data_fees_limit: DArc<rt::fees::DataLimit>,
     pub messages_value_decremented: primitive_types::U256,
     pub emissions: Vec<domain::ExecutionEmission>,
-    pub message_fee_allocation: Vec<domain::fees::MessageAllocationNode>,
+    pub message_fee_allocation: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
 }
 
 impl VMDataAccumulator {

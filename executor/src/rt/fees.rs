@@ -39,7 +39,7 @@ fn attrs_object(vars: &[(&str, genvm_common::expr::Value)]) -> genvm_common::exp
 
 /// Builds the `feeParams` object consumed by the `messageFeeFloor` prelude fn.
 pub fn fee_params_value_internal(
-    p: &genvm_common::domain::fees::InternalMessageParams,
+    p: &genlayer_sdk::abi::fees::InternalMessageParams,
 ) -> genvm_common::expr::Value {
     use genvm_common::expr::Value;
     let mut m = std::collections::BTreeMap::new();
@@ -77,7 +77,7 @@ pub fn fee_params_value_internal(
 }
 
 pub fn fee_params_value_external(
-    p: &genvm_common::domain::fees::ExternalMessageParams,
+    p: &genlayer_sdk::abi::fees::ExternalMessageParams,
 ) -> genvm_common::expr::Value {
     use genvm_common::expr::Value;
     let mut m = std::collections::BTreeMap::new();
@@ -510,7 +510,7 @@ impl DataLimit {
         &self,
         on: abi::gl_call::On,
         balance_funded: bool,
-        matched_fee_params: &genvm_common::domain::fees::InternalMessageParams,
+        matched_fee_params: &genlayer_sdk::abi::fees::InternalMessageParams,
     ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
             &self.message_fee,
@@ -591,7 +591,7 @@ impl DataLimit {
 
     pub fn calculate_message_fee_external(
         &self,
-        matched_fee_params: &genvm_common::domain::fees::ExternalMessageParams,
+        matched_fee_params: &genlayer_sdk::abi::fees::ExternalMessageParams,
     ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
             &self.message_fee,

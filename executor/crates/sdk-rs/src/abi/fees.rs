@@ -3,10 +3,25 @@
 //! [`InternalMessageParams`] lives here (rather than in `genvm_common`) so that
 //! [`gl_call`](super::gl_call) can reference it: a guest emitting a
 //! balance-funded internal message ships these params, and GenVM meters the fee
-//! from them. `genvm_common::domain::fees` re-exports the type for the
-//! executor-side call sites, so those paths are unchanged.
+//! from them.
 
 use primitive_types::U256;
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    genlayer_calldata::Encode,
+    genlayer_calldata::Decode,
+)]
+pub struct ExternalMessageParams {
+    pub gas_limit: U256,
+    pub max_gas_price: U256,
+}
 
 #[derive(
     Debug,

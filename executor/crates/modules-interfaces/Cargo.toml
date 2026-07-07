@@ -6,9 +6,15 @@ edition = "2021"
 [lib]
 path = "../../../../../crates/modules-interfaces/src/lib.rs"
 
+[features]
+arbitrary = ["dep:arbitrary"]
+default = []
+
 [dependencies]
 anyhow = "1.0.97"
+arbitrary = { version = "1.0", optional = true }
 bytes = { version = "1.11.0", features = ["serde"] }
+chrono = "0.4.45"
 genlayer_calldata = { path = "../calldata" }
 num-bigint = "0.4"
 num-traits = "0.2"

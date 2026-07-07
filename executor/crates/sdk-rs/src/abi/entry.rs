@@ -613,7 +613,7 @@ pub mod wasi_only {
     pub fn user_error_immediately(msg: String) -> ! {
         let last_gl_call_data = calldata::Value::Map(std::collections::BTreeMap::from([(
             "UserError".to_owned(),
-            crate::calldata::Value::Str(msg),
+            genlayer_calldata::Value::Str(msg),
         )]));
 
         let last_gl_call_data = calldata::encode(&last_gl_call_data);
@@ -689,7 +689,7 @@ pub mod wasi_only {
             )])),
             Err(e) => calldata::Value::Map(std::collections::BTreeMap::from([(
                 "UserError".to_owned(),
-                crate::calldata::Value::Str(e.to_string()),
+                genlayer_calldata::Value::Str(e.to_string()),
             )])),
         };
 

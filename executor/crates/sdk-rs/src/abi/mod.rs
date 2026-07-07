@@ -8,7 +8,7 @@
 //! - [`gl_call`]: Message types for gl_call operations
 //! - [`wasi`]: WASI bindings for storage, balance, and gl_call
 
-use crate::calldata;
+use genlayer_calldata as calldata;
 
 #[cfg(feature = "arbitrary")]
 pub(crate) mod arb;

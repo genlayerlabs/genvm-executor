@@ -1187,7 +1187,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         // exit-carrier error through `unwrap_vm_errors`: a zero exit is a normal
         // empty return, any other code is a VM error.
         let trap: anyhow::Error = if code == 0 {
-            crate::wasi::genlayer_sdk::ContractReturn(genvm_common::calldata::Value::Null.into())
+            crate::wasi::genlayer_sdk::ContractReturn(genlayer_sdk::calldata::Value::Null.into())
                 .into()
         } else {
             rt::errors::Error::vm(abi::consts::VmError::exit_code().val_i32(code)).into()

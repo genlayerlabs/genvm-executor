@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use std::{io::Write, str::FromStr};
 
-use crate::calldata;
+use genlayer_calldata as calldata;
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[clap(rename_all = "kebab_case")]
@@ -236,7 +236,7 @@ macro_rules! __make_capture {
 
     (cd = $value:expr) => {
         $crate::logger::Capture::Cd(&|v, conf| {
-            let val = $crate::calldata::to_value(&$value);
+            let val = genlayer_calldata::to_value(&$value);
             serde::Serialize::serialize(&val, $crate::logger::Visitor(v, 0, *conf))
         })
     };

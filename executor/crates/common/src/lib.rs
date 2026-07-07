@@ -23,8 +23,6 @@ pub mod host_fns;
 pub mod public_abi_pending;
 pub mod util;
 
-pub mod domain;
-
 #[cfg(not(debug_assertions))]
 fn default_log_level() -> logger::Level {
     logger::Level::Info

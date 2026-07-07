@@ -36,6 +36,12 @@ pub struct Delta(
     #[serde(with = "serde_bytes")] Vec<u8>,
 );
 
+impl Delta {
+    pub(crate) fn cloned_parts(&self) -> ([u8; 36], Vec<u8>) {
+        (self.0, self.1.clone())
+    }
+}
+
 impl<W: calldata::Writer> calldata::codec::Encode<W> for Delta {
     type Error = W::Error;
 

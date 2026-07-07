@@ -14,7 +14,7 @@ struct ConsumeInternalArgs {
 enum FeeFunding<'a> {
     /// Sender-pool allocation: fee capped by `node.budget`; consumes the
     /// message-fee and receipt buckets.
-    Allocation(&'a mut domain::fees::MessageAllocationNode),
+    Allocation(&'a mut genvm_modules_interfaces::fees::MessageAllocationNode),
     /// Balance-funded (`useBalance`): the metered fee is the `declaredBudget`,
     /// reserved from the contract balance. On-chain such messages are excluded
     /// from the sender pool, so the message-fee bucket is skipped and only the
@@ -27,10 +27,44 @@ enum FeeFunding<'a> {
     },
 }
 
+fn convert_on_to_modules(on: gl_call::On) -> genvm_modules_interfaces::On {
+    match on {
+        gl_call::On::Finalized => genvm_modules_interfaces::On::Finalized,
+        gl_call::On::Accepted => genvm_modules_interfaces::On::Accepted,
+    }
+}
+
+fn convert_call_key_to_modules(call_key: abi::CallKey) -> genvm_modules_interfaces::CallKey {
+    genvm_modules_interfaces::CallKey(call_key.0)
+}
+
+fn convert_internal_message_params_to_sdk(
+    params: &genvm_modules_interfaces::fees::InternalMessageParams,
+) -> abi::fees::InternalMessageParams {
+    abi::fees::InternalMessageParams {
+        leader_timeunits_allocation: params.leader_timeunits_allocation,
+        validator_timeunits_allocation: params.validator_timeunits_allocation,
+        execution_budget_per_round: params.execution_budget_per_round,
+        rotations: params.rotations.clone(),
+        max_price_gen_per_time_unit: params.max_price_gen_per_time_unit,
+        storage_fee_max_gas_price: params.storage_fee_max_gas_price,
+        receipt_fee_max_gas_price: params.receipt_fee_max_gas_price,
+    }
+}
+
+fn convert_external_message_params_to_sdk(
+    params: genvm_modules_interfaces::fees::ExternalMessageParams,
+) -> abi::fees::ExternalMessageParams {
+    abi::fees::ExternalMessageParams {
+        gas_limit: params.gas_limit,
+        max_gas_price: params.max_gas_price,
+    }
+}
+
 async fn consume_message_fee_internal(
     shared_data: &rt::SharedData,
     funding: FeeFunding<'_>,
-    fee_params: Arc<domain::fees::InternalMessageParams>,
+    fee_params: Arc<abi::fees::InternalMessageParams>,
     on: gl_call::On,
     args: ConsumeInternalArgs,
 ) -> Result<rt::fees::MessageFeeConsumption, generated::types::Error> {
@@ -138,8 +172,8 @@ struct ConsumeExternalArgs {
 
 async fn consume_message_fee_external(
     shared_data: &rt::SharedData,
-    node: &mut domain::fees::MessageAllocationNode,
-    params: domain::fees::ExternalMessageParams,
+    node: &mut genvm_modules_interfaces::fees::MessageAllocationNode,
+    params: abi::fees::ExternalMessageParams,
     // External messages are always emitted on finalization; carried for signature
     // symmetry with the internal path.
     _on: gl_call::On,
@@ -222,8 +256,8 @@ pub(super) const FEE_PARAM_COUNT_BITS: usize = 32;
 pub(super) fn validate_balance_fee(
     can_use_balance: bool,
     use_balance: bool,
-    fee_params: Option<domain::fees::InternalMessageParams>,
-) -> Result<Option<domain::fees::InternalMessageParams>, generated::types::Error> {
+    fee_params: Option<abi::fees::InternalMessageParams>,
+) -> Result<Option<abi::fees::InternalMessageParams>, generated::types::Error> {
     match (use_balance, fee_params) {
         (true, _) if !can_use_balance => {
             log_debug!("balance-funded message rejected: permission absent (Forbidden)");
@@ -313,7 +347,7 @@ impl ContextVFS<'_> {
             .message_fee_allocation
             .iter_mut()
             .find_map(|node| {
-                node.matches_external(address, call_key)
+                node.matches_external(address, convert_call_key_to_modules(call_key))
                     .map(|params| (node, params))
             })
         else {
@@ -330,6 +364,7 @@ impl ContextVFS<'_> {
         };
 
         let calldata_length = calldata.len() as u64;
+        let matched_params = convert_external_message_params_to_sdk(matched_params);
 
         let fees = consume_message_fee_external(
             &self.context.data.supervisor.shared_data,
@@ -450,7 +485,7 @@ impl ContextVFS<'_> {
         value: primitive_types::U256,
         on: gl_call::On,
         use_balance: bool,
-        fee_params: Option<domain::fees::InternalMessageParams>,
+        fee_params: Option<abi::fees::InternalMessageParams>,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         log_debug!(
             recipient = address,
@@ -569,8 +604,12 @@ impl ContextVFS<'_> {
             .message_fee_allocation
             .iter_mut()
             .find_map(|node| {
-                node.matches_internal(on, address, call_key)
-                    .map(|params| (node, params))
+                node.matches_internal(
+                    convert_on_to_modules(on),
+                    address,
+                    convert_call_key_to_modules(call_key),
+                )
+                .map(|params| (node, params))
             })
         else {
             log_warn!(
@@ -597,15 +636,17 @@ impl ContextVFS<'_> {
         calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
         let calldata_length = enc.into_inner().0;
 
-        let fee_params = (*matched_params).clone();
-        let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
-            &matched_node.children,
-        ));
+        let fee_params = convert_internal_message_params_to_sdk(matched_params.as_ref());
+        let subtree = bytes::Bytes::from(
+            genvm_modules_interfaces::fees::MessageAllocationNode::abi_encode(
+                &matched_node.children,
+            ),
+        );
 
         let fees = consume_message_fee_internal(
             &self.context.data.supervisor.shared_data,
             FeeFunding::Allocation(matched_node),
-            matched_params,
+            Arc::new(fee_params.clone()),
             on,
             ConsumeInternalArgs {
                 is_deploy: false,
@@ -656,7 +697,7 @@ impl ContextVFS<'_> {
         on: gl_call::On,
         salt_nonce: primitive_types::U256,
         use_balance: bool,
-        fee_params: Option<domain::fees::InternalMessageParams>,
+        fee_params: Option<abi::fees::InternalMessageParams>,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         if !self.context.data.conf.permissions.deterministic {
             return Err(generated::types::Errno::Forbidden.into());
@@ -752,8 +793,12 @@ impl ContextVFS<'_> {
             .message_fee_allocation
             .iter_mut()
             .find_map(|node| {
-                node.matches_internal(on, calldata::Address::zero(), abi::CallKey::DEPLOY)
-                    .map(|params| (node, params))
+                node.matches_internal(
+                    convert_on_to_modules(on),
+                    calldata::Address::zero(),
+                    convert_call_key_to_modules(abi::CallKey::DEPLOY),
+                )
+                .map(|params| (node, params))
             })
         else {
             log_warn!(
@@ -774,15 +819,17 @@ impl ContextVFS<'_> {
         calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
         let calldata_length = enc.into_inner().0;
 
-        let fee_params = (*matched_params).clone();
-        let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
-            &matched_node.children,
-        ));
+        let fee_params = convert_internal_message_params_to_sdk(matched_params.as_ref());
+        let subtree = bytes::Bytes::from(
+            genvm_modules_interfaces::fees::MessageAllocationNode::abi_encode(
+                &matched_node.children,
+            ),
+        );
 
         let fees = consume_message_fee_internal(
             &self.context.data.supervisor.shared_data,
             FeeFunding::Allocation(matched_node),
-            matched_params,
+            Arc::new(fee_params.clone()),
             on,
             ConsumeInternalArgs {
                 is_deploy: true,
