@@ -37,3 +37,6 @@ perf.data*
 core.[0-9]*
 node_modules
 /runners/genlayer-py-std/
+
+# git-hooks.nix dev-shell artifact
+/.pre-commit-config.yaml
