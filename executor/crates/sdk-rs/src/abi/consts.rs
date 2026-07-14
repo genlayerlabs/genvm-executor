@@ -389,3 +389,5 @@ impl VmError {
 }
 
 pub const EVENT_MAX_TOPICS: u32 = 4;
+
+// EOF

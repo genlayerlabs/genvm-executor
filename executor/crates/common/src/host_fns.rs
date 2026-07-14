@@ -136,3 +136,5 @@ impl VmErrorDetail {
 
 pub const CURRENT_MAJOR: u8 = 0;
 pub const CURRENT_MAJOR_STR: &'static str = "v0.0.0";
+
+// EOF
