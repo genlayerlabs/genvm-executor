@@ -35,6 +35,18 @@
       let
         pkgs = import nixpkgs { inherit system; };
         hooks-python = pkgs.python312;
+        # Self-contained docs toolchain (sphinx + extensions) for this line's
+        # standalone docs sub-site, built via `nix develop .#gen-docs`. The
+        # manager's support/ci/pipelines/docs.py enters this shell and drops the
+        # output under build/doc/html/executors/<line>/.
+        docs-python = pkgs.python312.withPackages (
+          ps: with ps; [
+            sphinx
+            myst-parser
+            pydata-sphinx-theme
+            sphinxcontrib-mermaid
+          ]
+        );
         # cargo fmt per crate: each Cargo.toml picks up its own edition.
         cargo-fmt-all = pkgs.writeShellScript "cargo-fmt-all" ''
           set -euo pipefail
@@ -156,6 +168,14 @@
           packages = pre-commit-check.enabledPackages;
           # Standalone dev shell: installs the git-hooks stubs into .git/hooks.
           shellHook = pre-commit-check.shellHook;
+        };
+        devShells.gen-docs = pkgs.mkShell {
+          # Standalone sphinx toolchain for this line's docs sub-site (mmdc
+          # backs the sphinxcontrib.mermaid svg output).
+          packages = [
+            docs-python
+            pkgs.mermaid-cli
+          ];
         };
       }
     );
