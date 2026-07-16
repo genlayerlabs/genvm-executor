@@ -55,7 +55,7 @@ genvm-common = { path = "crates/common" }
 # variant); modules-interfaces no longer depends on sdk-rs, so there is no clash.
 genlayer_calldata = { path = "crates/calldata" }
 genlayer_sdk = { path = "crates/sdk-rs", default-features = false }
-genvm-modules-interfaces = { path = "crates/modules-interfaces" }
+genvm_modules_interfaces = { path = "crates/modules-interfaces" }
 
 anyhow = { version = "1.0.97", default-features = false }
 arbitrary = { version = "1.0.3", features = ["derive"] }

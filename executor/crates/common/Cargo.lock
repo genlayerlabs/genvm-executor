@@ -537,6 +537,7 @@ dependencies = [
  "rpds",
  "rustix",
  "serde",
+ "serde_bytes",
  "serde_json",
  "serde_yaml",
  "symbol_table",

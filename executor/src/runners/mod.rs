@@ -160,37 +160,6 @@ fn is_hash_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '='
 }
 
-fn parse_safe_address(s: &str) -> Option<[u8; 20]> {
-    let s = s.strip_prefix("0x").unwrap_or(s);
-
-    if s.len() != 40 {
-        log_warn!("address must be exactly 40 hex characters, got {}", s.len());
-        return None;
-    }
-
-    let mut address = [0u8; 20];
-    if hex::decode_to_slice(s, &mut address).is_err() {
-        log_warn!("address contains invalid hex characters");
-        return None;
-    }
-
-    let is_all_lower = s.chars().all(|c| !c.is_ascii_uppercase());
-    let is_all_upper = s.chars().all(|c| !c.is_ascii_lowercase());
-
-    if is_all_lower || is_all_upper {
-        return Some(address);
-    }
-
-    let addr = calldata::Address::from(address);
-    let checksum = addr.checksum_hex_string();
-    if s == checksum {
-        return Some(address);
-    }
-
-    log_warn!("address must be all lowercase, all uppercase, or valid checksum");
-    None
-}
-
 pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
     // `<contract>` is the v0.2.16 spelling of the contract self-reference (it
     // appears verbatim in the `With { runner: "<contract>" }` step of the
@@ -199,30 +168,8 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
         return Some(IdUnresolved::Contract);
     }
 
-    if let Some(rest) = id.strip_prefix("chain:") {
-        let mut it = rest.split(':');
-        let address = it.next()?;
-        let on_str = it.next();
-        let slot_str = it.next();
-        if it.next().is_some() {
-            return None;
-        }
-
-        let address = calldata::Address::from(parse_safe_address(address)?);
-        let on = match on_str {
-            Some("a") | None => Some(ChainState::Accepted),
-            Some("f") => Some(ChainState::Finalized),
-            _ => return None,
-        };
-        let slot = match slot_str {
-            Some(s) => {
-                let bytes: [u8; 32] = genlayer_sdk::nix32::decode(s).ok()?.try_into().ok()?;
-                Some(crate::SlotID::from_bytes(bytes))
-            }
-            None => None,
-        };
-
-        return Some(IdUnresolved::Chain { address, on, slot });
+    if id.starts_with("chain:") {
+        return None;
     }
 
     if let Some(rest) = id.strip_prefix("custom:") {
