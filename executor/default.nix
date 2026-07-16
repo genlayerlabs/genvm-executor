@@ -16,14 +16,19 @@
   ...
 }@args:
 let
-  # Release manifests (latest.json/all.json) are produced by the umbrella's
-  # runner machinery, which owns the accumulate-and-build logic. This executor
-  # checkout is mounted at <umbrella>/executors/v0.3.x, so the umbrella root
-  # (and its ./runners) is three levels up. `all.json` carries every runner
-  # compatible up to our version; `latest.json` our own current runners.
-  manifests-data = import ../../../runners/views/release.nix (
-    args // { executorVersion = build-config.executor-version; }
-  );
+  # v0.2.x is a frozen legacy line, so its runner registry never changes: rather
+  # than run it through the umbrella's accumulate-and-filter machinery (which is
+  # built for forward-rolling lines and whose `latest` would pick the wrong hash
+  # per id — it has no per-runner version metadata to order them), we ship the
+  # exact `all.json`/`latest.json` from the v0.2.16 release, committed under
+  # `./registry`. They list precisely the runners in `genvm-universal.tar.xz`
+  # (see ../runners/index.json), which is what this line fetches. `all.json` is
+  # consulted to accept a requested runner hash; `latest.json` resolves an id to
+  # its newest runner in debug mode (used by e.g. `Depends: py-genlayer:test`).
+  manifests-data = {
+    all = ./registry/all.json;
+    latest = ./registry/latest.json;
+  };
 
   lib = pkgs.lib;
   make-for-target =
@@ -39,8 +44,10 @@ let
 
         src = get-root-subtree [
           "${exec-prefix}/executor/src"
-          # host<->executor interface and schemas live in the manager root
+          # host<->executor interface and shared calldata live in the manager root
           "crates/modules-interfaces"
+          "crates/calldata"
+          "crates/calldata-derive"
           "${exec-prefix}/executor/crates"
           "${exec-prefix}/executor/third-party"
           "${exec-prefix}/executor/Cargo.toml"

@@ -114,7 +114,7 @@ pub mod metric {
         }
     }
 
-    use crate::calldata;
+    use genlayer_calldata as calldata;
 
     impl<W: calldata::Writer> calldata::codec::Encode<W> for TokenMetrics {
         type Error = W::Error;

@@ -9,7 +9,7 @@ use sha3::digest::Update;
 use wiggle::GuestError;
 
 use crate::host::{self, SlotID};
-use crate::{anyhow_to_wasmtime, calldata, public_abi, rt, runners, wasi};
+use crate::{anyhow_to_wasmtime, calldata, domain, public_abi, rt, runners, wasi};
 
 use genlayer_calldata::codec::Encode;
 pub use genlayer_sdk::abi::entry::ExtendedMessage;
@@ -912,10 +912,12 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 // Peek the (possibly deferred) calldata to derive the fee call key.
                 let calldata_materialized = calldata.clone().materialize().ok();
+                // This calldata is built by the runner, which writes the method
+                // name under the legacy "method" key (gl/genvm_contracts.py:46).
                 let method_name = calldata_materialized
                     .as_ref()
                     .and_then(|x| x.as_map())
-                    .and_then(|x| x.get(""))
+                    .and_then(|x| x.get(super::method_compat::LEGACY_METHOD_KEY))
                     .and_then(|x| x.as_str());
                 let call_key = if let Some(method_name) = method_name {
                     abi::CallKey::for_method(method_name)
@@ -1134,7 +1136,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 if space_left < abi::consts::top_limits::WEB_RENDER_MIN_SPACE {
                     log_warn!(space_left = space_left; "not enough memory for web render");
                     return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into(),
+                        rt::errors::Error::vm(abi::consts::VmError::oom().val()).into(),
                     )));
                 }
 
@@ -1144,7 +1146,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let task = taskify(async move {
                     web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
                         genvm_modules_interfaces::web::Message::Render(
-                            render_payload,
+                            gl_call_to_mi::render_payload(render_payload),
                             space_left_with_overhead,
                         ),
                     )
@@ -1172,7 +1174,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 if space_left < abi::consts::top_limits::WEB_REQUEST_MIN_SPACE {
                     log_warn!(space_left = space_left; "not enough memory for web request");
                     return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into(),
+                        rt::errors::Error::vm(abi::consts::VmError::oom().val()).into(),
                     )));
                 }
 
@@ -1182,7 +1184,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let task = taskify(async move {
                     web.send::<genvm_modules_interfaces::web::RenderAnswer, _>(
                         genvm_modules_interfaces::web::Message::Request(
-                            request_payload,
+                            gl_call_to_mi::request_payload(request_payload),
                             space_left_with_overhead,
                         ),
                     )
@@ -1213,6 +1215,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
                 let sup = self.context.data.supervisor.clone();
+                let response_format = prompt_payload.response_format;
 
                 let task = taskify(async move {
                     let result = sup
@@ -1220,7 +1223,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         .llm
                         .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
                             genvm_modules_interfaces::llm::Message::Prompt {
-                                payload: prompt_payload,
+                                payload: gl_call_to_mi::prompt_payload(prompt_payload),
                                 remaining_fuel_as_gen,
                             },
                         )
@@ -1247,7 +1250,25 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         *acc = acc.saturating_add(result.consumed_gen);
                     }
 
-                    let result = result.data;
+                    // v0.2 ABI: exec_prompt(response_format='json') must hand the
+                    // contract a calldata map, not the raw JSON string. Re-encode here
+                    // so JSON integers stay calldata integers and non-integer floats
+                    // become calldata strings (v0.2 calldata has no native float).
+                    let result = match (response_format, result.data) {
+                        (
+                            gl_call::llm_iface::OutputFormat::JSON,
+                            genvm_modules_interfaces::llm::PromptAnswerData::Text(json),
+                        ) => {
+                            let parsed: serde_json::Map<String, serde_json::Value> =
+                                serde_json::from_str(&json).map_err(|e| {
+                                    anyhow::anyhow!("parsing json answer {json:?}: {e}")
+                                })?;
+                            genvm_modules_interfaces::llm::PromptAnswerData::Object(
+                                crate::wasi::json_to_calldata::json_map_to_calldata(parsed),
+                            )
+                        }
+                        (_, other) => other,
+                    };
 
                     Ok(Ok(result))
                 })
@@ -1284,7 +1305,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         .llm
                         .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
                             genvm_modules_interfaces::llm::Message::PromptTemplate {
-                                payload: prompt_template_payload,
+                                payload: gl_call_to_mi::prompt_template_payload(
+                                    prompt_template_payload,
+                                ),
                                 remaining_fuel_as_gen,
                             },
                         )
@@ -1332,7 +1355,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 self.place_content(vfs::FileContents::from(bytes::Bytes::from(task)))
             }
-            gl_call::Message::UserError(msg) => Err(generated::types::Error::trap(
+            // v0.2 ABI: the runner signals a user error by sending a `Rollback`
+            // gl_call message carrying a plain string (see gl_call.py `rollback`).
+            gl_call::Message::Rollback(msg) => Err(generated::types::Error::trap(
                 crate::anyhow_to_wasmtime(rt::errors::Error::user(msg).into()),
             )),
             gl_call::Message::Return(value) => Err(generated::types::Error::trap(
@@ -1344,20 +1369,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
             } => self.run_nondet(data_leader, data_validator).await,
             gl_call::Message::Sandbox {
                 data,
-                runner,
-                allow_write_storage,
-                allow_send_messages,
-                allow_register_runners,
-            } => {
-                self.sandbox(
-                    data,
-                    runner,
-                    allow_write_storage,
-                    allow_send_messages,
-                    allow_register_runners,
-                )
-                .await
-            }
+                allow_write_ops,
+            } => self.sandbox(data, allow_write_ops).await,
             gl_call::Message::RegisterRunner { code } => self.register_runner(code).await,
             gl_call::Message::MapFile {
                 runner,
@@ -1711,7 +1724,7 @@ impl ContextVFS<'_> {
 
         if call_no >= public_abi::top_limits::NONDET_BLOCKS {
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                rt::errors::Error::vm(abi::consts::VmError::oom().ram().limit()).into(),
+                rt::errors::Error::vm(abi::consts::VmError::oom().val()).into(),
             )));
         }
 
@@ -1725,8 +1738,7 @@ impl ContextVFS<'_> {
             None if self.context.data.supervisor.is_leader() => None,
             None => {
                 return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                    rt::errors::Error::vm(abi::consts::VmError::absent_leader_nondet_output())
-                        .into(),
+                    rt::errors::Error::vm(abi::consts::VmError::absent()).into(),
                 )));
             }
             Some(data) if data.is_empty() => {
@@ -1743,10 +1755,7 @@ impl ContextVFS<'_> {
                         .mark_nondet_disagreement(call_no);
                 }
 
-                let result = rt::vm::RunOk::VMError(
-                    abi::consts::VmError::absent_leader_nondet_output(),
-                    None,
-                );
+                let result = rt::vm::RunOk::VMError(abi::consts::VmError::absent(), None);
 
                 consume_nondet_output(
                     &self.context.data.supervisor.shared_data,
@@ -1766,12 +1775,13 @@ impl ContextVFS<'_> {
                         ))
                     }
                     x if x == ResultCode::UserError as u8 => {
-                        let val = calldata::decode(rest).map_err(|e| {
+                        // v0.2 ABI: the UserError payload is a raw UTF-8 string.
+                        let msg = std::str::from_utf8(rest).map_err(|e| {
                             generated::types::Error::trap(crate::anyhow_to_wasmtime(
                                 anyhow::anyhow!(e),
                             ))
                         })?;
-                        rt::vm::RunOk::UserError(calldata::unparsed::Maybe::Materialized(val))
+                        rt::vm::RunOk::UserError(msg.to_owned())
                     }
                     x if x == ResultCode::VmError as u8 => {
                         let code = std::str::from_utf8(rest).map_err(|e| {
@@ -1907,18 +1917,13 @@ impl ContextVFS<'_> {
     async fn sandbox(
         &mut self,
         data: bytes::Bytes,
-        runner: String,
-        allow_write_storage: bool,
-        allow_send_messages: bool,
-        allow_register_runners: bool,
+        allow_write_ops: bool,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         let supervisor = self.context.data.supervisor.clone();
 
-        let parent_runner_id = self.context.data.conf.topmost_runner_id.clone();
-        let topmost_runner_id =
-            rt::supervisor::actions::resolve_runner_id(&supervisor, &parent_runner_id, &runner)
-                .await
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+        // v0.2.16 sandboxes run the SAME contract (no `runner` field): the
+        // sub-VM inherits the parent's topmost runner.
+        let topmost_runner_id = self.context.data.conf.topmost_runner_id.clone();
 
         let message_data = self
             .context
@@ -1950,11 +1955,11 @@ impl ContextVFS<'_> {
                 needs_error_fingerprint: false,
                 is_deterministic: zelf_conf.is_deterministic,
                 can_read_storage: zelf_conf.can_read_storage,
-                can_write_storage: zelf_conf.can_write_storage & allow_write_storage,
+                can_write_storage: zelf_conf.can_write_storage & allow_write_ops,
                 can_spawn_nondet: false,
                 can_call_others: false,
-                can_send_messages: zelf_conf.can_send_messages & allow_send_messages,
-                can_register_runners: zelf_conf.can_register_runners & allow_register_runners,
+                can_send_messages: zelf_conf.can_send_messages & allow_write_ops,
+                can_register_runners: false,
                 state_mode: zelf_conf.state_mode,
                 topmost_runner_id,
             },
@@ -1979,5 +1984,110 @@ impl ContextVFS<'_> {
 
         let data: Vec<u8> = my_res.run_ok.as_bytes();
         self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
+    }
+}
+
+/// Conversions from sdk-rs `gl_call` payload types to the self-contained
+/// `genvm_modules_interfaces` payload types.
+///
+/// These types are structurally identical but distinct: `genvm-modules-interfaces`
+/// no longer depends on `sdk-rs`, so it carries its own copies. The orphan rule
+/// prevents `From`/`Into` impls here (both types are foreign to this crate), so
+/// free functions bridge the executor<->module boundary instead.
+mod gl_call_to_mi {
+    use genlayer_sdk::abi::gl_call::{llm_iface, web_iface};
+    use genvm_modules_interfaces::{llm as mi_llm, web as mi_web};
+
+    pub fn render_mode(m: web_iface::RenderMode) -> mi_web::RenderMode {
+        match m {
+            web_iface::RenderMode::Text => mi_web::RenderMode::Text,
+            web_iface::RenderMode::HTML => mi_web::RenderMode::HTML,
+            web_iface::RenderMode::Screenshot => mi_web::RenderMode::Screenshot,
+        }
+    }
+
+    pub fn wait_after_loaded(w: web_iface::WaitAfterLoaded) -> mi_web::WaitAfterLoaded {
+        match w {
+            web_iface::WaitAfterLoaded::Seconds(s) => mi_web::WaitAfterLoaded::Seconds(s),
+            web_iface::WaitAfterLoaded::Millis(ms) => mi_web::WaitAfterLoaded::Millis(ms),
+        }
+    }
+
+    pub fn render_payload(p: web_iface::RenderPayload) -> mi_web::RenderPayload {
+        mi_web::RenderPayload {
+            mode: render_mode(p.mode),
+            url: p.url,
+            wait_after_loaded: wait_after_loaded(p.wait_after_loaded),
+        }
+    }
+
+    pub fn request_method(m: web_iface::RequestMethod) -> mi_web::RequestMethod {
+        match m {
+            web_iface::RequestMethod::GET => mi_web::RequestMethod::GET,
+            web_iface::RequestMethod::POST => mi_web::RequestMethod::POST,
+            web_iface::RequestMethod::HEAD => mi_web::RequestMethod::HEAD,
+            web_iface::RequestMethod::PUT => mi_web::RequestMethod::PUT,
+            web_iface::RequestMethod::DELETE => mi_web::RequestMethod::DELETE,
+            web_iface::RequestMethod::OPTIONS => mi_web::RequestMethod::OPTIONS,
+            web_iface::RequestMethod::PATCH => mi_web::RequestMethod::PATCH,
+        }
+    }
+
+    pub fn request_payload(p: web_iface::RequestPayload) -> mi_web::RequestPayload {
+        mi_web::RequestPayload {
+            method: request_method(p.method),
+            url: p.url,
+            headers: p.headers,
+            body: p.body,
+            sign: p.sign,
+        }
+    }
+
+    pub fn output_format(f: llm_iface::OutputFormat) -> mi_llm::OutputFormat {
+        match f {
+            llm_iface::OutputFormat::Text => mi_llm::OutputFormat::Text,
+            llm_iface::OutputFormat::JSON => mi_llm::OutputFormat::JSON,
+        }
+    }
+
+    pub fn prompt_payload(p: llm_iface::PromptPayload) -> mi_llm::PromptPayload {
+        mi_llm::PromptPayload {
+            response_format: output_format(p.response_format),
+            prompt: p.prompt,
+            images: p.images,
+        }
+    }
+
+    pub fn prompt_template_payload(
+        p: llm_iface::PromptTemplatePayload,
+    ) -> mi_llm::PromptTemplatePayload {
+        match p {
+            llm_iface::PromptTemplatePayload::EqComparative(x) => {
+                mi_llm::PromptTemplatePayload::EqComparative(mi_llm::PromptEqComparativePayload {
+                    leader_answer: x.leader_answer,
+                    validator_answer: x.validator_answer,
+                    principle: x.principle,
+                })
+            }
+            llm_iface::PromptTemplatePayload::EqNonComparativeValidator(x) => {
+                mi_llm::PromptTemplatePayload::EqNonComparativeValidator(
+                    mi_llm::PromptEqNonComparativeValidatorPayload {
+                        task: x.task,
+                        criteria: x.criteria,
+                        input: x.input,
+                        output: x.output,
+                    },
+                )
+            }
+            llm_iface::PromptTemplatePayload::EqNonComparativeLeader(x) => {
+                mi_llm::PromptTemplatePayload::EqNonComparativeLeader(
+                    mi_llm::PromptEqNonComparativeLeaderPayload {
+                        task: x.task,
+                        criteria: x.criteria,
+                        input: x.input,
+                    },
+                )
+            }
+        }
     }
 }

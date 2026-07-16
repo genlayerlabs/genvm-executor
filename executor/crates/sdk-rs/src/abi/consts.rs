@@ -158,12 +158,9 @@ pub mod memory_limiter_consts {
 }
 
 pub mod root_offsets {
-    pub const MAJOR: u32 = 0;
-    pub const CONTRACT: u32 = 1;
-    pub const CODE: u32 = 2;
-    pub const LOCKED_SLOTS: u32 = 3;
-    pub const UPGRADERS: u32 = 4;
-    pub const CODE_SLOT: u32 = 5;
+    pub const CODE: u32 = 1;
+    pub const LOCKED_SLOTS: u32 = 2;
+    pub const UPGRADERS: u32 = 3;
 }
 
 pub mod top_limits {
@@ -256,6 +253,7 @@ pub mod __VmError {
     pub struct Oom;
 
     impl Oom {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("OOM")) }
         pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("OOM storage")) }
         pub const fn ram(&self) -> OomRam { OomRam }
         pub const fn receipt(&self) -> OomReceipt { OomReceipt }
@@ -318,7 +316,7 @@ impl From<VmError> for String {
 #[rustfmt::skip]
 impl VmError {
     pub const fn timeout() -> Self { Self(Cow::Borrowed("timeout")) }
-    pub const fn absent_leader_nondet_output() -> Self { Self(Cow::Borrowed("absent_leader_nondet_output")) }
+    pub const fn absent() -> Self { Self(Cow::Borrowed("absent")) }
     pub const fn exit_code() -> __VmError::ExitCode { __VmError::ExitCode }
     pub const fn wasm_trap() -> __VmError::WasmTrap { __VmError::WasmTrap }
     pub const fn oom() -> __VmError::Oom { __VmError::Oom }
@@ -327,3 +325,5 @@ impl VmError {
 }
 
 pub const EVENT_MAX_TOPICS: u32 = 4;
+
+// EOF

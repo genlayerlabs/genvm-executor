@@ -57,7 +57,7 @@ pub struct SharedData {
 }
 
 pub fn parse_host_data(
-    zelf: &genvm_common::domain::ExecutionData,
+    zelf: &genvm_modules_interfaces::ExecutionData,
 ) -> anyhow::Result<genvm_modules_interfaces::HostData> {
     serde_json::from_str(&zelf.host_data)
         .with_context(|| "parsing host_data from execution context")

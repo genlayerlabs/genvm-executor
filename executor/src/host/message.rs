@@ -40,12 +40,12 @@ impl AccountAddress {
 #[repr(C)]
 pub struct SlotID(#[serde_as(as = "Base64")] pub [u8; 32]);
 
-impl<W: genvm_common::calldata::Writer> genvm_common::calldata::codec::Encode<W> for SlotID {
+impl<W: genlayer_sdk::calldata::Writer> genlayer_sdk::calldata::codec::Encode<W> for SlotID {
     type Error = W::Error;
 
     fn encode(
         &self,
-        enc: &mut genvm_common::calldata::Encoder<W>,
+        enc: &mut genlayer_sdk::calldata::Encoder<W>,
     ) -> std::result::Result<(), Self::Error> {
         enc.push_bytes(&self.0)
     }
@@ -97,6 +97,6 @@ impl From<&[u8; 32]> for SlotID {
 
 impl std::fmt::Display for SlotID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&genlayer_sdk::gvm32::encode(&self.0))
+        f.write_str(&genlayer_sdk::nix32::encode(&self.0))
     }
 }

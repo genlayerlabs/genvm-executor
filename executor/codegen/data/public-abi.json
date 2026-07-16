@@ -45,12 +45,9 @@
     "name": "root_offsets",
     "repr": "u32",
     "values": {
-      "major": 0,
-      "contract": 1,
-      "code": 2,
-      "locked_slots": 3,
-      "upgraders": 4,
-      "code_slot": 5
+      "code": 1,
+      "locked_slots": 2,
+      "upgraders": 3
     }
   },
   {
@@ -81,7 +78,7 @@
     "name": "vm_error",
     "values": [
       "timeout",
-      "absent_leader_nondet_output",
+      "absent",
       {
         "head": "exit_code",
         "tail": "$i32"
@@ -93,6 +90,7 @@
       {
         "head": "OOM",
         "tail": [
+          null,
           {
             "head": "RAM",
             "tail": [

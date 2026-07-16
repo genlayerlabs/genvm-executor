@@ -239,13 +239,25 @@ impl Supervisor {
         code_slot: crate::SlotID,
         archive: runners::Archive,
     ) {
-        let id = runners::Id::Chain {
-            address,
-            on: runners::ChainState::Deploy,
-            slot: code_slot,
+        // The contract's code is not committed to host storage until the deploy
+        // transaction finishes, so an in-transaction read of this contract (e.g.
+        // a `gl.get_contract_at(self).view()` from `__init__`, as in the balance
+        // tests) cannot load it from storage. Seed the deploy archive under every
+        // chain state — not just `Deploy` — so such a self/intra-tx call resolves
+        // the freshly-deployed code instead of failing with `absent_runner`.
+        for on in [
+            runners::ChainState::Deploy,
+            runners::ChainState::Accepted,
+            runners::ChainState::Finalized,
+        ] {
+            let id = runners::Id::Chain {
+                address,
+                on,
+                slot: code_slot,
+            }
+            .canonical();
+            self.runner_cache.put(id, archive.clone());
         }
-        .canonical();
-        self.runner_cache.put(id, archive);
     }
 
     /// Registers a runner from its `code`, returning the `custom:<hash>` id it can
@@ -354,7 +366,7 @@ pub async fn spawn(
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
     if vm.depth >= public_abi::top_limits::VM_RECURSION {
         return Err(rt::SpawnError {
-            error: rt::errors::Error::vm(public_abi::VmError::oom().ram().limit()).into(),
+            error: rt::errors::Error::vm(public_abi::VmError::oom().val()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
         });
     }
@@ -431,21 +443,7 @@ async fn apply_contract_actions_inner(
 ) -> anyhow::Result<wasmtime::Instance> {
     let data = &mut vm.vm_base.store.data_mut().genlayer_ctx.genlayer_sdk.data;
 
-    let topmost_runner_id = data.conf.topmost_runner_id.clone();
-    let contract_major = data
-        .storage
-        .read_major()
-        .await
-        .with_context(|| format!("reading contract major for {topmost_runner_id}"))?;
-    let node_major = genvm_common::version::CURRENT.major;
-    if contract_major as u16 != node_major {
-        return Err(rt::errors::Error::wrap(
-            public_abi::VmError::invalid_contract().major_mismatch(),
-            anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
-        )
-        .into());
-    }
-
+    // v0.2.16 has no `major` root field to verify (see `storage.rs`).
     let topmost_runner_id = data.conf.topmost_runner_id.clone();
 
     let arch = actions::load_runner(
@@ -604,7 +602,7 @@ fn register_custom_runner_into(
             rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
         })?;
         if !limiter.consume(archive.total_size) {
-            return Err(rt::errors::Error::vm(public_abi::VmError::oom().ram().val()).into());
+            return Err(rt::errors::Error::vm(public_abi::VmError::oom().val()).into());
         }
         slot.insert(archive);
     }

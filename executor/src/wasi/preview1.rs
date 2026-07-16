@@ -260,23 +260,14 @@ where
 }
 
 impl Context {
-    pub fn new(
-        datetime: chrono::DateTime<chrono::Utc>,
-        conf: base::Config,
-        seed: [u8; 32],
-    ) -> Self {
-        // Deterministic randomness is seeded from `sha3-256(stdin)` of the VM, so two
-        // runs with identical inputs see the same `random_get` stream while different
-        // inputs diverge. The 32-byte digest is consumed as 8 little-endian u32 words.
-        let seed_words: [u32; 8] = std::array::from_fn(|i| {
-            u32::from_le_bytes([
-                seed[i * 4],
-                seed[i * 4 + 1],
-                seed[i * 4 + 2],
-                seed[i * 4 + 3],
-            ])
-        });
-        let seed = mt19937::MT19937::new_with_slice_seed(&seed_words);
+    pub fn new(datetime: chrono::DateTime<chrono::Utc>, conf: base::Config) -> Self {
+        // v0.2.16 determinism: the deterministic `random_get` stream is seeded
+        // from a FIXED constant (`b"GenLayer"`), NOT from the VM's stdin. This is
+        // what makes a leader and its validators (different stdin) draw the same
+        // pseudo-random sequence; seeding from `sha3(stdin)` instead would make
+        // them diverge (see `bench/read_tree_map` and the nondet suite).
+        const SEED_ARR: [u32; 2] = [u32::from_le_bytes(*b"GenL"), u32::from_le_bytes(*b"ayer")];
+        let seed = mt19937::MT19937::new_with_slice_seed(&SEED_ARR);
 
         Self {
             args_buf: Vec::new(),
@@ -1187,7 +1178,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         // exit-carrier error through `unwrap_vm_errors`: a zero exit is a normal
         // empty return, any other code is a VM error.
         let trap: anyhow::Error = if code == 0 {
-            crate::wasi::genlayer_sdk::ContractReturn(genvm_common::calldata::Value::Null.into())
+            crate::wasi::genlayer_sdk::ContractReturn(genlayer_sdk::calldata::Value::Null.into())
                 .into()
         } else {
             rt::errors::Error::vm(abi::consts::VmError::exit_code().val_i32(code)).into()

@@ -565,15 +565,15 @@ pub enum Message {
         data_validator: Bytes,
     },
 
+    // v0.2.16 ABI: the python runner's `spawn_sandbox` sends only `data` and a
+    // single `allow_write_ops` flag (newer lines split it into per-capability
+    // flags and add a `runner`). Match the legacy shape exactly so calldata
+    // decoding of the runner-produced message succeeds.
     Sandbox {
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
         data: Bytes,
 
-        runner: String,
-
-        allow_write_storage: bool,
-        allow_send_messages: bool,
-        allow_register_runners: bool,
+        allow_write_ops: bool,
     },
 
     RegisterRunner {
@@ -592,7 +592,10 @@ pub enum Message {
     ExecPrompt(llm_iface::PromptPayload),
     ExecPromptTemplate(llm_iface::PromptTemplatePayload),
 
-    UserError(calldata::unparsed::Maybe<calldata::Value>),
+    // v0.2 ABI: a user error is signalled by a `Rollback` message carrying a
+    // plain UTF-8 string (the variant name is the calldata map key, matching the
+    // runner's `gl_call.rollback` which sends `{"Rollback": <str>}`).
+    Rollback(String),
     Return(calldata::unparsed::Maybe<calldata::Value>),
 
     Trace(TracePayload),

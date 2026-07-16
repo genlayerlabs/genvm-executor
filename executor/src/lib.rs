@@ -1,5 +1,6 @@
 pub mod caching;
 pub mod config;
+pub mod domain;
 pub mod host;
 pub mod modules;
 pub mod rt;
@@ -8,7 +9,7 @@ pub mod wasi;
 
 pub use genlayer_sdk::abi::consts as public_abi;
 
-pub use genvm_common::calldata;
+pub use genlayer_sdk::calldata;
 use genvm_common::*;
 
 pub use host::{Host, SlotID};
@@ -75,7 +76,7 @@ pub fn create_supervisor(
     named: CreateSupervisorNamedArgs,
     host_data: genvm_modules_interfaces::HostData,
     shared_data: sync::DArc<rt::SharedData>,
-    message: &domain::MessageData,
+    message: &genvm_modules_interfaces::MessageData,
 ) -> Result<Arc<rt::supervisor::Supervisor>> {
     let metrics = shared_data.gep(|x| &x.metrics);
 
@@ -146,8 +147,91 @@ pub fn create_supervisor(
     rt::supervisor::Supervisor::start(config, ctor)
 }
 
+fn convert_message_data(
+    message: genvm_modules_interfaces::MessageData,
+) -> genlayer_sdk::abi::entry::MessageData {
+    genlayer_sdk::abi::entry::MessageData {
+        contract_address: message.contract_address,
+        sender_address: message.sender_address,
+        origin_address: message.origin_address,
+        stack: Vec::new(),
+        chain_id: message.chain_id,
+        value: message.value,
+        is_init: message.is_init,
+        datetime: message.datetime,
+    }
+}
+
+fn convert_on(on: genvm_modules_interfaces::On) -> genlayer_sdk::abi::gl_call::On {
+    match on {
+        genvm_modules_interfaces::On::Finalized => genlayer_sdk::abi::gl_call::On::Finalized,
+        genvm_modules_interfaces::On::Accepted => genlayer_sdk::abi::gl_call::On::Accepted,
+    }
+}
+
+fn convert_call_key(call_key: genvm_modules_interfaces::CallKey) -> genlayer_sdk::abi::CallKey {
+    genlayer_sdk::abi::CallKey(call_key.0)
+}
+
+fn convert_internal_message_params(
+    params: genvm_modules_interfaces::fees::InternalMessageParams,
+) -> domain::fees::InternalMessageParams {
+    domain::fees::InternalMessageParams {
+        leader_timeunits_allocation: params.leader_timeunits_allocation,
+        validator_timeunits_allocation: params.validator_timeunits_allocation,
+        execution_budget_per_round: params.execution_budget_per_round,
+        rotations: params.rotations,
+        max_price_gen_per_time_unit: params.max_price_gen_per_time_unit,
+        storage_fee_max_gas_price: params.storage_fee_max_gas_price,
+        receipt_fee_max_gas_price: params.receipt_fee_max_gas_price,
+    }
+}
+
+fn convert_external_message_params(
+    params: genvm_modules_interfaces::fees::ExternalMessageParams,
+) -> domain::fees::ExternalMessageParams {
+    domain::fees::ExternalMessageParams {
+        gas_limit: params.gas_limit,
+        max_gas_price: params.max_gas_price,
+    }
+}
+
+fn convert_message_allocation_node_params(
+    params: genvm_modules_interfaces::fees::MessageAllocationNodeParams,
+) -> domain::fees::MessageAllocationNodeParams {
+    match params {
+        genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(params) => {
+            domain::fees::MessageAllocationNodeParams::Internal(std::sync::Arc::new(
+                convert_internal_message_params((*params).clone()),
+            ))
+        }
+        genvm_modules_interfaces::fees::MessageAllocationNodeParams::External(params) => {
+            domain::fees::MessageAllocationNodeParams::External(convert_external_message_params(
+                params,
+            ))
+        }
+    }
+}
+
+fn convert_message_allocation_node(
+    node: genvm_modules_interfaces::fees::MessageAllocationNode,
+) -> domain::fees::MessageAllocationNode {
+    domain::fees::MessageAllocationNode {
+        recipient: node.recipient,
+        call_key: node.call_key.map(convert_call_key),
+        budget: node.budget,
+        on: convert_on(node.on),
+        fee_params: convert_message_allocation_node_params(node.fee_params),
+        children: node
+            .children
+            .into_iter()
+            .map(convert_message_allocation_node)
+            .collect(),
+    }
+}
+
 pub async fn run_with_impl(
-    entry_data: domain::ExecutionData,
+    entry_data: genvm_modules_interfaces::ExecutionData,
     supervisor: Arc<rt::supervisor::Supervisor>,
     permissions: &str,
 ) -> anyhow::Result<rt::vm::FullResult> {
@@ -170,11 +254,9 @@ pub async fn run_with_impl(
             log_debug!("using provided code for execution");
 
             topmost_storage.write_code(code).await?;
-            // Record the major this contract is deployed for, so later runs can
-            // verify major compatibility (see `read_major` / major_mismatch check).
-            topmost_storage
-                .write_major(genvm_common::version::CURRENT.major as u8)
-                .await?;
+            // v0.2.16 has no `major` root field, so nothing else is written to
+            // slot ZERO on deploy: that slot belongs to the contract's python
+            // storage `Root`.
 
             let code_slot = rt::vm::storage::default_code_slot();
             let archive = runners::parse(code.clone()).map_err(|e| {
@@ -225,7 +307,7 @@ pub async fn run_with_impl(
         conf: wasi::base::Config {
             needs_error_fingerprint: true,
             is_deterministic: true,
-            can_read_storage: permissions.contains("r"),
+            can_read_storage: true,
             can_write_storage: permissions.contains("w"),
             can_send_messages: permissions.contains("s"),
             can_call_others: permissions.contains("c"),
@@ -235,7 +317,7 @@ pub async fn run_with_impl(
             topmost_runner_id,
         },
         message_data: ExtendedMessage {
-            message: entry_data.message,
+            message: convert_message_data(entry_data.message),
             entry_kind: public_abi::EntryKind::Main,
             entry_data: entry_data.calldata,
             entry_stage_data: calldata::Value::Null,
@@ -247,7 +329,11 @@ pub async fn run_with_impl(
             data_fees_limit,
             messages_value_decremented: primitive_types::U256::zero(),
             emissions: Vec::new(),
-            message_fee_allocation: entry_data.message_fee_allocation,
+            message_fee_allocation: entry_data
+                .message_fee_allocation
+                .into_iter()
+                .map(convert_message_allocation_node)
+                .collect(),
             custom_runners: Default::default(),
         },
         det_subvm_hashes: Default::default(),
@@ -263,7 +349,7 @@ pub async fn run_with_impl(
         },
         data: match run_result.run_ok {
             rt::vm::RunOk::Return(buf) => buf,
-            rt::vm::RunOk::UserError(val) => val,
+            rt::vm::RunOk::UserError(msg) => calldata::Value::Str(msg).into(),
             rt::vm::RunOk::VMError(msg, _) => calldata::Value::Str(msg.0.into()).into(),
         },
         backtrace: run_result.backtrace,
@@ -277,7 +363,7 @@ pub async fn run_with_impl(
 }
 
 pub async fn run_with(
-    entry_data: domain::ExecutionData,
+    entry_data: genvm_modules_interfaces::ExecutionData,
     supervisor: Arc<rt::supervisor::Supervisor>,
     permissions: &str,
 ) -> anyhow::Result<host::FullResult> {

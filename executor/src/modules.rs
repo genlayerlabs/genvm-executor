@@ -3,7 +3,7 @@ use genvm_common::*;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use genvm_common::calldata;
+use genlayer_sdk::calldata;
 use genvm_modules_interfaces::GenericValue;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

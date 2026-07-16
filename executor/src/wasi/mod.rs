@@ -5,6 +5,7 @@ use ::genlayer_sdk as original_genlayer_sdk;
 pub mod base;
 pub mod genlayer_sdk;
 pub mod json_to_calldata;
+pub mod method_compat;
 pub mod preview1;
 pub mod vfs;
 
@@ -23,27 +24,32 @@ impl Context {
     ) -> std::result::Result<Self, (rt::errors::Error, Box<genlayer_sdk::SingleVMData>)> {
         let msg_data: original_genlayer_sdk::abi::entry::ExtendedMessageFlat =
             data.message_data.into();
-        let as_bytes = calldata::encode_obj(&msg_data);
+        // The prebuilt v0.2.x python runner reads the contract method name under
+        // the legacy calldata key "method"; the executor uses the new key "".
+        // Rewrite the Main entry calldata new->legacy for the runner-bound bytes
+        // (and thus the determinism seed), while keeping the in-memory
+        // `data.message_data` on the new "" key. Non-Main entry kinds carry
+        // opaque bytes and are left untouched. The rewrite is idempotent, so
+        // sub-call calldata (already legacy, built by the runner) is unaffected.
+        let as_bytes = {
+            let mut wire = msg_data.clone();
+            if wire.entry_kind == crate::public_abi::EntryKind::Main {
+                wire.entry_data = method_compat::entry_data_new_to_legacy(wire.entry_data);
+            }
+            calldata::encode_obj(&wire)
+        };
         data.message_data = msg_data.into();
 
-        // The deterministic RNG seed is the sha3-256 of the VM's stdin (the encoded
-        // message data), so it is fully determined by the VM inputs at construction.
-        let seed: [u8; 32] = {
-            use sha3::Digest as _;
-            sha3::Sha3_256::digest(&as_bytes).into()
-        };
-
+        // v0.2.16 seeds the deterministic RNG from a fixed constant (see
+        // `preview1::Context::new`), not from the stdin, so no per-VM seed is
+        // derived here.
         let vfs = match vfs::VFS::new(as_bytes, limiter) {
             Ok(vfs) => vfs,
             Err(e) => return Err((e, data)),
         };
         Ok(Self {
             vfs,
-            preview1: preview1::Context::new(
-                data.message_data.message.datetime,
-                data.conf.clone(),
-                seed,
-            ),
+            preview1: preview1::Context::new(data.message_data.message.datetime, data.conf.clone()),
             genlayer_sdk: genlayer_sdk::Context::new(data),
         })
     }

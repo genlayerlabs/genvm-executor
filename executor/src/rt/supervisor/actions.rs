@@ -125,22 +125,22 @@ pub(crate) async fn resolve_runner_id(
                         "runner id doesn't match expected format",
                     ));
                 };
-                Bytes32Hash::from_gvm32(new_latest).map_err(|e| {
+                Bytes32Hash::from_nix32(new_latest).map_err(|e| {
                     make_malformed_runner_error(&format!(
-                        "runner hash `{new_latest}` is not valid gvm32: {e}"
+                        "runner hash `{new_latest}` is not valid nix base32: {e}"
                     ))
                 })?
             } else {
-                Bytes32Hash::from_gvm32(&hash).map_err(|e| {
+                Bytes32Hash::from_nix32(&hash).map_err(|e| {
                     make_malformed_runner_error(&format!(
-                        "runner hash `{hash}` is not valid gvm32: {e}"
+                        "runner hash `{hash}` is not valid nix base32: {e}"
                     ))
                 })?
             };
 
-            let hash_gvm32 = hash.to_gvm32();
-            if !supervisor.runner_cache.has_in_all(&name, &hash_gvm32) {
-                anyhow::bail!("runner {}:{} not found", name, hash_gvm32);
+            let hash_nix32 = hash.to_nix32();
+            if !supervisor.runner_cache.has_in_all(&name, &hash_nix32) {
+                anyhow::bail!("runner {}:{} not found", name, hash_nix32);
             }
 
             runners::Id::Builtin {
@@ -153,36 +153,22 @@ pub(crate) async fn resolve_runner_id(
             let slot = match slot {
                 Some(s) => s,
                 None => {
-                    let mode = on.host_storage_type().ok_or_else(|| {
+                    // v0.2.16 has no per-contract `code_slot` pointer: the code
+                    // always lives at the fixed `code` indirection of slot ZERO.
+                    let _ = on.host_storage_type().ok_or_else(|| {
                         make_malformed_runner_error(
                             "deploy-state chain runner cannot resolve its code slot from chain",
                         )
                     })?;
-                    let mut storage = rt::vm::storage::Storage::new(
-                        address,
-                        supervisor.get_storage_limiter(),
-                        crate::wasi::genlayer_sdk::StorageHostHolder(
-                            supervisor.host.clone(),
-                            crate::wasi::genlayer_sdk::ReadToken {
-                                account: address,
-                                mode,
-                            },
-                        ),
-                    );
-                    storage.resolve_code_slot().await.with_ctx(|| {
-                        format!(
-                            "resolving code slot for chain runner 0x{}",
-                            address.checksum_hex_string()
-                        )
-                    })?
+                    rt::vm::storage::default_code_slot()
                 }
             };
             runners::Id::Chain { address, on, slot }
         }
         runners::IdUnresolved::Custom { hash } => {
-            let hash = Bytes32Hash::from_gvm32(&hash).map_err(|e| {
+            let hash = Bytes32Hash::from_nix32(&hash).map_err(|e| {
                 make_malformed_runner_error(&format!(
-                    "custom runner hash `{hash}` is not valid gvm32: {e}"
+                    "custom runner hash `{hash}` is not valid nix base32: {e}"
                 ))
             })?;
             runners::Id::Custom { hash }
@@ -222,7 +208,7 @@ async fn get_arch(
                     id,
                     || async {
                         let mut path = cache.runners_path().to_owned();
-                        runners::append_runner_subpath(name.as_str(), &hash.to_gvm32(), &mut path);
+                        runners::append_runner_subpath(name.as_str(), &hash.to_nix32(), &mut path);
                         path.set_extension("tar");
                         if !path.exists() {
                             return Err(rt::errors::Error::internal(format!(
@@ -262,20 +248,8 @@ async fn get_arch(
                             ),
                         );
 
-                        let dep_major = storage
-                            .read_major()
-                            .await
-                            .with_ctx(|| format!("reading major for chain runner {id}"))?;
-                        let node_major = genvm_common::version::CURRENT.major;
-                        if dep_major as u16 != node_major {
-                            return Err(rt::errors::Error::wrap(
-                                public_abi::VmError::invalid_contract().major_mismatch(),
-                                anyhow::anyhow!(
-                                    "chain runner {id} major {dep_major} != node major {node_major}"
-                                ),
-                            ));
-                        }
-
+                        // v0.2.16 stores no `major` root field, so there is no
+                        // per-contract major to verify here (see `storage.rs`).
                         let code = storage
                             .read_code_at(slot, limiter)
                             .await
@@ -381,7 +355,7 @@ pub(crate) fn map_archive_file(
             if !limiter
                 .consume(public_abi::memory_limiter_consts::FILE_MAPPING + name_in_fs.len() as u32)
             {
-                return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into());
+                return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
             }
 
             preview1.map_file(&name_in_fs, file_contents.clone())?;
@@ -390,7 +364,7 @@ pub(crate) fn map_archive_file(
         check_mapping_target(to)?;
 
         if !limiter.consume(public_abi::memory_limiter_consts::FILE_MAPPING + to.len() as u32) {
-            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().ram().val()).into());
+            return Err(rt::errors::Error::vm(abi::consts::VmError::oom().val()).into());
         }
 
         preview1.map_file(to, arch.get_file(file)?)?;

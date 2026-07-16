@@ -77,8 +77,9 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             .with_context(|| format!("reading execution data from {}", args.execution_data))?
     };
 
-    let execution_data = calldata::decode_obj::<domain::ExecutionData>(&execution_data_bytes)
-        .with_context(|| "decoding execution data")?;
+    let execution_data =
+        calldata::decode_obj::<genvm_modules_interfaces::ExecutionData>(&execution_data_bytes)
+            .with_context(|| "decoding execution data")?;
     let message = &execution_data.message;
     let host_data = rt::parse_host_data(&execution_data)?;
 
@@ -199,7 +200,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         // OOM code if that ever stops holding rather than panicking during setup.
         let insufficient_run_ok = insufficient_err.into_run_ok().unwrap_or_else(|e| {
             genvm::rt::vm::RunOk::VMError(
-                genvm::public_abi::VmError::oom().ram().val(),
+                genvm::public_abi::VmError::oom().val(),
                 Some(anyhow::Error::new(e)),
             )
         });
@@ -228,7 +229,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     }
 
     let mut perm_size = 0;
-    for perm in ["r", "w", "s", "c", "n", "u"] {
+    for perm in ["w", "s", "c", "n", "u"] {
         if args.permissions.contains(perm) {
             perm_size += 1;
         }
