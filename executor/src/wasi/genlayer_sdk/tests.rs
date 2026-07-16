@@ -2,8 +2,8 @@ use super::message::{validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE
 use super::*;
 use primitive_types::U256;
 
-fn valid_params() -> genvm_modules_interfaces::fees::InternalMessageParams {
-    genvm_modules_interfaces::fees::InternalMessageParams {
+fn valid_params() -> abi::fees::InternalMessageParams {
+    abi::fees::InternalMessageParams {
         leader_timeunits_allocation: U256::from(5),
         validator_timeunits_allocation: U256::from(5),
         execution_budget_per_round: U256::from(1024),
@@ -47,9 +47,8 @@ fn empty_rotations_is_inval() {
 #[test]
 fn zero_price_caps_are_inval() {
     for mutate in [
-        (|p: &mut genvm_modules_interfaces::fees::InternalMessageParams| {
-            p.max_price_gen_per_time_unit = U256::zero()
-        }) as fn(&mut genvm_modules_interfaces::fees::InternalMessageParams),
+        (|p: &mut abi::fees::InternalMessageParams| p.max_price_gen_per_time_unit = U256::zero())
+            as fn(&mut abi::fees::InternalMessageParams),
         |p| p.storage_fee_max_gas_price = U256::zero(),
         |p| p.receipt_fee_max_gas_price = U256::zero(),
     ] {
@@ -65,7 +64,7 @@ fn huge_magnitude_params_are_inval() {
     // Security-review N1 repro: passes the emptiness/zero checks, but the
     // 2^250 magnitudes would push messageFeeFloor past U256 and trip the
     // evaluator's internal `fee cost exceeds U256 range` abort.
-    let p = genvm_modules_interfaces::fees::InternalMessageParams {
+    let p = abi::fees::InternalMessageParams {
         leader_timeunits_allocation: U256::one() << 250,
         validator_timeunits_allocation: U256::zero(),
         execution_budget_per_round: U256::zero(),

@@ -205,6 +205,11 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
             return None;
         }
 
+        if !address.starts_with("0x") {
+            log_warn!("chain address must be 0x-prefixed");
+            return None;
+        }
+
         let address = calldata::Address::from(parse_safe_address(address)?);
         let on = match on_str {
             Some("a") | None => Some(ChainState::Accepted),

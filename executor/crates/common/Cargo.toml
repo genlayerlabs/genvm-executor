@@ -11,6 +11,7 @@ genlayer_calldata = { path = "../calldata" }
 genlayer_sdk = { path = "../sdk-rs", default-features = false, features = [
     "arbitrary",
 ] }
+genvm_modules_interfaces = { path = "../modules-interfaces" }
 
 anyhow = { version = "1.0.97", features = ["backtrace"] }
 arbitrary = "1.4.2"

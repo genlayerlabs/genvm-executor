@@ -62,7 +62,10 @@ fn has_key_builtin() {
 #[test]
 fn object_missing_key_is_error() {
     let expr = Expr::parse("{ a = 1; }.b").unwrap();
-    assert!(matches!(expr.evaluate(), Err(EvalError::Custom(_))));
+    match expr.evaluate() {
+        Err(EvalError::ObjectKeyNotFound(key)) => assert_eq!(key, "b"),
+        other => panic!("expected ObjectKeyNotFound, got {other:?}"),
+    }
 }
 
 #[test]
