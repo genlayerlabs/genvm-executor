@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: kp2pml30 <kp2pml30@gmail.com>
+Date: Thu, 2 Jul 2026 22:33:10 +0900
+Subject: [PATCH] =?UTF-8?q?chore(wasm):=20rename=20DeterministicMode=20tra?=
+ =?UTF-8?q?p=20to=20NondetInstruction=20=E2=99=BB=EF=B8=8F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ crates/cranelift/src/func_environ.rs              | 4 ++--
+ crates/cranelift/src/lib.rs                       | 4 ++--
+ crates/cranelift/src/translate/code_translator.rs | 2 +-
+ crates/environ/src/trap_encoding.rs               | 8 ++++----
+ 4 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
+index 8f549ff5..0c5821fa 100644
+--- a/crates/cranelift/src/func_environ.rs
++++ b/crates/cranelift/src/func_environ.rs
+@@ -3929,9 +3929,9 @@ impl FuncEnvironment<'_> {
+         self.fuel_save_from_var(builder);
+     }
+ 
+-    pub fn trap_deterministic_mode(&mut self, builder: &mut FunctionBuilder) {
++    pub fn trap_nondet_instruction(&mut self, builder: &mut FunctionBuilder) {
+         self.fuel_before_unreachable(builder);
+-        self.trap(builder, crate::TRAP_DETERMINISTIC_MODE);
++        self.trap(builder, crate::TRAP_NONDET_INSTRUCTION);
+         self.stacks.reachable = false;
+     }
+ 
+diff --git a/crates/cranelift/src/lib.rs b/crates/cranelift/src/lib.rs
+index 4db70f6a..8119e7da 100644
+--- a/crates/cranelift/src/lib.rs
++++ b/crates/cranelift/src/lib.rs
+@@ -72,8 +72,8 @@ pub const TRAP_CONTINUATION_ALREADY_CONSUMED: TrapCode =
+     TrapCode::unwrap_user(Trap::ContinuationAlreadyConsumed as u8 + TRAP_OFFSET);
+ pub const TRAP_CAST_FAILURE: TrapCode =
+     TrapCode::unwrap_user(Trap::CastFailure as u8 + TRAP_OFFSET);
+-pub const TRAP_DETERMINISTIC_MODE: TrapCode =
+-    TrapCode::unwrap_user(Trap::DeterministicMode as u8 + TRAP_OFFSET);
++pub const TRAP_NONDET_INSTRUCTION: TrapCode =
++    TrapCode::unwrap_user(Trap::NondetInstruction as u8 + TRAP_OFFSET);
+ 
+ /// Creates a new cranelift `Signature` with no wasm params/results for the
+ /// given calling convention.
+diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
+index 927df0f8..b5cf3d17 100644
+--- a/crates/cranelift/src/translate/code_translator.rs
++++ b/crates/cranelift/src/translate/code_translator.rs
+@@ -4574,6 +4574,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
+     if environ.are_floats_enabled() {
+         return false;
+     }
+-    environ.trap_deterministic_mode(builder);
++    environ.trap_nondet_instruction(builder);
+     return true;
+ }
+diff --git a/crates/environ/src/trap_encoding.rs b/crates/environ/src/trap_encoding.rs
+index 2d49707b..fe4f0dea 100644
+--- a/crates/environ/src/trap_encoding.rs
++++ b/crates/environ/src/trap_encoding.rs
+@@ -142,8 +142,8 @@ pub enum Trap {
+     /// value.
+     UnalignedPointer,
+ 
+-    /// Deterministic mode violation
+-    DeterministicMode,
++    /// Nondeterministic instruction executed in deterministic mode
++    NondetInstruction,
+     // if adding a variant here be sure to update the `check!` macro below, and
+     // remember to update `trap.rs` and `trap.h` as mentioned above
+ }
+@@ -196,7 +196,7 @@ impl Trap {
+             ListOutOfBounds
+             InvalidDiscriminant
+             UnalignedPointer
+-            DeterministicMode
++            NondetInstruction
+         }
+ 
+         None
+@@ -242,7 +242,7 @@ impl fmt::Display for Trap {
+             ListOutOfBounds => "list content out-of-bounds",
+             InvalidDiscriminant => "invalid variant discriminant",
+             UnalignedPointer => "unaligned pointer",
+-            DeterministicMode => "deterministic mode violation (cpu)",
++            NondetInstruction => "nondeterministic instruction (cpu)",
+         };
+         write!(f, "wasm trap: {desc}")
+     }

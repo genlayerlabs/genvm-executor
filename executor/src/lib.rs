@@ -1,5 +1,6 @@
 pub mod caching;
 pub mod config;
+pub mod domain;
 pub mod host;
 pub mod modules;
 pub mod rt;
@@ -8,7 +9,7 @@ pub mod wasi;
 
 pub use genlayer_sdk::abi::consts as public_abi;
 
-pub use genvm_common::calldata;
+pub use genlayer_sdk::calldata;
 use genvm_common::*;
 
 pub use host::{Host, SlotID};
@@ -67,6 +68,12 @@ pub struct CreateSupervisorNamedArgs {
     pub gas_data: std::collections::BTreeMap<String, String>,
     pub initial_time_units_allocation: u32,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    pub record_actions: Vec<String>,
+}
+
+pub struct ExecutionContext {
+    pub supervisor: Arc<rt::supervisor::Supervisor>,
+    det_limiter: rt::memlimiter::Limiter,
 }
 
 pub fn create_supervisor(
@@ -75,8 +82,8 @@ pub fn create_supervisor(
     named: CreateSupervisorNamedArgs,
     host_data: genvm_modules_interfaces::HostData,
     shared_data: sync::DArc<rt::SharedData>,
-    message: &domain::MessageData,
-) -> Result<Arc<rt::supervisor::Supervisor>> {
+    message: &genvm_modules_interfaces::MessageData,
+) -> Result<ExecutionContext> {
     let metrics = shared_data.gep(|x| &x.metrics);
 
     let role = if named.leader_nondet_results.is_none() {
@@ -112,7 +119,8 @@ pub fn create_supervisor(
         )),
     };
 
-    let limiter_det = rt::memlimiter::Limiter::new("det");
+    // has locked slots
+    let limiter_det = rt::memlimiter::Limiter::new();
 
     let storage_host_idx =
         if (host::host_fns::Methods::StorageRead as usize) < named.method_hosts.len() {
@@ -134,23 +142,41 @@ pub fn create_supervisor(
     let ctor = rt::supervisor::Ctor {
         shared_data,
         modules,
-        limiter: rt::DetNondet {
-            det: limiter_det,
-            non_det: rt::memlimiter::Limiter::new("nondet"),
-        },
         locked_slots,
         leader_nondet_results: named.leader_nondet_results,
         multi_host,
+        record_actions: named.record_actions,
     };
 
-    rt::supervisor::Supervisor::start(config, ctor)
+    Ok(ExecutionContext {
+        supervisor: rt::supervisor::Supervisor::start(config, ctor)?,
+        det_limiter: limiter_det,
+    })
+}
+
+fn convert_message_data(
+    message: genvm_modules_interfaces::MessageData,
+) -> genlayer_sdk::abi::entry::MessageData {
+    genlayer_sdk::abi::entry::MessageData {
+        contract_address: message.contract_address,
+        sender_address: message.sender_address,
+        origin_address: message.origin_address,
+        signer_address: message.signer_address,
+        stack: Vec::new(),
+        chain_id: message.chain_id,
+        value: message.value,
+        is_init: message.is_init,
+        datetime: message.datetime,
+    }
 }
 
 pub async fn run_with_impl(
-    entry_data: domain::ExecutionData,
-    supervisor: Arc<rt::supervisor::Supervisor>,
+    entry_data: genvm_modules_interfaces::ExecutionData,
+    context: &ExecutionContext,
     permissions: &str,
+    deploy_pin: &mut Option<runners::cache::ArchivePin>,
 ) -> anyhow::Result<rt::vm::FullResult> {
+    let supervisor = context.supervisor.clone();
     let storage_pages_limit = supervisor.get_storage_limiter();
 
     let mut topmost_storage = rt::vm::storage::Storage::new(
@@ -165,8 +191,12 @@ pub async fn run_with_impl(
         ),
     );
 
-    let topmost_runner_id = match async {
-        anyhow::Ok(if let Some(code) = &entry_data.code {
+    let (topmost_runner_id, root_permissions) = match async {
+        // Contract-owned permissions live in the root slot, not the node-granted
+        // `permissions` string; pre-read them before running the wasm.
+        let root_permissions = topmost_storage.read_permissions().await?;
+
+        let id = if let Some(code) = &entry_data.code {
             log_debug!("using provided code for execution");
 
             topmost_storage.write_code(code).await?;
@@ -180,11 +210,11 @@ pub async fn run_with_impl(
             let archive = runners::parse(code.clone()).map_err(|e| {
                 rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
             })?;
-            supervisor.prepopulate_deploy_runner(
+            *deploy_pin = Some(supervisor.prepopulate_deploy_runner(
                 entry_data.message.contract_address,
                 code_slot,
                 archive,
-            );
+            ));
 
             runners::Id::Chain {
                 address: entry_data.message.contract_address,
@@ -201,11 +231,13 @@ pub async fn run_with_impl(
                 on: runners::ChainState::Accepted,
                 slot: code_slot,
             }
-        })
+        };
+
+        anyhow::Ok((id, root_permissions))
     }
     .await
     {
-        Ok(id) => id,
+        Ok(v) => v,
         // A VMError raised while preparing the contract (bad code, major
         // mismatch, missing code slot) is a contract error, not an internal
         // failure: surface it as a VMError result. Genuine internal errors still
@@ -217,25 +249,35 @@ pub async fn run_with_impl(
         }
     };
 
+    let can_use_balance_for_message_fees =
+        primitive_types::U256::from_little_endian(&root_permissions)
+            .bit(public_abi::Permissions::CanUseBalanceForMessageFees.value() as usize);
+
     let data_fees_limit = supervisor.shared_data.gep(|x| &x.data_fees_limit);
 
     let essential_data = Box::new(wasi::genlayer_sdk::SingleVMData {
+        limiter: context.det_limiter.derived(),
         depth: 0,
-        // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+        spawn_kind: "initial".to_owned(),
+        // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
         conf: wasi::base::Config {
             needs_error_fingerprint: true,
-            is_deterministic: true,
-            can_read_storage: permissions.contains("r"),
-            can_write_storage: permissions.contains("w"),
-            can_send_messages: permissions.contains("s"),
-            can_call_others: permissions.contains("c"),
-            can_spawn_nondet: permissions.contains("n"),
-            can_register_runners: permissions.contains("u"),
-            state_mode: crate::public_abi::StorageType::Default,
-            topmost_runner_id,
+            permissions: wasi::base::Permissions {
+                deterministic: true,
+                write_storage: permissions.contains("w"),
+                send_messages: permissions.contains("s"),
+                call_others: permissions.contains("c"),
+                spawn_nondet: permissions.contains("n"),
+                register_runners: true,
+                can_use_balance_for_message_fees,
+            },
+            execution: wasi::base::Execution {
+                state_mode: crate::public_abi::StorageType::Default,
+                topmost_runner_id,
+            },
         },
         message_data: ExtendedMessage {
-            message: entry_data.message,
+            message: convert_message_data(entry_data.message),
             entry_kind: public_abi::EntryKind::Main,
             entry_data: entry_data.calldata,
             entry_stage_data: calldata::Value::Null,
@@ -248,9 +290,10 @@ pub async fn run_with_impl(
             messages_value_decremented: primitive_types::U256::zero(),
             emissions: Vec::new(),
             message_fee_allocation: entry_data.message_fee_allocation,
-            custom_runners: Default::default(),
         },
         det_subvm_hashes: Default::default(),
+        // The root VM inherits no custom runners; it loads its own tree at init.
+        granted_custom: Vec::new(),
     });
 
     let run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
@@ -277,17 +320,27 @@ pub async fn run_with_impl(
 }
 
 pub async fn run_with(
-    entry_data: domain::ExecutionData,
-    supervisor: Arc<rt::supervisor::Supervisor>,
+    entry_data: genvm_modules_interfaces::ExecutionData,
+    context: ExecutionContext,
     permissions: &str,
 ) -> anyhow::Result<host::FullResult> {
-    let res = run_with_impl(entry_data, supervisor.clone(), permissions).await;
+    // Deploy-time weak-cache bridge (ADR-012): the prepopulated deploy-runner
+    // entry must outlive not just the deterministic run but also the secondary
+    // nondet validator queue — a queued nondet VM whose runner is `contract`
+    // during deploy attaches to this very entry at spawn. Dropping the pin
+    // earlier would make that load's outcome depend on which queue processed it.
+    let mut deploy_pin: Option<runners::cache::ArchivePin> = None;
+
+    let supervisor = context.supervisor.clone();
+
+    let res = run_with_impl(entry_data, &context, permissions, &mut deploy_pin).await;
 
     log_debug!("deterministic execution done");
 
     let nondet_disagree_res = rt::supervisor::await_nondet_vms(&supervisor).await;
 
     log_debug!("non-deterministic execution done");
+    drop(deploy_pin);
 
     let merged_result = match (res, nondet_disagree_res) {
         (Err(e_res), Err(e_nondet)) => {
@@ -333,6 +386,7 @@ pub async fn run_with(
             data_fees_remaining,
             data_fees_consumed,
             llm_consumption,
+            supervisor.take_recorded_actions().await,
         )),
         Err(e) => Err(e),
     };

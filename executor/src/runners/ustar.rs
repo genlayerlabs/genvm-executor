@@ -107,10 +107,23 @@ impl Archive {
             map_try_insert(&mut res, name, file_contents)?;
         }
 
-        Ok(Self {
+        let res = Self {
             data: res,
             total_size: original_data.len() as u32,
-        })
+        };
+        // Files are carved from non-overlapping, header/padding-separated slices
+        // of the tar, so their contents sum to at most the whole buffer — the
+        // amount `total_size` charges.
+        #[cfg(debug_assertions)]
+        {
+            let content_sum: u64 = res.data.values().map(|v| v.len() as u64).sum();
+            debug_assert!(
+                content_sum <= original_data.len() as u64,
+                "ustar file contents {content_sum} exceed archive size {}",
+                original_data.len(),
+            );
+        }
+        Ok(res)
     }
 
     pub fn from_zip<R: std::io::Read + std::io::Seek>(
@@ -157,10 +170,24 @@ impl Archive {
             map_try_insert(&mut res, String::from(file.name()), buf)?;
         }
 
-        Ok(Self {
+        let res = Self {
             data: res,
             total_size: bytes.len() as u32,
-        })
+        };
+        // Each entry is a bounds-checked slice of `bytes`, so no single entry
+        // exceeds `total_size`. Their *sum* is not bounded here: a crafted zip may
+        // point several entries at overlapping data ranges (attacker input, not a
+        // bug), so only the per-entry bound is asserted.
+        #[cfg(debug_assertions)]
+        for (name, buf) in &res.data {
+            debug_assert!(
+                buf.len() as u64 <= bytes.len() as u64,
+                "zip entry {name} length {} exceeds archive size {}",
+                buf.len(),
+                bytes.len(),
+            );
+        }
+        Ok(res)
     }
 
     pub fn from_file_and_runner(
@@ -170,13 +197,23 @@ impl Archive {
     ) -> Self {
         let total_size = file.len() as u32;
 
-        Self {
+        let res = Self {
             data: BTreeMap::from_iter([
                 ("runner.json".into(), runner_comment),
                 ("version".into(), version),
                 ("file".into(), file),
             ]),
             total_size,
-        }
+        };
+        // `total_size` accounts for the `file` entry only; the synthetic
+        // `version`/`runner.json` metadata is uncharged, so the sum-of-contents
+        // bound the other constructors hold does *not* apply here.
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            res.data.get("file").map(|f| f.len() as u32),
+            Some(total_size),
+            "from_file_and_runner: `file` entry must equal total_size",
+        );
+        res
     }
 }

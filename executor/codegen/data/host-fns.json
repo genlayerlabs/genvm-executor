@@ -20,10 +20,17 @@
     "name": "errors",
     "values": {
       "ok": 0,
-      "absent": 1,
-      "forbidden": 2,
-      "out_of_storage_gas": 3
+      "evm_reverted": 1,
+      "forbidden": 2
     }
+  },
+  {
+    "type": "str_trie",
+    "name": "vm_error_detail",
+    "values": [
+      "internal",
+      "external"
+    ]
   },
   {
     "type": "const",

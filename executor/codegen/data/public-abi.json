@@ -31,13 +31,23 @@
     }
   },
   {
+    "type": "enum",
+    "name": "permissions",
+    "repr": "u32",
+    "values": {
+      "can_use_balance_for_message_fees": 1
+    }
+  },
+  {
     "type": "consts",
     "name": "memory_limiter_consts",
     "repr": "u32",
     "values": {
       "table_entry": 64,
       "file_mapping": 256,
-      "fd_allocation": 96
+      "fd_allocation": 96,
+      "runner_load_cost": 4096,
+      "vm_spawn_cost": 134217728
     }
   },
   {
@@ -50,7 +60,8 @@
       "code": 2,
       "locked_slots": 3,
       "upgraders": 4,
-      "code_slot": 5
+      "code_slot": 5,
+      "permissions": 37
     }
   },
   {
@@ -64,7 +75,9 @@
       "vm_recursion": 512,
       "web_request_min_space": 65536,
       "web_render_min_space": 134217728,
-      "max_fds": 1024
+      "max_fds": 1024,
+      "wasm_call_depth": 1024,
+      "wasm_stack_value_slots": 65535
     }
   },
   {
@@ -88,33 +101,56 @@
       },
       {
         "head": "wasm_trap",
-        "tail": "$str"
+        "tail": [
+          null,
+          "unreachable",
+          "stack_overflow",
+          "memory_out_of_bounds",
+          "table_out_of_bounds",
+          "indirect_call_to_null",
+          "bad_signature",
+          "integer_overflow",
+          "integer_divide_by_zero",
+          "bad_conversion_to_integer",
+          "heap_misaligned",
+          "atomic_wait_non_shared_memory",
+          "out_of_fuel",
+          "interrupt",
+          "nondet_instruction",
+          "fault"
+        ]
       },
       {
-        "head": "OOM",
+        "head": "out_of",
         "tail": [
           {
-            "head": "RAM",
-            "tail": [
-              [], "table", "memory", "limit"
-            ]
+            "head": "memory",
+            "tail": [null, "wasm_memory", "wasm_table"]
           },
           "storage",
           {
             "head": "receipt",
-            "tail": [
-              "nondet_output",
-              {
-                "head": "message",
-                "tail": ["internal", "external"]
-              }
-            ]
+            "tail": ["nondet_output", "message", "event"]
           },
           {
-            "head": "fees",
-            "tail": ["internal", "external"]
-          }
+            "head": "message_fee",
+            "tail": ["total", "node"]
+          },
+          "vm_recursion",
+          "nondet_blocks",
+          "locked_slots",
+          "upgraders",
+          "fds"
         ]
+      },
+      {
+        "head": "fee",
+        "tail": ["no_matching_node", "below_minimum", "too_many_rounds"]
+      },
+      "host_forbidden",
+      {
+        "head": "evm",
+        "tail": ["reverted"]
       },
       {
         "head": "invalid_contract",
@@ -129,10 +165,6 @@
             "tail": ["validating", "linking", "entrypoint"]
           }
         ]
-      },
-      {
-        "head": "host",
-        "tail": "$str"
       }
     ]
   },

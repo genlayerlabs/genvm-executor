@@ -39,8 +39,10 @@ let
 
         src = get-root-subtree [
           "${exec-prefix}/executor/src"
-          # host<->executor interface and schemas live in the manager root
+          # host<->executor interface and shared calldata live in the manager root
           "crates/modules-interfaces"
+          "crates/calldata"
+          "crates/calldata-derive"
           "${exec-prefix}/executor/crates"
           "${exec-prefix}/executor/third-party"
           "${exec-prefix}/executor/Cargo.toml"

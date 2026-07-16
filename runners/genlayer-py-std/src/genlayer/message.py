@@ -4,6 +4,7 @@ __all__ = (
 	'contract_address',
 	'sender_address',
 	'origin_address',
+	'signer_address',
 	'stack',
 	'value',
 	'chain_id',
@@ -35,6 +36,11 @@ class MessageRawType(typing.TypedDict):
 	origin_address: Address
 	"""
 	Entire transaction initiator
+	"""
+
+	signer_address: Address
+	"""
+	Externally-owned account that signed the transaction
 	"""
 
 	stack: list[Address]
@@ -80,6 +86,9 @@ sender_address: Address = ...  # type: ignore
 
 origin_address: Address = ...  # type: ignore
 """Entire transaction initiator"""
+
+signer_address: Address = ...  # type: ignore
+"""Externally-owned account that signed the transaction"""
 
 stack: list[Address] = ...  # type: ignore
 """Stack of view method calls, excluding last (``contract_address``)"""

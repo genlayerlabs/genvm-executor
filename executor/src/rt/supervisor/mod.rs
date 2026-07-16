@@ -1,15 +1,14 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     sync::{atomic::AtomicU32, Arc},
 };
 
 use anyhow::Context as _;
 use genvm_common::*;
-use symbol_table::GlobalSymbol;
 
 use crate::{
     config, host, public_abi,
-    rt::{self, memlimiter, DetNondet},
+    rt::{self, DetNondet},
     runners, wasi,
 };
 
@@ -29,7 +28,7 @@ pub struct NonDetVMTask {
 
 impl NonDetVMTask {
     pub async fn run_now(self, sup: &Arc<Supervisor>) -> anyhow::Result<rt::vm::RunOk> {
-        run_single_nondet(sup, self, sup.limiter.get(false).derived()).await
+        run_single_nondet(sup, self).await
     }
 }
 
@@ -55,16 +54,54 @@ pub struct Ctor {
 
     pub modules: crate::modules::All,
 
-    pub limiter: rt::DetNondet<rt::memlimiter::Limiter>,
     pub locked_slots: host::LockedSlotsSet,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
     pub multi_host: host::MultiHost,
+    pub record_actions: Vec<String>,
+}
+
+#[derive(Clone, Debug, genlayer_calldata::Encode)]
+pub struct RecordedAction {
+    pub kind: String,
+    pub fields: BTreeMap<String, String>,
+}
+
+pub struct ActionRecorder {
+    enabled: BTreeSet<String>,
+    records: tokio::sync::Mutex<Vec<RecordedAction>>,
+}
+
+impl ActionRecorder {
+    fn new(enabled: Vec<String>) -> Self {
+        Self {
+            enabled: enabled.into_iter().collect(),
+            records: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn is_enabled(&self, kind: &str) -> bool {
+        self.enabled.contains(kind)
+    }
+
+    pub async fn record_or_log(&self, kind: &'static str, fields: BTreeMap<String, String>) {
+        if self.is_enabled(kind) {
+            self.records.lock().await.push(RecordedAction {
+                kind: kind.to_owned(),
+                fields,
+            });
+        } else {
+            log_debug!(kind = kind, fields:serde = fields; "auditable action");
+        }
+    }
+
+    pub async fn take(&self) -> Vec<RecordedAction> {
+        std::mem::take(&mut *self.records.lock().await)
+    }
 }
 
 pub struct Supervisor {
     pub shared_data: sync::DArc<rt::SharedData>,
     pub modules: crate::modules::All,
-    pub limiter: rt::DetNondet<rt::memlimiter::Limiter>,
     pub locked_slots: host::LockedSlotsSet,
 
     pub nondet_call_no: AtomicU32,
@@ -76,12 +113,38 @@ pub struct Supervisor {
     runner_cache: runners::cache::Reader,
     wasm_mod_cache: WasmModuleCache,
 
-    /// Runners registered at runtime via `gl_call`, looked up by the
-    /// `custom:<hash>` runner id. Empty until a contract registers one.
-    custom_runners: dashmap::DashMap<Bytes32Hash, runners::Archive>,
+    /// Weak registry of runtime-registered `custom:<hash>` runners, keyed by
+    /// canonical id. Holds only weak references — a registration lives while some
+    /// VM's loaded set pins it (ADR-012 §3). Pure cross-scope dedup: resolution
+    /// never reads it, so a scope can only use what it loaded.
+    custom_runners: runners::cache::WeakCache,
 
     pub(crate) engines: rt::DetNondet<wasmtime::Engine>,
     pub(crate) host: Arc<host::MultiHost>,
+    pub(crate) action_recorder: ActionRecorder,
+}
+
+#[cfg(debug_assertions)]
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        // Every VM (and thus every loaded-set pin) is gone by supervisor teardown,
+        // so no registered custom runner may still be resident (ADR-012 §3).
+        self.custom_runners
+            .assert_empty_on_teardown("custom runner");
+    }
+}
+
+const fn get_native_stack_size() -> u32 {
+    let native_stack_size = (6 as u32) << 20;
+
+    let approximation = public_abi::top_limits::WASM_STACK_VALUE_SLOTS * 8 * 4
+        + public_abi::top_limits::WASM_CALL_DEPTH * 64;
+
+    if native_stack_size < approximation {
+        panic!("native stack size is smaller than the configured call depth limit");
+    }
+
+    native_stack_size
 }
 
 pub fn create_engines(
@@ -93,7 +156,13 @@ pub fn create_engines(
         .debug_info(true)
         .wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Disable)
         .consume_fuel(false)
-        .cranelift_opt_level(wasmtime::OptLevel::None);
+        .cranelift_opt_level(wasmtime::OptLevel::None)
+        .async_stack_size(8 << 20)
+        .max_wasm_stack(get_native_stack_size() as usize)
+        .wasm_stack_limits(
+            public_abi::top_limits::WASM_CALL_DEPTH,
+            public_abi::top_limits::WASM_STACK_VALUE_SLOTS,
+        );
 
     base_conf
         .wasm_tail_call(true)
@@ -149,12 +218,11 @@ pub async fn await_nondet_vms(zelf: &Arc<Supervisor>) -> anyhow::Result<Option<u
             .clone()
             .try_read_owned()
             .expect("tasks_loop_done already held by writer");
-        // Secondary nondet validator queue runs after the deterministic VM has
-        // finished, so it reuses the memory that VM freed.
-        // FIXME: custom runners registered during deterministic execution are not
-        // counted against this limiter.
-        let limiter = memlimiter::Limiter::new("nondet-secondary");
-        nondet_vm_processor(zelf.clone(), read_permit, limiter).await;
+        // Each queued nondet VM carries its own granted custom-runner pins and
+        // pays for them via its spawn-time inherit load actions (ADR-012 §3).
+        // Nondet VMs do not inherit the deterministic limiter; each starts with
+        // a fresh RAM limiter when spawned.
+        nondet_vm_processor(zelf.clone(), read_permit).await;
     }
 
     let _ = zelf.queue.tasks_loop_done.write().await;
@@ -207,6 +275,10 @@ impl Supervisor {
         self.nondet_results.lock().await.clone()
     }
 
+    pub async fn take_recorded_actions(&self) -> Vec<RecordedAction> {
+        self.action_recorder.take().await
+    }
+
     pub fn get_leader_nondet_result(&self, call_no: u32) -> Option<bytes::Bytes> {
         self.leader_nondet_results
             .as_ref()
@@ -229,37 +301,24 @@ impl Supervisor {
         rt::vm::storage::Limiter::new(self.shared_data.gep(|x| &x.data_fees_limit))
     }
 
-    pub fn get_custom_runner(&self, hash: Bytes32Hash) -> Option<runners::Archive> {
-        self.custom_runners.get(&hash).map(|r| r.clone())
-    }
-
+    /// Inserts the just-deployed contract's runner into the cache and returns a
+    /// pin. The cache is weakly held, so the caller (the top-level execution
+    /// scope in `lib.rs`) must keep the pin for the whole run — otherwise the
+    /// entry would be evicted before the contract VM loads it.
+    #[must_use]
     pub fn prepopulate_deploy_runner(
         &self,
         address: calldata::Address,
         code_slot: crate::SlotID,
         archive: runners::Archive,
-    ) {
+    ) -> runners::cache::ArchivePin {
         let id = runners::Id::Chain {
             address,
             on: runners::ChainState::Deploy,
             slot: code_slot,
         }
         .canonical();
-        self.runner_cache.put(id, archive);
-    }
-
-    /// Registers a runner from its `code`, returning the `custom:<hash>` id it can
-    /// be referenced by.
-    ///
-    /// The archive is parsed and charged against `limiter` only the first time a
-    /// given hash is seen — re-registering the same code is a cheap no-op, so a
-    /// contract cannot exhaust the memory limit by registering in a loop.
-    pub fn register_custom_runner(
-        &self,
-        code: bytes::Bytes,
-        limiter: &rt::memlimiter::Limiter,
-    ) -> anyhow::Result<GlobalSymbol> {
-        register_custom_runner_into(&self.custom_runners, code, limiter)
+        self.runner_cache.put(id, archive)
     }
 
     pub fn start(config: &config::Config, ctor: Ctor) -> anyhow::Result<Arc<Self>> {
@@ -301,7 +360,6 @@ impl Supervisor {
         let zelf = Arc::new(Self {
             shared_data: ctor.shared_data,
             modules: ctor.modules,
-            limiter: ctor.limiter,
             locked_slots: ctor.locked_slots,
             nondet_call_no: AtomicU32::new(0),
             balances: dashmap::DashMap::new(),
@@ -325,9 +383,10 @@ impl Supervisor {
                 cache_dir: my_cache_dir,
                 wasm_modules_cache: sync::CacheMap::new(),
             },
-            custom_runners: dashmap::DashMap::new(),
+            custom_runners: runners::cache::WeakCache::new(),
             host: Arc::new(ctor.multi_host),
             engines,
+            action_recorder: ActionRecorder::new(ctor.record_actions),
         });
 
         let read_permit = zelf
@@ -336,12 +395,7 @@ impl Supervisor {
             .clone()
             .try_read_owned()
             .expect("tasks_loop_done already held by writer");
-        let main_nondet_limiter = zelf.limiter.get(false).derived();
-        tokio::spawn(nondet_vm_processor(
-            zelf.clone(),
-            read_permit,
-            main_nondet_limiter,
-        ));
+        tokio::spawn(nondet_vm_processor(zelf.clone(), read_permit));
 
         Ok(zelf)
     }
@@ -350,23 +404,48 @@ impl Supervisor {
 pub async fn spawn(
     zelf: &Arc<Supervisor>,
     vm: Box<wasi::genlayer_sdk::SingleVMData>,
-    limiter: rt::memlimiter::Limiter,
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
     if vm.depth >= public_abi::top_limits::VM_RECURSION {
         return Err(rt::SpawnError {
-            error: rt::errors::Error::vm(public_abi::VmError::oom().ram().limit()).into(),
+            error: rt::errors::Error::vm(public_abi::VmError::out_of().vm_recursion()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
         });
     }
 
+    if !vm
+        .limiter
+        .consume(crate::public_abi::memory_limiter_consts::VM_SPAWN_COST)
+    {
+        return Err(rt::SpawnError {
+            error: rt::errors::Error::vm(crate::public_abi::VmError::out_of().memory().val())
+                .into(),
+            state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
+        });
+    }
+
+    zelf.action_recorder
+        .record_or_log(
+            "vm_spawn",
+            BTreeMap::from([
+                ("spawn_kind".to_owned(), vm.spawn_kind.clone()),
+                ("depth".to_owned(), vm.depth.to_string()),
+                (
+                    "runner_id".to_owned(),
+                    vm.conf.execution.topmost_runner_id.to_string(),
+                ),
+            ]),
+        )
+        .await;
+
     let config_copy = vm.conf.clone();
 
-    let engine = zelf.engines.get(vm.conf.is_deterministic);
+    let engine = zelf.engines.get(vm.conf.permissions.deterministic);
 
+    let limiter = vm.limiter.clone();
     let mut store = wasmtime::Store::new(
         engine,
         rt::vm::WasmtimeStoreData {
-            limits: limiter.clone(),
+            limits: vm.limiter.clone(),
             genlayer_ctx: wasi::Context::new(vm, limiter).map_err(|(a, b)| rt::SpawnError {
                 error: anyhow::Error::from(a),
                 state: Box::new(rt::SpawnErrorState::Unspawned(b)),
@@ -401,6 +480,51 @@ pub async fn spawn(
         });
     }
 
+    // Inherit-at-spawn (ADR-012 §1/§4): perform a load action for each custom
+    // runner granted to this child, charging its own limiter, *before* its main
+    // runner loads (so a custom entry point granted here is not charged twice).
+    // The pins were carried in `SingleVMData`, so the content survives even if the
+    // granting parent has died (queued nondet VMs).
+    {
+        let is_det = vm_base.config_copy.permissions.deterministic;
+        let child_limiter = vm_base.store.data().limits.clone();
+        let store_data = vm_base.store.data_mut();
+        let wasi::genlayer_sdk::Context { loaded, data, .. } =
+            &mut store_data.genlayer_ctx.genlayer_sdk;
+        let grants = std::mem::take(&mut data.granted_custom);
+        let mut det_fingerprint = is_det.then_some(&mut data.det_subvm_hashes);
+        for grant in grants {
+            let runner_id = grant.runner_id();
+            let size = grant.total_size();
+            let status = if loaded.contains(runner_id) {
+                "cached"
+            } else {
+                "charged"
+            };
+            if let Err(e) = actions::inherit_load(
+                &child_limiter,
+                loaded,
+                det_fingerprint.as_deref_mut(),
+                grant,
+            ) {
+                return Err(rt::SpawnError {
+                    error: e,
+                    state: Box::new(rt::SpawnErrorState::Spawned(vm_base)),
+                });
+            }
+            zelf.action_recorder
+                .record_or_log(
+                    "runner_load",
+                    BTreeMap::from([
+                        ("runner_id".to_owned(), runner_id.as_str().to_owned()),
+                        ("size".to_owned(), size.to_string()),
+                        ("status".to_owned(), status.to_owned()),
+                    ]),
+                )
+                .await;
+        }
+    }
+
     Ok(rt::vm::VM { vm_base, data: () })
 }
 
@@ -431,7 +555,7 @@ async fn apply_contract_actions_inner(
 ) -> anyhow::Result<wasmtime::Instance> {
     let data = &mut vm.vm_base.store.data_mut().genlayer_ctx.genlayer_sdk.data;
 
-    let topmost_runner_id = data.conf.topmost_runner_id.clone();
+    let topmost_runner_id = data.conf.execution.topmost_runner_id.clone();
     let contract_major = data
         .storage
         .read_major()
@@ -446,17 +570,27 @@ async fn apply_contract_actions_inner(
         .into());
     }
 
-    let topmost_runner_id = data.conf.topmost_runner_id.clone();
+    let topmost_runner_id = data.conf.execution.topmost_runner_id.clone();
 
-    let arch = actions::load_runner(
-        zelf,
-        &limiter,
-        topmost_runner_id.clone(),
-        &data.accumulator.custom_runners,
-    )
-    .await
-    .with_context(|| format!("getting runner for {topmost_runner_id}"))?
-    .1;
+    // Main-runner load action (ADR-012 §1). Runs *after* the spawn-time inherit
+    // loads, so a custom entry point granted to this VM is already loaded (free
+    // here, not double charged). Charges this VM's own limiter.
+    let arch = {
+        let is_det = vm.vm_base.config_copy.permissions.deterministic;
+        let store_data = vm.vm_base.store.data_mut();
+        let wasi::genlayer_sdk::Context { loaded, data, .. } =
+            &mut store_data.genlayer_ctx.genlayer_sdk;
+        let det_fingerprint = is_det.then_some(&mut data.det_subvm_hashes);
+        actions::load_action(
+            zelf,
+            &limiter,
+            loaded,
+            det_fingerprint,
+            topmost_runner_id.clone().into(),
+        )
+        .await
+        .with_context(|| format!("getting runner for {topmost_runner_id}"))?
+    };
 
     let actions = arch
         .get_actions()
@@ -495,9 +629,13 @@ async fn apply_contract_actions_inner(
 async fn run_single_nondet(
     zelf: &std::sync::Arc<Supervisor>,
     task: NonDetVMTask,
-    limiter: memlimiter::Limiter,
 ) -> anyhow::Result<rt::vm::RunOk> {
-    match run_single_nondet_inner(zelf, task, limiter).await {
+    let zelf = zelf.clone();
+    let res = tokio::task::spawn(async move { run_single_nondet_inner(&zelf, task).await })
+        .await
+        .map_err(|e| anyhow::anyhow!("nondet VM task failed to join: {e}"))?;
+
+    match res {
         Ok(v) => Ok(v.run_ok),
         Err(e) => rt::errors::unwrap_vm_errors(rt::errors::UnwrapDynError::from(e)),
     }
@@ -506,19 +644,13 @@ async fn run_single_nondet(
 async fn run_single_nondet_inner(
     zelf: &std::sync::Arc<Supervisor>,
     task: NonDetVMTask,
-    limiter: memlimiter::Limiter,
 ) -> anyhow::Result<rt::vm::RunResult> {
-    let vm = spawn(zelf, task.task, limiter).await.map_err(|e| e.error)?;
-    let vm = apply_contract_actions(zelf, vm)
-        .await
-        .map_err(|e| e.error)?;
-    vm.run().await.map_err(|e| e.error)
+    rt::spawn_apply_run(zelf, task.task).await
 }
 
 async fn nondet_vm_processor(
     zelf: std::sync::Arc<Supervisor>,
     read_permit: tokio::sync::OwnedRwLockReadGuard<()>,
-    limiter: memlimiter::Limiter,
 ) {
     let mut count = 0;
     loop {
@@ -550,7 +682,7 @@ async fn nondet_vm_processor(
                 let call_no = task.call_no;
 
                 let (task, tok) = task.deconstruct();
-                let res = run_single_nondet(&zelf, task, limiter.derived()).await;
+                let res = run_single_nondet(&zelf, task).await;
 
                 let do_disagree = match res {
                     Ok(rt::vm::RunOk::Return(v)) => {
@@ -588,54 +720,4 @@ async fn nondet_vm_processor(
 
     std::mem::drop(read_permit);
     log_debug!(count = count; "nondet worker done");
-}
-
-/// Core of [`Supervisor::register_custom_runner`]; charges the parsed archive
-/// against `limiter` only on the first registration of a given hash.
-fn register_custom_runner_into(
-    custom_runners: &dashmap::DashMap<Bytes32Hash, runners::Archive>,
-    code: bytes::Bytes,
-    limiter: &rt::memlimiter::Limiter,
-) -> anyhow::Result<GlobalSymbol> {
-    let hash = runners::custom_runner_hash(&code);
-
-    if let dashmap::mapref::entry::Entry::Vacant(slot) = custom_runners.entry(hash) {
-        let archive = runners::parse(code).map_err(|e| {
-            rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
-        })?;
-        if !limiter.consume(archive.total_size) {
-            return Err(rt::errors::Error::vm(public_abi::VmError::oom().ram().val()).into());
-        }
-        slot.insert(archive);
-    }
-
-    Ok(runners::Id::Custom { hash }.canonical())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn register_custom_runner_consumes_once() {
-        let map = dashmap::DashMap::new();
-        let limiter = rt::memlimiter::Limiter::new("test-register");
-        let code = bytes::Bytes::from_static(b"# { \"Depends\": \"py-genlayer:test\" }\n");
-
-        let id = register_custom_runner_into(&map, code.clone(), &limiter).unwrap();
-        let remaining_after_first = limiter.get_remaining_memory();
-
-        // the first registration must have charged the archive
-        assert!(remaining_after_first < u32::MAX);
-
-        // re-registering the same code must be a cheap no-op: same id, no extra
-        // memory charged and no duplicate map entries
-        for _ in 0..1000 {
-            let again = register_custom_runner_into(&map, code.clone(), &limiter).unwrap();
-            assert_eq!(again, id);
-        }
-
-        assert_eq!(limiter.get_remaining_memory(), remaining_after_first);
-        assert_eq!(map.len(), 1);
-    }
 }

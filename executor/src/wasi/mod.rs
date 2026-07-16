@@ -4,7 +4,6 @@ use ::genlayer_sdk as original_genlayer_sdk;
 
 pub mod base;
 pub mod genlayer_sdk;
-pub mod json_to_calldata;
 pub mod preview1;
 pub mod vfs;
 
@@ -33,7 +32,7 @@ impl Context {
             sha3::Sha3_256::digest(&as_bytes).into()
         };
 
-        let vfs = match vfs::VFS::new(as_bytes, limiter) {
+        let vfs = match vfs::VFS::new(as_bytes, limiter.clone()) {
             Ok(vfs) => vfs,
             Err(e) => return Err((e, data)),
         };
@@ -44,7 +43,7 @@ impl Context {
                 data.conf.clone(),
                 seed,
             ),
-            genlayer_sdk: genlayer_sdk::Context::new(data),
+            genlayer_sdk: genlayer_sdk::Context::new(data, limiter),
         })
     }
 }

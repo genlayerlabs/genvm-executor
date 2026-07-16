@@ -5,7 +5,7 @@ from genlayer.types import u32
 
 
 class Contract(gl.contract.Contract):
-	m: gl.TreeMap[str, u32]
+	m: gl.storage.TreeMap[str, u32]
 
 	def __init__(self):
 		print('first')

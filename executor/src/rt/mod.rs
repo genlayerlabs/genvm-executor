@@ -57,7 +57,7 @@ pub struct SharedData {
 }
 
 pub fn parse_host_data(
-    zelf: &genvm_common::domain::ExecutionData,
+    zelf: &genvm_modules_interfaces::ExecutionData,
 ) -> anyhow::Result<genvm_modules_interfaces::HostData> {
     serde_json::from_str(&zelf.host_data)
         .with_context(|| "parsing host_data from execution context")
@@ -97,9 +97,7 @@ async fn spawn_apply_run_inner(
     supervisor: &Arc<supervisor::Supervisor>,
     vm: Box<wasi::genlayer_sdk::SingleVMData>,
 ) -> std::result::Result<vm::RunResult, SpawnError> {
-    let limiter = supervisor.limiter.get(vm.conf.is_deterministic).derived();
-
-    let vm = supervisor::spawn(supervisor, vm, limiter).await?;
+    let vm = supervisor::spawn(supervisor, vm).await?;
 
     let vm = supervisor::apply_contract_actions(supervisor, vm).await?;
 

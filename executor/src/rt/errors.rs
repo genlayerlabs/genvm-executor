@@ -20,23 +20,46 @@ fn recover_executor_error(e: UnwrapDynError) -> std::result::Result<rt::vm::RunO
     }
 }
 
+/// Total remap of a [`wasmtime::Trap`] to a public `wasm_trap` VM code. The
+/// listed variants are the ones a contract can actually hit; every other
+/// variant (GC/component-model/async/debug-assert traps, unreachable for
+/// contracts) collapses to the bare `wasm_trap` code and is logged. Traps never
+/// carry a detail.
+fn trap_to_vm_error(trap: wasmtime::Trap) -> abi::consts::VmError {
+    use wasmtime::Trap;
+    let t = abi::consts::VmError::wasm_trap();
+    match trap {
+        Trap::UnreachableCodeReached => t.unreachable(),
+        Trap::StackOverflow => t.stack_overflow(),
+        Trap::MemoryOutOfBounds => t.memory_out_of_bounds(),
+        Trap::TableOutOfBounds => t.table_out_of_bounds(),
+        Trap::IndirectCallToNull => t.indirect_call_to_null(),
+        Trap::BadSignature => t.bad_signature(),
+        Trap::IntegerOverflow => t.integer_overflow(),
+        Trap::IntegerDivisionByZero => t.integer_divide_by_zero(),
+        Trap::BadConversionToInteger => t.bad_conversion_to_integer(),
+        Trap::HeapMisaligned => t.heap_misaligned(),
+        Trap::AtomicWaitNonSharedMemory => t.atomic_wait_non_shared_memory(),
+        Trap::OutOfFuel => t.out_of_fuel(),
+        Trap::Interrupt => t.interrupt(),
+        Trap::NondetInstruction => t.nondet_instruction(),
+        other => {
+            log_warn!(trap:? = other; "unexpected wasm trap variant");
+            t.val()
+        }
+    }
+}
+
 #[allow(clippy::manual_try_fold)]
 pub fn unwrap_vm_errors(err: UnwrapDynError) -> anyhow::Result<rt::vm::RunOk> {
     let res: std::result::Result<rt::vm::RunOk, UnwrapDynError> = [
         |e: UnwrapDynError| {
-            e.downcast::<wasmtime::Trap>().map(|v| {
-                rt::vm::RunOk::VMError(
-                    abi::consts::VmError::wasm_trap().val_str(&format!("{v:?}")),
-                    Some(v.into()),
-                )
-            })
+            e.downcast::<wasmtime::Trap>()
+                .map(|v| rt::vm::RunOk::VMError(trap_to_vm_error(v), Some(v.into())))
         },
         |e: UnwrapDynError| {
             e.downcast::<wiggle::GuestError>().map(|e| {
-                rt::vm::RunOk::VMError(
-                    abi::consts::VmError::wasm_trap().val_str("fault"),
-                    Some(e.into()),
-                )
+                rt::vm::RunOk::VMError(abi::consts::VmError::wasm_trap().fault(), Some(e.into()))
             })
         },
         |e: UnwrapDynError| recover_executor_error(e),
@@ -148,12 +171,32 @@ pub fn unwrap_vm_errors_backtrace(
 
 #[derive(Debug)]
 pub enum ErrorKind {
-    /// VM-level error carrying a stable code (-> ResultCode::VMError).
-    Vm(abi::consts::VmError),
+    /// VM-level error carrying a stable code (-> ResultCode::VMError) and an
+    /// optional internal detail. The detail refines the public code for
+    /// diagnostics; it is fused into the consensus string as `<code> # <detail>`
+    /// only at the terminal boundary (see [`fuse_vm_error`]).
+    Vm(abi::consts::VmError, Option<host_fns::VmErrorDetail>),
     /// User/contract error carrying a calldata value (-> ResultCode::UserError).
     User(calldata::unparsed::Maybe<calldata::Value>),
     /// Generic internal executor error (the bare `anyhow` case).
     Internal,
+}
+
+/// Fuse a VM error code with its optional detail into the single
+/// consensus-visible string carried by [`rt::vm::RunOk::VMError`]: the bare
+/// `<code>` when there is no detail, or `<code> # <detail>` (separator exactly
+/// space-'#'-space) when one is present.
+pub fn fuse_vm_error(
+    code: abi::consts::VmError,
+    detail: Option<host_fns::VmErrorDetail>,
+) -> abi::consts::VmError {
+    match detail {
+        None => code,
+        Some(detail) => abi::consts::VmError(std::borrow::Cow::Owned(format!(
+            "{} # {}",
+            code.0, detail.0
+        ))),
+    }
 }
 
 /// The executor's error type. Fields after `kind` are common to every error.
@@ -197,10 +240,28 @@ impl Error {
 
     pub fn vm(code: abi::consts::VmError) -> Self {
         Self {
-            kind: ErrorKind::Vm(code),
+            kind: ErrorKind::Vm(code, None),
             context: Vec::new(),
             source: None,
         }
+    }
+
+    /// A VM error carrying an internal [`host_fns::VmErrorDetail`] alongside its
+    /// public code (see [`fuse_vm_error`]).
+    pub fn vm_detailed(code: abi::consts::VmError, detail: host_fns::VmErrorDetail) -> Self {
+        Self {
+            kind: ErrorKind::Vm(code, Some(detail)),
+            context: Vec::new(),
+            source: None,
+        }
+    }
+
+    /// Attach a detail to a VM error (no-op on non-VM kinds).
+    pub fn with_detail(mut self, detail: host_fns::VmErrorDetail) -> Self {
+        if let ErrorKind::Vm(_, d) = &mut self.kind {
+            *d = Some(detail);
+        }
+        self
     }
 
     /// Wrap a cause as a VM error with `code`, **keeping the inner terminal
@@ -211,7 +272,7 @@ impl Error {
     pub fn wrap(code: abi::consts::VmError, cause: impl Into<Error>) -> Self {
         let mut cause = cause.into();
         if !cause.is_vm() && !cause.is_user() {
-            cause.kind = ErrorKind::Vm(code);
+            cause.kind = ErrorKind::Vm(code, None);
         }
         cause
     }
@@ -250,7 +311,7 @@ impl Error {
     }
 
     pub fn is_vm(&self) -> bool {
-        matches!(self.kind, ErrorKind::Vm(_))
+        matches!(self.kind, ErrorKind::Vm(..))
     }
 
     /// Convert into the terminal VM result this error represents. `Vm`/`User`
@@ -265,7 +326,10 @@ impl Error {
             source,
         } = self;
         match kind {
-            ErrorKind::Vm(code) => Ok(rt::vm::RunOk::VMError(code, fold_cause(context, source))),
+            ErrorKind::Vm(code, detail) => Ok(rt::vm::RunOk::VMError(
+                fuse_vm_error(code, detail),
+                fold_cause(context, source),
+            )),
             ErrorKind::User(v) => Ok(rt::vm::RunOk::UserError(v)),
             ErrorKind::Internal => Err(Error {
                 kind: ErrorKind::Internal,
@@ -279,7 +343,8 @@ impl Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            ErrorKind::Vm(c) => write!(f, "VMError({})", c.0)?,
+            ErrorKind::Vm(c, None) => write!(f, "VMError({})", c.0)?,
+            ErrorKind::Vm(c, Some(d)) => write!(f, "VMError({} # {})", c.0, d.0)?,
             ErrorKind::User(v) => write!(f, "UserError({v:?})")?,
             ErrorKind::Internal => f.write_str("internal error")?,
         }
@@ -352,6 +417,26 @@ internal_from!(
     zip::result::ZipError,
     wasmparser::BinaryReaderError,
 );
+
+/// Create an [`Error`] with [`ErrorKind::Internal`] from a format string.
+#[macro_export]
+macro_rules! internal {
+    ($($arg:tt)*) => {
+        $crate::rt::errors::Error::internal(::std::format!($($arg)*))
+    };
+}
+pub use internal;
+
+/// Return early with an [`ErrorKind::Internal`] error if a condition is false.
+#[macro_export]
+macro_rules! internal_ensure {
+    ($cond:expr, $($arg:tt)*) => {
+        if !($cond) {
+            return ::std::result::Result::Err($crate::internal!($($arg)*));
+        }
+    };
+}
+pub use internal_ensure;
 
 /// Attach context to a `Result<T, E: Into<Error>>`. Named `ctx`/`with_ctx`
 /// (not `context`) to avoid colliding with `anyhow::Context` while both are in

@@ -1,5 +1,6 @@
-__all__ = ('ON', 'IAccount', 'Account', 'Event', 'id')
+__all__ = ('ON', 'IAccount', 'Account', 'Event', 'InternalMessageParams', 'id')
 
+import dataclasses
 import typing
 
 import genlayer._internal.on_chain.gl_call as gl_call
@@ -9,6 +10,34 @@ from genlayer.types import Address, u256
 
 type ON = typing.Literal['accepted', 'finalized']
 """When the transaction message should be applied: ``'accepted'`` or ``'finalized'``"""
+
+
+@typing.final
+@dataclasses.dataclass(frozen=True)
+class InternalMessageParams:
+	"""
+	Fee parameters for a balance-funded internal message (``use_balance``). GenVM
+	meters the fee from these params (against the emitting contract's balance) and
+	that metered amount becomes the child transaction's ``declaredBudget``.
+
+	Field names and layout mirror the executor's calldata encoding exactly.
+
+	:param leader_timeunits_allocation: time units allocated to the leader per round
+	:param validator_timeunits_allocation: time units allocated to each validator per round
+	:param execution_budget_per_round: gas budget granted to the child execution per round
+	:param rotations: per-round rotation allocations; must be non-empty (``appeal_rounds`` is ``len(rotations) - 1``)
+	:param max_price_gen_per_time_unit: per-time-unit GEN price cap; must be non-zero
+	:param storage_fee_max_gas_price: max gas price for the storage-fee component; must be non-zero
+	:param receipt_fee_max_gas_price: max gas price for the receipt-fee component; must be non-zero
+	"""
+
+	leader_timeunits_allocation: u256
+	validator_timeunits_allocation: u256
+	execution_budget_per_round: u256
+	rotations: list[u256]
+	max_price_gen_per_time_unit: u256
+	storage_fee_max_gas_price: u256
+	receipt_fee_max_gas_price: u256
 
 
 @typing.runtime_checkable

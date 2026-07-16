@@ -1,5 +1,5 @@
 use genlayer_sdk::abi::gl_call::On;
-use genvm_common::domain::fees::{
+use genvm_modules_interfaces::fees::{
     ExternalMessageParams, InternalMessageParams, MessageAllocationNode,
     MessageAllocationNodeParams,
 };
@@ -29,10 +29,10 @@ fn external_node(
 ) -> MessageAllocationNode {
     MessageAllocationNode {
         recipient: recipient.map(genlayer_sdk::calldata::Address::from),
-        call_key: call_key.map(genlayer_sdk::abi::CallKey),
+        call_key: call_key.map(genvm_modules_interfaces::CallKey),
         budget: U256::from(budget),
         // External messages have no acceptance/finalize lifecycle; value is unused.
-        on: On::Finalized,
+        on: genvm_modules_interfaces::On::Finalized,
         fee_params: MessageAllocationNodeParams::External(ExternalMessageParams {
             gas_limit: U256::from(gas_limit),
             max_gas_price: U256::from(max_gas_price),
@@ -42,7 +42,7 @@ fn external_node(
 }
 
 fn internal_node(
-    on: On,
+    on: genvm_modules_interfaces::On,
     budget: u64,
     rotations: &[u64],
     children: Vec<MessageAllocationNode>,
@@ -104,7 +104,12 @@ fn external_root_node_matches_exact_encoding() {
 fn nested_internal_flattens_with_parent_pointers() {
     // root (internal, accepted) with a single external child.
     let child = external_node(Some([0x22u8; 20]), None, 1, 100, 200, vec![]);
-    let root = internal_node(On::Accepted, 10, &[2, 3], vec![child]);
+    let root = internal_node(
+        genvm_modules_interfaces::On::Accepted,
+        10,
+        &[2, 3],
+        vec![child],
+    );
 
     let encoded = MessageAllocationNode::abi_encode(&[root]);
 
@@ -158,8 +163,12 @@ fn nested_internal_flattens_with_parent_pointers() {
 fn internal_params_encode_derived_appeal_rounds() {
     // appealRounds is not stored on the Rust side; it is reconstructed as
     // len(rotations) - 1 when encoding.
-    let encoded =
-        MessageAllocationNode::abi_encode(&[internal_node(On::Finalized, 10, &[2, 3, 4], vec![])]);
+    let encoded = MessageAllocationNode::abi_encode(&[internal_node(
+        genvm_modules_interfaces::On::Finalized,
+        10,
+        &[2, 3, 4],
+        vec![],
+    )]);
 
     // Walk to the feeParams bytes inside the single element.
     let heads_base = 2 * 32;

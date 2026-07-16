@@ -1187,7 +1187,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         // exit-carrier error through `unwrap_vm_errors`: a zero exit is a normal
         // empty return, any other code is a VM error.
         let trap: anyhow::Error = if code == 0 {
-            crate::wasi::genlayer_sdk::ContractReturn(genvm_common::calldata::Value::Null.into())
+            crate::wasi::genlayer_sdk::ContractReturn(genlayer_sdk::calldata::Value::Null.into())
                 .into()
         } else {
             rt::errors::Error::vm(abi::consts::VmError::exit_code().val_i32(code)).into()
@@ -1222,7 +1222,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
 
         let mut mem: Vec<u8> = std::iter::repeat_n(0, buf_len as usize).collect();
 
-        if self.context.conf.is_deterministic {
+        if self.context.conf.permissions.deterministic {
             use rand_core::RngCore as _;
 
             self.context.mt19937_rng.fill_bytes(&mut mem[..]);
@@ -1362,4 +1362,54 @@ fn write_bytes_capacity(
     *capacity -= len;
     let next = ptr.add(len)?;
     Ok(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use rand_core::RngCore as _;
+    use sha3::Digest as _;
+
+    /// Known-answer test for the deterministic `random_get` byte layout. The seed is a
+    /// fixed 32-byte value consumed as 8 little-endian `u32` words (matching
+    /// `Context::new`), and `fill_bytes` produces the exact stream below. This pins the
+    /// endianness and partial-word layout of the MT19937 output; the calldata seed
+    /// derivation (`sha3-256(stdin)`) is exercised separately.
+    #[test]
+    fn det_random_get_known_answer() {
+        let seed: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let seed_words: [u32; 8] = std::array::from_fn(|i| {
+            u32::from_le_bytes([
+                seed[i * 4],
+                seed[i * 4 + 1],
+                seed[i * 4 + 2],
+                seed[i * 4 + 3],
+            ])
+        });
+        let mut rng = mt19937::MT19937::new_with_slice_seed(&seed_words);
+
+        let mut out = [0u8; 20];
+        rng.fill_bytes(&mut out);
+
+        assert_eq!(hex::encode(out), "a0a49802eee109f3e6e193c8b06d7ee6a717a4d7");
+    }
+
+    /// Known-answer test for the sub-VM rolling SHA3-256 accumulator
+    /// (`SingleVMData::det_subvm_hashes`): the empty digest and one `update` fold step.
+    /// The spec under-defines this fold, so pin the current behavior to catch drift.
+    #[test]
+    fn det_subvm_hash_fold_known_answer() {
+        let empty = sha3::Sha3_256::new().finalize();
+        assert_eq!(
+            hex::encode(empty),
+            "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+        );
+
+        let child: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let mut acc = sha3::Sha3_256::new();
+        acc.update(child);
+        assert_eq!(
+            hex::encode(acc.finalize()),
+            "050a48733bd5c2756ba95c5828cc83ee16fabcd3c086885b7744f84a0f9e0d94"
+        );
+    }
 }

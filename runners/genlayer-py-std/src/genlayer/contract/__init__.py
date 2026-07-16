@@ -25,7 +25,7 @@ import typing
 
 import genlayer.calldata as calldata
 from genlayer import IS_IN_VM
-from genlayer.chain import IAccount
+from genlayer.chain import IAccount, InternalMessageParams
 from genlayer.types import Address, Lazy, u256
 
 if typing.TYPE_CHECKING or IS_IN_VM:
@@ -78,27 +78,36 @@ class _ContractAtViewMethod:
 
 
 class _ContractAtEmitMethod:
-	__slots__ = ('_addr', '_name', '_value', '_on')
+	__slots__ = ('_addr', '_name', '_value', '_on', '_use_balance', '_fee_params')
 
-	def __init__(self, name: str | None, addr: Address, value: u256, on: str):
+	def __init__(
+		self,
+		name: str | None,
+		addr: Address,
+		value: u256,
+		on: str,
+		use_balance: bool = False,
+		fee_params: InternalMessageParams | None = None,
+	):
 		self._addr = addr
 		self._name = name
 		self._value = value
 		self._on = on
+		self._use_balance = use_balance
+		self._fee_params = fee_params
 
 	def __call__(self, *args, **kwargs) -> None:
-		wasi.gl_call(
-			calldata.encode(
-				{
-					'PostMessage': {
-						'address': self._addr,
-						'calldata': _make_calldata_obj(self._name, args, kwargs),
-						'value': self._value,
-						'on': self._on,
-					}
-				}
-			)
-		)
+		message: dict[str, calldata.Encodable] = {
+			'address': self._addr,
+			'calldata': _make_calldata_obj(self._name, args, kwargs),
+			'value': self._value,
+			'on': self._on,
+		}
+		if self._use_balance:
+			message['use_balance'] = True
+		if self._fee_params is not None:
+			message['fee_params'] = self._fee_params
+		wasi.gl_call(calldata.encode({'PostMessage': message}))
 
 
 @typing.runtime_checkable
@@ -122,12 +131,24 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 		"""
 		...
 
-	def emit(self, *, value: u256 = 0, on: ON = 'finalized') -> TSend:
+	def emit(
+		self,
+		*,
+		value: u256 = 0,
+		on: ON = 'finalized',
+		use_balance: bool = False,
+		fee_params: InternalMessageParams | None = None,
+	) -> TSend:
 		"""
 		Get a namespace for emitting write transactions.
 
 		:param value: Amount of native tokens to transfer with the transaction
 		:param on: When the transaction message should be emitted to consensus
+		:param use_balance: Fund the message fee from this contract's balance instead
+			of the sender's prefunded pool. Requires the
+			``can_use_balance_for_message_fees`` permission and ``fee_params``.
+		:param fee_params: Fee parameters GenVM meters the balance-funded fee from;
+			required when ``use_balance`` is set, ignored otherwise
 		:returns: Object providing access to write methods
 
 		.. warning::
@@ -136,13 +157,22 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 		"""
 		...
 
-	def emit_transfer(self, value: u256, *, on: ON = 'finalized') -> None:
+	def emit_transfer(
+		self,
+		value: u256,
+		*,
+		on: ON = 'finalized',
+		use_balance: bool = False,
+		fee_params: InternalMessageParams | None = None,
+	) -> None:
 		"""
 		Emit a simple value transfer without calling any method. Receiver may catch it with
 		py:func:`genlayer.gl.Contract.__receive__` method, so users may need to supply non-zero gas
 
 		:param value: Amount of native tokens to transfer
 		:param on: When transaction message should be emitted to consensus
+		:param use_balance: Fund the message fee from this contract's balance; see :py:meth:`emit`
+		:param fee_params: Fee parameters for the balance-funded fee; required when ``use_balance`` is set
 
 		:raises ValueError: If value is zero
 		"""
@@ -182,13 +212,29 @@ class _ContractAt(Proxy[ErasedMethods, ErasedMethods]):
 	def view(self, *, state: StorageType = StorageType.LATEST_NON_FINAL) -> ErasedMethods:
 		return _ContractAtGetter(_ContractAtViewMethod, self._address, state)
 
-	def emit(self, *, value: u256 = 0, on: ON = 'finalized') -> ErasedMethods:
-		return _ContractAtGetter(_ContractAtEmitMethod, self._address, value, on)
+	def emit(
+		self,
+		*,
+		value: u256 = 0,
+		on: ON = 'finalized',
+		use_balance: bool = False,
+		fee_params: InternalMessageParams | None = None,
+	) -> ErasedMethods:
+		return _ContractAtGetter(
+			_ContractAtEmitMethod, self._address, value, on, use_balance, fee_params
+		)
 
-	def emit_transfer(self, value: u256, *, on: ON = 'finalized') -> None:
+	def emit_transfer(
+		self,
+		value: u256,
+		*,
+		on: ON = 'finalized',
+		use_balance: bool = False,
+		fee_params: InternalMessageParams | None = None,
+	) -> None:
 		if value <= 0:
 			raise ValueError('value must be greater than 0 for emit_transfer')
-		_ContractAtEmitMethod(None, self._address, value, on)()
+		_ContractAtEmitMethod(None, self._address, value, on, use_balance, fee_params)()
 
 	@property
 	def balance(self) -> u256:
@@ -325,6 +371,8 @@ def deploy(
 	salt_nonce: typing.Literal[0] = 0,
 	value: u256 = 0,
 	on: ON = 'finalized',
+	use_balance: bool = False,
+	fee_params: InternalMessageParams | None = None,
 ) -> None: ...
 
 
@@ -337,6 +385,8 @@ def deploy(
 	salt_nonce: u256,
 	value: u256,
 	on: ON = 'finalized',
+	use_balance: bool = False,
+	fee_params: InternalMessageParams | None = None,
 ) -> Address: ...
 
 
@@ -348,6 +398,8 @@ def deploy(
 	salt_nonce: u256 | typing.Literal[0] = 0,
 	value: u256 = 0,
 	on: ON = 'finalized',
+	use_balance: bool = False,
+	fee_params: InternalMessageParams | None = None,
 ) -> Address | None:
 	"""
 	Deploy a new GenVM contract to the blockchain.
@@ -362,6 +414,8 @@ def deploy(
 	:param salt_nonce: Salt for deterministic deployment. Use 0 for non-deterministic.
 	:param value: Amount of native tokens to send to the contract during deployment
 	:param on: When to execute the deployment ('accepted' or 'finalized')
+	:param use_balance: Fund the deploy message fee from this contract's balance; see :py:meth:`Proxy.emit`
+	:param fee_params: Fee parameters for the balance-funded fee; required when ``use_balance`` is set
 	:returns: Contract address if salt_nonce != 0, None otherwise
 
 	Example:
@@ -392,19 +446,18 @@ def deploy(
 			details about transaction ordering
 	"""
 
-	wasi.gl_call(
-		calldata.encode(
-			{
-				'DeployContract': {
-					'calldata': _make_calldata_obj(None, args, kwargs),
-					'code': code,
-					'value': value,
-					'on': on,
-					'salt_nonce': salt_nonce,
-				}
-			}
-		)
-	)
+	message: dict[str, calldata.Encodable] = {
+		'calldata': _make_calldata_obj(None, args, kwargs),
+		'code': code,
+		'value': value,
+		'on': on,
+		'salt_nonce': salt_nonce,
+	}
+	if use_balance:
+		message['use_balance'] = True
+	if fee_params is not None:
+		message['fee_params'] = fee_params
+	wasi.gl_call(calldata.encode({'DeployContract': message}))
 
 	if salt_nonce == 0:
 		return None

@@ -7,9 +7,22 @@ use bytes::Bytes;
 use genlayer_calldata::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::calldata;
+use genlayer_calldata as calldata;
 
 use super::consts as public_abi;
+use super::fees;
+
+/// Calldata `default` for the backward-compatible `use_balance` flag: an old
+/// encoding without the key decodes as `false`.
+fn default_false() -> bool {
+    false
+}
+
+/// Calldata `default` for the backward-compatible optional `fee_params`: an old
+/// encoding without the key decodes as `None`.
+fn default_none<T>() -> Option<T> {
+    None
+}
 
 /// Web module interface types for WebRender and WebRequest operations.
 pub mod web_iface {
@@ -541,6 +554,15 @@ pub enum Message {
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
         value: primitive_types::U256,
         on: On,
+        /// Chain `useBalance`: fund this message's fee from the emitting
+        /// contract's balance instead of the sender's prefunded pool. Requires
+        /// `fee_params` and the `can_use_balance_for_message_fees` permission.
+        #[calldata(default = default_false)]
+        use_balance: bool,
+        /// Guest-supplied fee params GenVM meters the (balance-funded) fee from;
+        /// only honored when `use_balance` is set.
+        #[calldata(default = default_none)]
+        fee_params: Option<fees::InternalMessageParams>,
     },
     DeployContract {
         calldata: calldata::unparsed::Maybe<calldata::Value>,
@@ -551,6 +573,12 @@ pub enum Message {
         on: On,
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
         salt_nonce: primitive_types::U256,
+        /// Chain `useBalance` for the deploy message; see `PostMessage::use_balance`.
+        #[calldata(default = default_false)]
+        use_balance: bool,
+        /// Guest fee params for the balance-funded deploy; see `PostMessage::fee_params`.
+        #[calldata(default = default_none)]
+        fee_params: Option<fees::InternalMessageParams>,
     },
     EmitEvent {
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_vec_bytes))]
@@ -563,6 +591,16 @@ pub enum Message {
         data_leader: Bytes,
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
         data_validator: Bytes,
+        /// Runner to execute in the nondet block, as a full runner id. `None`
+        /// (old SDKs) runs the parent's `contract`; a `custom:<hash>` must be
+        /// visible to the parent and is auto-granted to the child (ADR-012 §4).
+        #[calldata(default = default_none)]
+        runner: Option<String>,
+        /// Custom runners visible to the nondet child, each a full `custom:<hash>`
+        /// id. `None` inherits the parent's entire set (a behavior change: nondet
+        /// blocks used to start empty); `Some(list)` grants exactly that subset.
+        #[calldata(default = default_none)]
+        custom_runners: Option<Vec<String>>,
     },
 
     Sandbox {
@@ -574,6 +612,11 @@ pub enum Message {
         allow_write_storage: bool,
         allow_send_messages: bool,
         allow_register_runners: bool,
+        /// Custom runners visible to the sandbox child, each a full `custom:<hash>`
+        /// id. `None` inherits the parent's entire set; `Some(list)` grants exactly
+        /// that subset (every element must be in the parent's set) (ADR-012 §4).
+        #[calldata(default = default_none)]
+        custom_runners: Option<Vec<String>>,
     },
 
     RegisterRunner {

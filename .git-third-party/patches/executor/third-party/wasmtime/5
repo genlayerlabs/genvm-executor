@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: kp2pml30 <kp2pml30@gmail.com>
+Date: Tue, 7 Jul 2026 14:03:52 +0900
+Subject: [PATCH] feat(genvm): configure wasm stack limits
+
+---
+ crates/wasmtime/src/config.rs               | 14 ++++++++++++++
+ crates/wasmtime/src/runtime/store.rs        |  5 ++++-
+ crates/wasmtime/src/runtime/vm/vmcontext.rs |  8 ++++++++
+ 3 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/crates/wasmtime/src/config.rs b/crates/wasmtime/src/config.rs
+index 1cbbd4b2..746ae852 100644
+--- a/crates/wasmtime/src/config.rs
++++ b/crates/wasmtime/src/config.rs
+@@ -160,6 +160,8 @@ pub struct Config {
+     pub(crate) custom_code_memory: Option<Arc<dyn CustomCodeMemory>>,
+     pub(crate) allocation_strategy: InstanceAllocationStrategy,
+     pub(crate) max_wasm_stack: usize,
++    pub(crate) wasm_call_stack_limit: u32,
++    pub(crate) wasm_value_stack_limit: u32,
+     /// Explicitly enabled features via `Config::wasm_*` methods. This is a
+     /// signal that the embedder specifically wants something turned on
+     /// regardless of the defaults that Wasmtime might otherwise have enabled.
+@@ -274,6 +276,8 @@ impl Config {
+             // 1` forces this), or at least it passed when this change was
+             // committed.
+             max_wasm_stack: 512 * 1024,
++            wasm_call_stack_limit: 1024,
++            wasm_value_stack_limit: 65535,
+             wasm_backtrace: true,
+             wasm_backtrace_details_env_used: false,
+             native_unwind_info: None,
+@@ -741,6 +745,16 @@ impl Config {
+         self
+     }
+ 
++    /// Configures semantic WebAssembly stack limits.
++    ///
++    /// `call_depth` is the maximum number of nested Wasm function calls and
++    /// `value_slots` is the maximum number of Wasm operand-stack slots.
++    pub fn wasm_stack_limits(&mut self, call_depth: u32, value_slots: u32) -> &mut Self {
++        self.wasm_call_stack_limit = call_depth;
++        self.wasm_value_stack_limit = value_slots;
++        self
++    }
++
+     /// Configures the size of the stacks used for asynchronous execution.
+     ///
+     /// This setting configures the size of the stacks that are allocated for
+diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
+index 3656a449..ce31edb4 100644
+--- a/crates/wasmtime/src/runtime/store.rs
++++ b/crates/wasmtime/src/runtime/store.rs
+@@ -753,7 +753,10 @@ impl<T> Store<T> {
+         let inner = StoreOpaque {
+             _marker: marker::PhantomPinned,
+             engine: engine.clone(),
+-            vm_store_context: Default::default(),
++            vm_store_context: VMStoreContext::new(
++                engine.config().wasm_call_stack_limit,
++                engine.config().wasm_value_stack_limit,
++            ),
+             #[cfg(feature = "stack-switching")]
+             continuations: Vec::new(),
+             instances: wasmtime_environ::collections::PrimaryMap::new(),
+diff --git a/crates/wasmtime/src/runtime/vm/vmcontext.rs b/crates/wasmtime/src/runtime/vm/vmcontext.rs
+index 01e3373a..cc0421c3 100644
+--- a/crates/wasmtime/src/runtime/vm/vmcontext.rs
++++ b/crates/wasmtime/src/runtime/vm/vmcontext.rs
+@@ -1196,6 +1196,14 @@ pub struct VMStoreContext {
+ }
+ 
+ impl VMStoreContext {
++    pub(crate) fn new(wasm_call_stack_limit: u32, wasm_value_stack_limit: u32) -> VMStoreContext {
++        VMStoreContext {
++            call_stack_limit_reverse: UnsafeCell::new(wasm_call_stack_limit),
++            value_stack_limit_reverse: UnsafeCell::new(wasm_value_stack_limit),
++            ..Default::default()
++        }
++    }
++
+     /// From the current saved trampoline FP, get the FP of the last
+     /// Wasm frame. If the current saved trampoline FP is null, return
+     /// null.

@@ -40,12 +40,12 @@ impl AccountAddress {
 #[repr(C)]
 pub struct SlotID(#[serde_as(as = "Base64")] pub [u8; 32]);
 
-impl<W: genvm_common::calldata::Writer> genvm_common::calldata::codec::Encode<W> for SlotID {
+impl<W: genlayer_sdk::calldata::Writer> genlayer_sdk::calldata::codec::Encode<W> for SlotID {
     type Error = W::Error;
 
     fn encode(
         &self,
-        enc: &mut genvm_common::calldata::Encoder<W>,
+        enc: &mut genlayer_sdk::calldata::Encoder<W>,
     ) -> std::result::Result<(), Self::Error> {
         enc.push_bytes(&self.0)
     }
@@ -98,5 +98,23 @@ impl From<&[u8; 32]> for SlotID {
 impl std::fmt::Display for SlotID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&genlayer_sdk::gvm32::encode(&self.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Golden vector for the slot indirection derivation
+    /// `sha3_256(slot_id || offset.to_le_bytes(4))`. The exact same constant is pinned
+    /// in the Python SDK test (`tests/test_slot_indirection_golden.py`) so the two
+    /// derivations can never silently diverge.
+    #[test]
+    fn slot_indirection_golden_vector() {
+        let derived = SlotID::ZERO.indirection(2);
+        assert_eq!(
+            hex::encode(derived.0),
+            "ba005630745acf3014aaf162e9933040302ca0bef3f56fe2d73c0a08f82c610b"
+        );
     }
 }

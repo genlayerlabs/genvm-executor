@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::borrow::Cow;
+
 #[derive(
     Debug,
     PartialEq,
@@ -84,27 +86,24 @@ impl TryFrom<u8> for Methods {
 #[repr(u8)]
 pub enum Errors {
     Ok = 0,
-    Absent = 1,
+    EvmReverted = 1,
     Forbidden = 2,
-    OutOfStorageGas = 3,
 }
 
 impl Errors {
-    pub const SIZE: usize = 4;
+    pub const SIZE: usize = 3;
     pub fn value(self) -> u8 {
         match self {
             Errors::Ok => 0,
-            Errors::Absent => 1,
+            Errors::EvmReverted => 1,
             Errors::Forbidden => 2,
-            Errors::OutOfStorageGas => 3,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
         match self {
             Errors::Ok => "ok",
-            Errors::Absent => "absent",
+            Errors::EvmReverted => "evm_reverted",
             Errors::Forbidden => "forbidden",
-            Errors::OutOfStorageGas => "out_of_storage_gas",
         }
     }
 }
@@ -115,12 +114,27 @@ impl TryFrom<u8> for Errors {
     fn try_from(value: u8) -> Result<Self, ()> {
         match value {
             0 => Ok(Errors::Ok),
-            1 => Ok(Errors::Absent),
+            1 => Ok(Errors::EvmReverted),
             2 => Ok(Errors::Forbidden),
-            3 => Ok(Errors::OutOfStorageGas),
             _ => Err(()),
         }
     }
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VmErrorDetail(pub Cow<'static, str>);
+
+impl From<VmErrorDetail> for String {
+    fn from(val: VmErrorDetail) -> String {
+        val.0.into()
+    }
+}
+#[rustfmt::skip]
+impl VmErrorDetail {
+    pub const fn internal() -> Self { Self(Cow::Borrowed("internal")) }
+    pub const fn external() -> Self { Self(Cow::Borrowed("external")) }
+}
+
 pub const CURRENT_MAJOR: u8 = 0;
 pub const CURRENT_MAJOR_STR: &'static str = "v0.0.0";
+
+// EOF

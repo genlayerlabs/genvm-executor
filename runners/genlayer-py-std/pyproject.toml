@@ -13,7 +13,5 @@ concurrency = ["multiprocessing"]
 sigterm = true
 
 [tool.pytest.ini_options]
-testpaths = [
-    "tests",
-]
 addopts = "--cov=genlayer.types --cov=genlayer.calldata --cov=genlayer.storage --cov=genlayer.evm --cov=genlayer._internal --cov=genlayer_embeddings --cov-report term-missing --cov-fail-under=75"
+testpaths = ["tests"]

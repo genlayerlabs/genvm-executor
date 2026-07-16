@@ -6,7 +6,7 @@ from genlayer.storage._internal.generate import generate_storage
 
 @generate_storage
 class Pr:
-	x: gl.TreeMap[str, str]
+	x: gl.storage.TreeMap[str, str]
 
 
 a = Pr()

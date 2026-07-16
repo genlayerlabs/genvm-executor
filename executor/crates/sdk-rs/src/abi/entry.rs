@@ -123,6 +123,7 @@ pub struct MessageData {
     pub contract_address: Address,
     pub sender_address: Address,
     pub origin_address: Address,
+    pub signer_address: Address,
     /// View methods call chain.
     /// It is empty for entrypoint (refer to [`contract_address`])
     #[serde(default)]
@@ -164,6 +165,7 @@ impl<'a> arbitrary::Arbitrary<'a> for MessageData {
             contract_address: Arbitrary::arbitrary(u)?,
             sender_address: Arbitrary::arbitrary(u)?,
             origin_address: Arbitrary::arbitrary(u)?,
+            signer_address: Arbitrary::arbitrary(u)?,
             stack: Vec::new(),
             chain_id: num_bigint::BigInt::from_bytes_be(
                 num_bigint::Sign::Plus,
@@ -187,6 +189,7 @@ pub struct ExtendedMessageFlat {
     pub contract_address: Address,
     pub sender_address: Address,
     pub origin_address: Address,
+    pub signer_address: Address,
     #[serde(default)]
     #[calldata(default = default_stack)]
     pub stack: Vec<Address>,
@@ -224,6 +227,7 @@ impl From<ExtendedMessageFlat> for ExtendedMessage {
                 contract_address: flat.contract_address,
                 sender_address: flat.sender_address,
                 origin_address: flat.origin_address,
+                signer_address: flat.signer_address,
                 stack: flat.stack,
                 chain_id: flat.chain_id,
                 value: flat.value,
@@ -243,6 +247,7 @@ impl From<ExtendedMessage> for ExtendedMessageFlat {
             contract_address: msg.message.contract_address,
             sender_address: msg.message.sender_address,
             origin_address: msg.message.origin_address,
+            signer_address: msg.message.signer_address,
             stack: msg.message.stack,
             chain_id: msg.message.chain_id,
             value: msg.message.value,
@@ -608,7 +613,7 @@ pub mod wasi_only {
     pub fn user_error_immediately(msg: String) -> ! {
         let last_gl_call_data = calldata::Value::Map(std::collections::BTreeMap::from([(
             "UserError".to_owned(),
-            crate::calldata::Value::Str(msg),
+            genlayer_calldata::Value::Str(msg),
         )]));
 
         let last_gl_call_data = calldata::encode(&last_gl_call_data);
@@ -684,7 +689,7 @@ pub mod wasi_only {
             )])),
             Err(e) => calldata::Value::Map(std::collections::BTreeMap::from([(
                 "UserError".to_owned(),
-                crate::calldata::Value::Str(e.to_string()),
+                genlayer_calldata::Value::Str(e.to_string()),
             )])),
         };
 

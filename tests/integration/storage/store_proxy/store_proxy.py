@@ -14,7 +14,7 @@ class User:
 
 
 class Contract(gl.contract.Contract):
-	users: gl.DynArray[User]
+	users: gl.storage.DynArray[User]
 
 	def __init__(self):
 		self.users.append(User('Ada', datetime.datetime.now()))

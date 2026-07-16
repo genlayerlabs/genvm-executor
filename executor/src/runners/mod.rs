@@ -160,14 +160,35 @@ fn is_hash_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '='
 }
 
-fn parse_hex_fixed<const N: usize>(s: &str) -> Option<[u8; N]> {
-    let s = s.strip_prefix("0x")?;
-    if s.len() != N * 2 {
+fn parse_safe_address(s: &str) -> Option<[u8; 20]> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+
+    if s.len() != 40 {
+        log_warn!("address must be exactly 40 hex characters, got {}", s.len());
         return None;
     }
-    let mut out = [0u8; N];
-    hex::decode_to_slice(s, &mut out).ok()?;
-    Some(out)
+
+    let mut address = [0u8; 20];
+    if hex::decode_to_slice(s, &mut address).is_err() {
+        log_warn!("address contains invalid hex characters");
+        return None;
+    }
+
+    let is_all_lower = s.chars().all(|c| !c.is_ascii_uppercase());
+    let is_all_upper = s.chars().all(|c| !c.is_ascii_lowercase());
+
+    if is_all_lower || is_all_upper {
+        return Some(address);
+    }
+
+    let addr = calldata::Address::from(address);
+    let checksum = addr.checksum_hex_string();
+    if s == checksum {
+        return Some(address);
+    }
+
+    log_warn!("address must be all lowercase, all uppercase, or valid checksum");
+    None
 }
 
 pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
@@ -184,7 +205,12 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
             return None;
         }
 
-        let address = calldata::Address::from(parse_hex_fixed::<20>(address)?);
+        if !address.starts_with("0x") {
+            log_warn!("chain address must be 0x-prefixed");
+            return None;
+        }
+
+        let address = calldata::Address::from(parse_safe_address(address)?);
         let on = match on_str {
             Some("a") | None => Some(ChainState::Accepted),
             Some("f") => Some(ChainState::Finalized),
@@ -214,6 +240,13 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
     if name.is_empty() || hash.is_empty() {
         return None;
     }
+    // ADR-011 reserves `contract`, `chain` and `custom` as prefixes. `chain:`/`custom:`
+    // are already handled above; a `contract:<hash>` id must not fall through to the
+    // generic builtin arm (the bare `contract` literal is handled at the top).
+    if matches!(name, "contract" | "chain" | "custom") {
+        log_warn!("`{name}` is a reserved runner name and cannot be used as a builtin");
+        return None;
+    }
     for c in name.chars() {
         if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
             log_warn!("character `{c}` is not allowed in runner id");
@@ -227,6 +260,35 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
         name: name.to_owned(),
         hash: hash.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod parse_runner_id_tests {
+    use super::*;
+
+    #[test]
+    fn bare_contract_literal_is_special_cased() {
+        assert!(matches!(
+            parse_runner_id("contract"),
+            Some(IdUnresolved::Contract)
+        ));
+    }
+
+    #[test]
+    fn contract_is_a_reserved_builtin_name() {
+        // ADR-011 reserves `contract`; a `contract:<hash>` id must not fall through to
+        // the generic `name:hash` builtin arm.
+        assert!(parse_runner_id("contract:abc123").is_none());
+    }
+
+    #[test]
+    fn ordinary_builtin_still_parses() {
+        assert!(matches!(
+            parse_runner_id("py:abc123"),
+            Some(IdUnresolved::Builtin { name, hash })
+                if name == "py" && hash == "abc123"
+        ));
+    }
 }
 
 /// The dev-mode magic builtin/custom runner hash. Its GVM32 form is the literal

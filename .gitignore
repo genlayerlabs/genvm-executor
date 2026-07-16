@@ -36,3 +36,6 @@ __pycache__
 perf.data*
 core.[0-9]*
 node_modules
+
+# git-hooks.nix dev-shell artifact
+/.pre-commit-config.yaml

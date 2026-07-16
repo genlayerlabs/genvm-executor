@@ -36,10 +36,16 @@ pub struct Args {
     sync: bool,
     #[clap(
         long,
-        default_value = "rwscn",
-        help = "r?w?s?c?n?u?, read/write/send messages/call contracts/spawn nondet/register runners"
+        default_value = "wscn",
+        help = "w?s?c?n?, write/send messages/call contracts/spawn nondet"
     )]
     permissions: String,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        help = "record auditable actions: runner_load,vm_spawn"
+    )]
+    record_actions: Vec<String>,
     #[clap(long, help = "override LLM module address from config")]
     module_llm: Option<String>,
     #[clap(long, help = "override web module address from config")]
@@ -77,8 +83,18 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             .with_context(|| format!("reading execution data from {}", args.execution_data))?
     };
 
-    let execution_data = calldata::decode_obj::<domain::ExecutionData>(&execution_data_bytes)
-        .with_context(|| "decoding execution data")?;
+    let mut execution_data_iface =
+        calldata::decode_obj::<genvm_modules_interfaces::ExecutionData>(&execution_data_bytes)
+            .with_context(|| "decoding execution data")?;
+    execution_data_iface
+        .record_actions
+        .extend(args.record_actions.iter().cloned());
+    for action in &execution_data_iface.record_actions {
+        if !matches!(action.as_str(), "runner_load" | "vm_spawn") {
+            anyhow::bail!("Invalid action recorder kind {action}");
+        }
+    }
+    let execution_data = execution_data_iface;
     let message = &execution_data.message;
     let host_data = rt::parse_host_data(&execution_data)?;
 
@@ -199,7 +215,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         // OOM code if that ever stops holding rather than panicking during setup.
         let insufficient_run_ok = insufficient_err.into_run_ok().unwrap_or_else(|e| {
             genvm::rt::vm::RunOk::VMError(
-                genvm::public_abi::VmError::oom().ram().val(),
+                genvm::public_abi::VmError::out_of().memory().val(),
                 Some(anyhow::Error::new(e)),
             )
         });
@@ -210,6 +226,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             data_fees_remaining,
             data_fees_consumed,
             primitive_types::U256::zero(),
+            Vec::new(),
         ));
 
         hosts[host_for(genvm::host::host_fns::Methods::ConsumeResult)]
@@ -228,7 +245,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     }
 
     let mut perm_size = 0;
-    for perm in ["r", "w", "s", "c", "n", "u"] {
+    for perm in ["w", "s", "c", "n"] {
         if args.permissions.contains(perm) {
             perm_size += 1;
         }
@@ -242,7 +259,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
 
     let rt = runtime.enter();
 
-    let supervisor = genvm::create_supervisor(
+    let context = genvm::create_supervisor(
         &config,
         hosts,
         genvm::CreateSupervisorNamedArgs {
@@ -250,21 +267,19 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             gas_data: execution_data.gas_data.clone(),
             initial_time_units_allocation: execution_data.initial_time_units_allocation,
             leader_nondet_results: execution_data.leader_nondet_results.clone(),
+            record_actions: execution_data.record_actions.clone(),
         },
         host_data,
         shared_data,
         message,
     )
     .with_context(|| format!("creating supervisor for genvm_id {genvm_id}"))?;
+    let supervisor = context.supervisor.clone();
 
     std::mem::drop(rt);
 
     let res = runtime
-        .block_on(genvm::run_with(
-            execution_data,
-            supervisor.clone(),
-            &args.permissions,
-        ))
+        .block_on(genvm::run_with(execution_data, context, &args.permissions))
         .with_context(|| "running genvm");
 
     if let Err(err) = &res {

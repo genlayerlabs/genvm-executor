@@ -11,6 +11,7 @@ mod exe;
 enum Commands {
     Run(exe::run::Args),
     Precompile(exe::precompile::Args),
+    Check(exe::check::Args),
     ParseVersionPattern(exe::parse_version::Args),
 }
 
@@ -56,6 +57,7 @@ fn main_impl() -> Result<()> {
     match args.command {
         Commands::Run(args) => exe::run::handle(args, config),
         Commands::Precompile(args) => exe::precompile::handle(args, config),
+        Commands::Check(args) => exe::check::handle(args, config),
         Commands::ParseVersionPattern(args) => exe::parse_version::handle(args, config),
     }
 }

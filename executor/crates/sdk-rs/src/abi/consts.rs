@@ -151,10 +151,50 @@ impl TryFrom<u8> for EntryKind {
         }
     }
 }
+#[derive(
+    Debug,
+    PartialEq,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    ::genlayer_calldata::Encode,
+    ::genlayer_calldata::Decode,
+)]
+#[repr(u32)]
+pub enum Permissions {
+    CanUseBalanceForMessageFees = 1,
+}
+
+impl Permissions {
+    pub fn value(self) -> u32 {
+        match self {
+            Permissions::CanUseBalanceForMessageFees => 1,
+        }
+    }
+    pub fn str_snake_case(self) -> &'static str {
+        match self {
+            Permissions::CanUseBalanceForMessageFees => "can_use_balance_for_message_fees",
+        }
+    }
+}
+
+impl TryFrom<u32> for Permissions {
+    type Error = ();
+
+    fn try_from(value: u32) -> Result<Self, ()> {
+        match value {
+            1 => Ok(Permissions::CanUseBalanceForMessageFees),
+            _ => Err(()),
+        }
+    }
+}
 pub mod memory_limiter_consts {
     pub const TABLE_ENTRY: u32 = 64;
     pub const FILE_MAPPING: u32 = 256;
     pub const FD_ALLOCATION: u32 = 96;
+    pub const RUNNER_LOAD_COST: u32 = 4096;
+    pub const VM_SPAWN_COST: u32 = 134217728;
 }
 
 pub mod root_offsets {
@@ -164,6 +204,7 @@ pub mod root_offsets {
     pub const LOCKED_SLOTS: u32 = 3;
     pub const UPGRADERS: u32 = 4;
     pub const CODE_SLOT: u32 = 5;
+    pub const PERMISSIONS: u32 = 37;
 }
 
 pub mod top_limits {
@@ -174,6 +215,8 @@ pub mod top_limits {
     pub const WEB_REQUEST_MIN_SPACE: u32 = 65536;
     pub const WEB_RENDER_MIN_SPACE: u32 = 134217728;
     pub const MAX_FDS: u32 = 1024;
+    pub const WASM_CALL_DEPTH: u32 = 1024;
+    pub const WASM_STACK_VALUE_SLOTS: u32 = 65535;
 }
 
 #[derive(
@@ -223,43 +266,76 @@ pub mod __VmError {
     use std::borrow::Cow;
     use super::VmError;
 
-    pub struct OomRam;
+    pub struct WasmTrap;
 
-    impl OomRam {
-        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM")) }
-        pub const fn table(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM table")) }
-        pub const fn memory(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM memory")) }
-        pub const fn limit(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM limit")) }
+    impl WasmTrap {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap")) }
+        pub const fn unreachable(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap unreachable")) }
+        pub const fn stack_overflow(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap stack_overflow")) }
+        pub const fn memory_out_of_bounds(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap memory_out_of_bounds")) }
+        pub const fn table_out_of_bounds(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap table_out_of_bounds")) }
+        pub const fn indirect_call_to_null(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap indirect_call_to_null")) }
+        pub const fn bad_signature(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap bad_signature")) }
+        pub const fn integer_overflow(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap integer_overflow")) }
+        pub const fn integer_divide_by_zero(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap integer_divide_by_zero")) }
+        pub const fn bad_conversion_to_integer(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap bad_conversion_to_integer")) }
+        pub const fn heap_misaligned(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap heap_misaligned")) }
+        pub const fn atomic_wait_non_shared_memory(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap atomic_wait_non_shared_memory")) }
+        pub const fn out_of_fuel(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap out_of_fuel")) }
+        pub const fn interrupt(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap interrupt")) }
+        pub const fn nondet_instruction(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap nondet_instruction")) }
+        pub const fn fault(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap fault")) }
     }
 
-    pub struct OomReceiptMessage;
+    pub struct OutOfMemory;
 
-    impl OomReceiptMessage {
-        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("OOM receipt message internal")) }
-        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("OOM receipt message external")) }
+    impl OutOfMemory {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("out_of memory")) }
+        pub const fn wasm_memory(&self) -> VmError { VmError(Cow::Borrowed("out_of memory wasm_memory")) }
+        pub const fn wasm_table(&self) -> VmError { VmError(Cow::Borrowed("out_of memory wasm_table")) }
     }
 
-    pub struct OomReceipt;
+    pub struct OutOfReceipt;
 
-    impl OomReceipt {
-        pub const fn nondet_output(&self) -> VmError { VmError(Cow::Borrowed("OOM receipt nondet_output")) }
-        pub const fn message(&self) -> OomReceiptMessage { OomReceiptMessage }
+    impl OutOfReceipt {
+        pub const fn nondet_output(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt nondet_output")) }
+        pub const fn message(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt message")) }
+        pub const fn event(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt event")) }
     }
 
-    pub struct OomFees;
+    pub struct OutOfMessageFee;
 
-    impl OomFees {
-        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("OOM fees internal")) }
-        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("OOM fees external")) }
+    impl OutOfMessageFee {
+        pub const fn total(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee total")) }
+        pub const fn node(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node")) }
     }
 
-    pub struct Oom;
+    pub struct OutOf;
 
-    impl Oom {
-        pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("OOM storage")) }
-        pub const fn ram(&self) -> OomRam { OomRam }
-        pub const fn receipt(&self) -> OomReceipt { OomReceipt }
-        pub const fn fees(&self) -> OomFees { OomFees }
+    impl OutOf {
+        pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("out_of storage")) }
+        pub const fn vm_recursion(&self) -> VmError { VmError(Cow::Borrowed("out_of vm_recursion")) }
+        pub const fn nondet_blocks(&self) -> VmError { VmError(Cow::Borrowed("out_of nondet_blocks")) }
+        pub const fn locked_slots(&self) -> VmError { VmError(Cow::Borrowed("out_of locked_slots")) }
+        pub const fn upgraders(&self) -> VmError { VmError(Cow::Borrowed("out_of upgraders")) }
+        pub const fn fds(&self) -> VmError { VmError(Cow::Borrowed("out_of fds")) }
+        pub const fn memory(&self) -> OutOfMemory { OutOfMemory }
+        pub const fn receipt(&self) -> OutOfReceipt { OutOfReceipt }
+        pub const fn message_fee(&self) -> OutOfMessageFee { OutOfMessageFee }
+    }
+
+    pub struct Fee;
+
+    impl Fee {
+        pub const fn no_matching_node(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node")) }
+        pub const fn below_minimum(&self) -> VmError { VmError(Cow::Borrowed("fee below_minimum")) }
+        pub const fn too_many_rounds(&self) -> VmError { VmError(Cow::Borrowed("fee too_many_rounds")) }
+    }
+
+    pub struct Evm;
+
+    impl Evm {
+        pub const fn reverted(&self) -> VmError { VmError(Cow::Borrowed("evm reverted")) }
     }
 
     pub struct InvalidContractWasm;
@@ -289,22 +365,6 @@ pub mod __VmError {
         }
     }
 
-    pub struct WasmTrap;
-
-    impl WasmTrap {
-        pub fn val_str(&self, v: &str) -> VmError {
-            VmError(Cow::Owned(format!("wasm_trap {v}")))
-        }
-    }
-
-    pub struct Host;
-
-    impl Host {
-        pub fn val_str(&self, v: &str) -> VmError {
-            VmError(Cow::Owned(format!("host {v}")))
-        }
-    }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -319,11 +379,15 @@ impl From<VmError> for String {
 impl VmError {
     pub const fn timeout() -> Self { Self(Cow::Borrowed("timeout")) }
     pub const fn absent_leader_nondet_output() -> Self { Self(Cow::Borrowed("absent_leader_nondet_output")) }
+    pub const fn host_forbidden() -> Self { Self(Cow::Borrowed("host_forbidden")) }
     pub const fn exit_code() -> __VmError::ExitCode { __VmError::ExitCode }
     pub const fn wasm_trap() -> __VmError::WasmTrap { __VmError::WasmTrap }
-    pub const fn oom() -> __VmError::Oom { __VmError::Oom }
+    pub const fn out_of() -> __VmError::OutOf { __VmError::OutOf }
+    pub const fn fee() -> __VmError::Fee { __VmError::Fee }
+    pub const fn evm() -> __VmError::Evm { __VmError::Evm }
     pub const fn invalid_contract() -> __VmError::InvalidContract { __VmError::InvalidContract }
-    pub const fn host() -> __VmError::Host { __VmError::Host }
 }
 
 pub const EVENT_MAX_TOPICS: u32 = 4;
+
+// EOF

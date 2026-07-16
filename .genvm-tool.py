@@ -1,119 +1,41 @@
 """Executor-root genvm-tool project config.
 
-Loaded by genvm-tool (``common.load_project``) for this executor submodule; the
-hook engine asks it for ``hooks(ctx)`` (was ``support/nix/precommit/hooks.toml``).
-The umbrella test suite lives in the manager's ``.genvm-tool.py``.
+Loaded by genvm-tool (``common.load_project``) for this executor submodule to
+provide its build ``configure``/``integration`` config. The umbrella test suite
+lives in the manager's ``.genvm-tool.py``; commit hooks live in this repo's
+flake (git-hooks.nix).
 """
 
 
-def hooks(ctx):
-	"""Executor commit-hook definitions (was support/nix/precommit/hooks.toml).
+def integration():
+	"""Per-executor integration test configuration.
 
-	Tools resolve from the sibling flake's buildEnv (``nix = "<flake output>"``);
-	``builtin`` hooks run logic baked into genvm-tool. Formatters run in --check
-	mode so a hook's exit code alone decides pass/fail. ``files``/``exclude`` are
-	repo-relative (i.e. relative to executors/v0.3.x).
+	Returned dict is merged with the harness defaults; keys:
+		``ignore-hash`` — skip hash comparison for all tests in this executor line.
 	"""
-	return [
-		# --- generic checks (mirror the manager's) -------------------------
-		{
-			'id': 'trailing-whitespace',
-			'nix': 'pre-commit-hooks',
-			'entry': 'trailing-whitespace-fixer',
-			'types_or': ['text'],
-			'exclude': r'^\.git-third-party|/fuzz/',
-		},
-		{
-			'id': 'end-of-file-fixer',
-			'nix': 'pre-commit-hooks',
-			'entry': 'end-of-file-fixer',
-			'types_or': ['text'],
-			'exclude': r'^\.git-third-party|/fuzz/',
-		},
-		{
-			'id': 'check-added-large-files',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-added-large-files',
-		},
-		{
-			'id': 'check-json',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-json',
-			'types_or': ['json'],
-			'exclude': r'^\.git-third-party',
-		},
-		{
-			'id': 'check-yaml',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-yaml',
-			'types_or': ['yaml'],
-		},
-		{
-			'id': 'check-toml',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-toml',
-			'types_or': ['toml'],
-		},
-		{
-			'id': 'check-merge-conflict',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-merge-conflict',
-			'types_or': ['text'],
-		},
-		# --- executor-owned languages: python, c/c++, rust -----------------
-		{
-			'id': 'ruff-format',
-			'nix': 'ruff',
-			'entry': 'ruff',
-			'args': ['format', '--check'],
-			'fix_args': ['format'],
-			'types_or': ['python'],
-		},
-		{
-			'id': 'clang-format',
-			'nix': 'clang-tools',
-			'entry': 'clang-format',
-			'args': ['--dry-run', '--Werror'],
-			'fix_args': ['-i'],
-			'types_or': ['c', 'c++'],
-			'exclude': r'runners/softfloat/berkeley-softfloat-3|runners/py-libs',
-		},
-		{
-			'id': 'editorconfig-checker',
-			'nix': 'editorconfig-checker',
-			'entry': 'editorconfig-checker',
-			# text-only: keep binaries (e.g. runners/models/*.onnx) out of it.
-			'types_or': ['text'],
-			'exclude': r'\.git-third-party|runners/py-libs|runners/genlayer-py-std/src-emb/onnx|/fuzz/',
-		},
-		{
-			'id': 'cargo-fmt',
-			'nix': 'cargo',
-			'builtin': 'cargo-fmt',
-			'files': r'\.rs$',
-			'pass_filenames': False,
-		},
-		{
-			'id': 'nixfmt',
-			'nix': 'nixfmt',
-			'entry': 'nixfmt',
-			'args': ['--check'],
-			'fix_args': [],
-			'files': r'\.nix$',
-		},
-		{
-			'id': 'markdown-local-links',
-			'builtin': 'md-local-links',
-			'types_or': ['markdown'],
-		},
-		# --- local guard ---------------------------------------------------
-		{
-			# Refuse commits that leave the dev-mode runner toggle on (false).
-			'id': 'no-commit-test',
-			'local': True,
-			'entry': 'grep',
-			'args': ['-P', 'false', 'runners/support/versions/dev-mode.nix'],
-			'files': r'^runners/support/versions/dev-mode\.nix$',
-			'pass_filenames': False,
-		},
-	]
+	return {
+		'ignore-hash': True,
+	}
+
+
+def configure(line):
+	"""Per-line build configuration for `genvm-tool configure`.
+
+	``line`` is a ``genvm_tool_plugins.ninja.LineContext`` the configure command
+	builds for this executor. This is a live line: its runner ``latest``/``all``
+	manifests are derived through the umbrella nix machinery (``nix_manifests``),
+	which imports every active line's runners.
+	"""
+	line.register_standard_codegen()
+	# Pending public-abi constants (ADR-012): constants that logically belong to
+	# the public ABI but are parked here so they do not regenerate the runner
+	# `public_abi.py` (which would change frozen runner hashes). Generated into the
+	# `common` crate only — never the runner tree.
+	line.codegen(
+		line.exec_root / 'executor/crates/common/src/public_abi_pending.rs',
+		'rust',
+		line.exec_root / 'executor/codegen/data/public-abi-pending.json',
+	)
+	line.register_standard_crates()
+	line.nix_manifests()
+	line.install_tree()

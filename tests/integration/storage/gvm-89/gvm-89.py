@@ -9,11 +9,11 @@ from genlayer.storage import allow
 @allow
 @dataclass
 class Foo:
-	x: gl.DynArray[str]
+	x: gl.storage.DynArray[str]
 
 
 class Main(gl.contract.Contract):
-	f: gl.DynArray[Foo]
+	f: gl.storage.DynArray[Foo]
 
 	@gl.public.write
 	def main(self):
