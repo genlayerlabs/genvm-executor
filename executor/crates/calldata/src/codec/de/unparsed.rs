@@ -22,6 +22,25 @@ use super::{BinaryDeserializer, Decode, DecodeError, Deserializer, ValueDeserial
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Raw(pub bytes::Bytes);
 
+impl<T> From<T> for Raw
+where
+    T: Into<bytes::Bytes>,
+{
+    fn from(value: T) -> Self {
+        Self(value.into())
+    }
+}
+
+impl Raw {
+    pub fn new(bytes: bytes::Bytes) -> Self {
+        Self(bytes)
+    }
+
+    pub fn into_inner(self) -> bytes::Bytes {
+        self.0
+    }
+}
+
 /// A value that is either materialized eagerly, or validated-but-deferred as raw bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Maybe<T> {
@@ -67,7 +86,7 @@ impl<W: Writer> Encode<W> for Raw {
     type Error = W::Error;
 
     fn encode(&self, enc: &mut Encoder<W>) -> Result<(), Self::Error> {
-        // The captured bytes are already a complete encoded value — pass through.
+        // The captured bytes are already a complete encoded value -- pass through.
         enc.write_raw(&self.0)
     }
 }
@@ -144,6 +163,32 @@ impl Maybe<Value> {
                 Some(&crate::consts::SPECIAL_FALSE) => Some(false),
                 _ => None,
             },
+        }
+    }
+
+    pub fn kind(&self) -> crate::ValueKind {
+        match self {
+            Maybe::Materialized(value) => value.kind(),
+            Maybe::Checked(raw) => {
+                let byt = raw.0[0];
+                let typ = byt & ((1 << crate::consts::BITS_IN_TYPE) - 1);
+                match typ {
+                    crate::consts::TYPE_SPECIAL => match byt {
+                        crate::consts::SPECIAL_NULL => crate::ValueKind::Null,
+                        crate::consts::SPECIAL_FALSE => crate::ValueKind::Bool,
+                        crate::consts::SPECIAL_TRUE => crate::ValueKind::Bool,
+                        crate::consts::SPECIAL_ADDR => crate::ValueKind::Address,
+                        _ => panic!("checked value is invalid special={byt}"),
+                    },
+                    crate::consts::TYPE_BYTES => crate::ValueKind::Bytes,
+                    crate::consts::TYPE_STR => crate::ValueKind::Str,
+                    crate::consts::TYPE_PINT => crate::ValueKind::Number,
+                    crate::consts::TYPE_NINT => crate::ValueKind::Number,
+                    crate::consts::TYPE_ARR => crate::ValueKind::Array,
+                    crate::consts::TYPE_MAP => crate::ValueKind::Map,
+                    _ => panic!("checked value is invalid type={typ}"),
+                }
+            }
         }
     }
 }

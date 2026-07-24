@@ -43,7 +43,7 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-// ── Structs ──────────────────────────────────────────────────────────
+// -- Structs ----------------------------------------------------------
 
 fn decode_struct(name: &syn::Ident, fields: &Fields) -> syn::Result<TokenStream> {
     match fields {
@@ -52,6 +52,7 @@ fn decode_struct(name: &syn::Ident, fields: &Fields) -> syn::Result<TokenStream>
             if fields.unnamed.len() == 1 {
                 let ty = &fields.unnamed[0].ty;
                 let attrs = FieldAttrs::from_ast(&fields.unnamed[0].attrs)?;
+                attrs.reject_option_as_absence_here(&fields.unnamed[0])?;
                 if let Some(func) = &attrs.deserialize_with {
                     Ok(quote! {
                         let __val = <genlayer_calldata::Value as genlayer_calldata::codec::Decode>::decode(__deserializer)?;
@@ -64,6 +65,9 @@ fn decode_struct(name: &syn::Ident, fields: &Fields) -> syn::Result<TokenStream>
                     })
                 }
             } else {
+                for f in &fields.unnamed {
+                    FieldAttrs::from_ast(&f.attrs)?.reject_option_as_absence_here(f)?;
+                }
                 let len = fields.unnamed.len();
                 let field_tys: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
                 let vars: Vec<_> = (0..len)
@@ -119,56 +123,66 @@ fn decode_named_fields(
     name: &syn::Ident,
     fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
 ) -> syn::Result<TokenStream> {
-    let mut entries: Vec<(String, syn::Ident, &syn::Type, FieldAttrs)> = Vec::new();
+    let mut var_decls: Vec<TokenStream> = Vec::new();
+    let mut match_arms: Vec<TokenStream> = Vec::new();
+    let mut field_constructions: Vec<TokenStream> = Vec::new();
+
     for f in fields {
         let ident = f.ident.as_ref().unwrap().clone();
+        let ty = &f.ty;
         let attrs = FieldAttrs::from_ast(&f.attrs)?;
         let wire = attrs.wire_name(&ident);
-        entries.push((wire, ident, &f.ty, attrs));
-    }
+        let var = syn::Ident::new(&format!("__f_{ident}"), proc_macro2::Span::call_site());
 
-    let option_vars: Vec<_> = entries
-        .iter()
-        .map(|(_, ident, _, _)| {
-            syn::Ident::new(&format!("__f_{ident}"), proc_macro2::Span::call_site())
-        })
-        .collect();
-
-    let match_arms = entries
-        .iter()
-        .zip(&option_vars)
-        .map(|((wire, _, ty, attrs), var)| {
-            let decode_expr = if let Some(func) = &attrs.deserialize_with {
-                quote! { #func(__val)? }
-            } else {
-                quote! {
-                    <#ty as genlayer_calldata::codec::Decode>::decode(
-                        genlayer_calldata::codec::ValueDeserializer(__val)
-                    )?
-                }
-            };
-            quote! { #wire => { #var = ::core::option::Option::Some(#decode_expr); } }
-        });
-
-    let field_constructions =
-        entries
-            .iter()
-            .zip(&option_vars)
-            .map(|((wire, ident, _, attrs), var)| {
-                if let Some(default_fn) = &attrs.default {
-                    quote! { #ident: #var.unwrap_or_else(#default_fn) }
-                } else {
-                    quote! {
-                        #ident: #var.ok_or(
-                            genlayer_calldata::codec::DecodeError::FieldMissing(#wire)
+        if attrs.option_as_absence {
+            // The accumulator IS the field's own `Option<T>`: absent key stays
+            // `None`, present key becomes `Some(decoded inner T)`. No
+            // `FieldMissing` -- absence is a valid value.
+            let inner = crate::attrs::option_inner_ty(ty).ok_or_else(|| {
+                syn::Error::new_spanned(
+                    ty,
+                    "`option_as_absence` requires the field to be spelled `Option<T>`",
+                )
+            })?;
+            var_decls.push(quote! {
+                let mut #var: #ty = ::core::option::Option::None;
+            });
+            match_arms.push(quote! {
+                #wire => {
+                    #var = ::core::option::Option::Some(
+                        <#inner as genlayer_calldata::codec::Decode>::decode(
+                            genlayer_calldata::codec::ValueDeserializer(__val)
                         )?
-                    }
+                    );
                 }
             });
+            field_constructions.push(quote! { #ident: #var });
+            continue;
+        }
 
-    let field_idents: Vec<_> = entries.iter().map(|(_, ident, _, _)| ident).collect();
-    let field_tys: Vec<_> = entries.iter().map(|(_, _, ty, _)| *ty).collect();
-    let _ = &field_idents; // suppress unused
+        var_decls.push(quote! {
+            let mut #var: ::core::option::Option<#ty> = ::core::option::Option::None;
+        });
+        let decode_expr = if let Some(func) = &attrs.deserialize_with {
+            quote! { #func(__val)? }
+        } else {
+            quote! {
+                <#ty as genlayer_calldata::codec::Decode>::decode(
+                    genlayer_calldata::codec::ValueDeserializer(__val)
+                )?
+            }
+        };
+        match_arms.push(quote! { #wire => { #var = ::core::option::Option::Some(#decode_expr); } });
+        if let Some(default_fn) = &attrs.default {
+            field_constructions.push(quote! { #ident: #var.unwrap_or_else(#default_fn) });
+        } else {
+            field_constructions.push(quote! {
+                #ident: #var.ok_or(
+                    genlayer_calldata::codec::DecodeError::FieldMissing(#wire)
+                )?
+            });
+        }
+    }
 
     Ok(quote! {
         struct __V;
@@ -179,9 +193,7 @@ fn decode_named_fields(
                 _len: u64,
                 mut __map: __A,
             ) -> ::core::result::Result<#name, genlayer_calldata::codec::DecodeError> {
-                #(
-                    let mut #option_vars: ::core::option::Option<#field_tys> = ::core::option::Option::None;
-                )*
+                #(#var_decls)*
                 while let ::core::option::Option::Some((__key, __val)) =
                     __map.next_element::<genlayer_calldata::Value>()?
                 {
@@ -205,7 +217,7 @@ fn decode_named_fields(
     })
 }
 
-// ── Enums ────────────────────────────────────────────────────────────
+// -- Enums ------------------------------------------------------------
 
 fn decode_enum(
     name: &syn::Ident,
@@ -274,6 +286,7 @@ fn decode_untagged_variant_attempt(
         Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
             let ty = &fields.unnamed[0].ty;
             let fattrs = FieldAttrs::from_ast(&fields.unnamed[0].attrs)?;
+            fattrs.reject_option_as_absence_here(&fields.unnamed[0])?;
             let de_fn = fattrs
                 .deserialize_with
                 .as_ref()
@@ -299,6 +312,9 @@ fn decode_untagged_variant_attempt(
         }
 
         Fields::Unnamed(fields) => {
+            for f in &fields.unnamed {
+                FieldAttrs::from_ast(&f.attrs)?.reject_option_as_absence_here(f)?;
+            }
             let n = fields.unnamed.len();
             let tys: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
             let vars: Vec<_> = (0..n)
@@ -337,6 +353,7 @@ fn decode_untagged_variant_attempt(
             for f in &fields.named {
                 let ident = f.ident.as_ref().unwrap();
                 let attrs = FieldAttrs::from_ast(&f.attrs)?;
+                attrs.reject_option_as_absence_here(ident)?;
                 let wire = attrs.wire_name(ident);
                 entries.push((wire, ident, &f.ty, attrs));
             }
@@ -536,8 +553,8 @@ fn decode_enum_external(name: &syn::Ident, data: &syn::DataEnum) -> syn::Result<
 /// Generates an expression of type `Result<#enum_name, DecodeError>`, assuming a
 /// `MapAccess` named `__map` (positioned on the variant entry's value) is in
 /// scope. The payload is read with `__map.next_value` / `next_value_visit` so it
-/// decodes straight from the underlying deserializer — keeping `Maybe`/`Raw`
-/// fields deferred — instead of materializing a `Value` first.
+/// decodes straight from the underlying deserializer -- keeping `Maybe`/`Raw`
+/// fields deferred -- instead of materializing a `Value` first.
 fn decode_variant_payload(
     enum_name: &syn::Ident,
     variant_ident: &syn::Ident,
@@ -550,6 +567,7 @@ fn decode_variant_payload(
         Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
             let ty = &fields.unnamed[0].ty;
             let fattrs = FieldAttrs::from_ast(&fields.unnamed[0].attrs)?;
+            fattrs.reject_option_as_absence_here(&fields.unnamed[0])?;
             let de_fn = fattrs
                 .deserialize_with
                 .as_ref()
@@ -569,6 +587,9 @@ fn decode_variant_payload(
         }
 
         Fields::Unnamed(fields) => {
+            for f in &fields.unnamed {
+                FieldAttrs::from_ast(&f.attrs)?.reject_option_as_absence_here(f)?;
+            }
             let n = fields.unnamed.len();
             let tys: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
             let vars: Vec<_> = (0..n)
@@ -608,6 +629,7 @@ fn decode_variant_payload(
             for f in &fields.named {
                 let ident = f.ident.as_ref().unwrap();
                 let attrs = FieldAttrs::from_ast(&f.attrs)?;
+                attrs.reject_option_as_absence_here(ident)?;
                 let wire = attrs.wire_name(ident);
                 entries.push((wire, ident, &f.ty, attrs));
             }

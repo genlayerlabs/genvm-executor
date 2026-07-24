@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use genlayer_calldata as calldata;
 
+use crate::abi;
+
 use super::consts as public_abi;
 use super::fees;
 
@@ -533,7 +535,7 @@ pub enum Message {
     },
     CallContract {
         address: calldata::Address,
-        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        calldata: abi::entry::MainCallData,
         #[calldata(
             serialize_with = encode_storage_type,
             deserialize_with = decode_storage_type
@@ -550,7 +552,7 @@ pub enum Message {
     },
     PostMessage {
         address: calldata::Address,
-        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        calldata: abi::entry::MainCallData,
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
         value: primitive_types::U256,
         on: On,
@@ -565,7 +567,7 @@ pub enum Message {
         fee_params: Option<fees::InternalMessageParams>,
     },
     DeployContract {
-        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        calldata: abi::entry::MainDeployData,
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
         code: Bytes,
         #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
@@ -593,7 +595,7 @@ pub enum Message {
         data_validator: Bytes,
         /// Runner to execute in the nondet block, as a full runner id. `None`
         /// (old SDKs) runs the parent's `contract`; a `custom:<hash>` must be
-        /// visible to the parent and is auto-granted to the child (ADR-012 §4).
+        /// visible to the parent and is auto-granted to the child.
         #[calldata(default = default_none)]
         runner: Option<String>,
         /// Custom runners visible to the nondet child, each a full `custom:<hash>`
@@ -614,7 +616,7 @@ pub enum Message {
         allow_register_runners: bool,
         /// Custom runners visible to the sandbox child, each a full `custom:<hash>`
         /// id. `None` inherits the parent's entire set; `Some(list)` grants exactly
-        /// that subset (every element must be in the parent's set) (ADR-012 §4).
+        /// that subset (every element must be in the parent's set).
         #[calldata(default = default_none)]
         custom_runners: Option<Vec<String>>,
     },

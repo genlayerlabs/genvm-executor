@@ -35,7 +35,11 @@ fn post_message_balance_fields_round_trip() {
     let params = sample_params();
     let msg = Message::PostMessage {
         address: calldata::Address::zero(),
-        calldata: Maybe::Materialized(Value::Null),
+        calldata: genlayer_sdk::abi::entry::MainCallData {
+            name: None,
+            args: None,
+            kwargs: None,
+        },
         value: U256::from(42u64),
         on: On::Finalized,
         use_balance: true,
@@ -78,7 +82,7 @@ fn post_message_old_encoding_defaults() {
 
     let old = OldMessage::PostMessage {
         address: calldata::Address::zero(),
-        calldata: Maybe::Materialized(Value::Null),
+        calldata: Maybe::Materialized(Value::Map(Default::default())),
         value: U256::from(1u64),
         on: On::Accepted,
     };
@@ -114,7 +118,7 @@ fn deploy_contract_old_encoding_defaults() {
     }
 
     let old = OldMessage::DeployContract {
-        calldata: Maybe::Materialized(Value::Null),
+        calldata: Maybe::Materialized(Value::Map(Default::default())),
         code: Maybe::Materialized(Value::Bytes(b"code".to_vec())),
         value: U256::zero(),
         on: On::Finalized,

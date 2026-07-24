@@ -5,12 +5,6 @@ local util = import 'templates/util.jsonnet';
 {tags: util.features([['message'], ['balance']], 'stable'),
 	entry: util.addPaths([util.chain([
 	s {
-		"calldata": |||
-			{
-				"": "main",
-				"args": [],
-			}
-		|||,
 		message: s.message {
 			"value": 100,
 		}

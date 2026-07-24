@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::rt;
-use genlayer_sdk::abi;
+use genlayer_sdk::{abi, gvm32};
 use genvm_common::*;
+use sha3::Digest;
 
 /// Recover a terminal VM/User result from a boxed executor [`Error`]. An
 /// `Internal` error has no VM-level representation and is re-raised unchanged.
@@ -160,7 +161,7 @@ pub fn unwrap_vm_errors_backtrace(
     Ok((unwrap_vm_errors(err)?, backtrace))
 }
 
-// ── Unified executor error ──────────────────────────────────────────
+// -- Unified executor error ------------------------------------------
 //
 // One owned error type for the whole executor, replacing ad-hoc `anyhow`.
 // `kind` separates the three cases the executor cares about; the remaining
@@ -516,6 +517,52 @@ fn encode_module_fingerprint<W: calldata::Writer>(
         enc.push_bytes(&mem.0)?;
     }
     Ok(())
+}
+
+pub fn vm_error_is_of_kind(err: &str, prefix: &str) -> bool {
+    if !err.starts_with(prefix) {
+        return false;
+    }
+    if err.len() == prefix.len() {
+        return true;
+    }
+    err.as_bytes()[prefix.len()] == b' '
+}
+
+pub fn convert_vm_error_from_pending_abi(
+    pend: public_abi_pending::VmError,
+) -> abi::consts::VmError {
+    abi::consts::VmError(pend.0)
+}
+
+pub fn vm_error_for_leader_extra(det_result: &[u8]) -> abi::consts::VmError {
+    let digest: [u8; 32] = sha3::Sha3_256::digest(det_result).into();
+    let err = gvm32::encode(&digest);
+    let err = &err[..6];
+    convert_vm_error_from_pending_abi(
+        public_abi_pending::VmError::leader_output()
+            .extra()
+            .val_str(err),
+    )
+}
+
+pub fn vm_error_for_leader_use_this_error(leader_err: &str) -> abi::consts::VmError {
+    let digest: [u8; 32] = sha3::Sha3_256::digest(leader_err.as_bytes()).into();
+    let err = gvm32::encode(&digest);
+    let err = &err[..6];
+    let candidate = public_abi_pending::VmError::leader_output()
+        .uses_this_error()
+        .val_str(err);
+
+    if candidate.0.as_ref() != leader_err {
+        convert_vm_error_from_pending_abi(candidate)
+    } else {
+        convert_vm_error_from_pending_abi(
+            public_abi_pending::VmError::leader_output()
+                .uses_this_error()
+                .val_str("fix_point"),
+        )
+    }
 }
 
 #[cfg(test)]

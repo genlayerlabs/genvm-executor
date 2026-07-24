@@ -22,7 +22,7 @@ pub enum Capture {
 /// - `SafeUnbounded`: capture is unbounded and `Trace` gl_call output is emitted.
 ///   Deterministic.
 /// - `Unsafe`: also resolves the `:latest` / `:test` runner ids. This is
-///   *unsafe across machines* — different nodes may resolve different code — so
+///   *unsafe across machines* -- different nodes may resolve different code -- so
 ///   it can diverge consensus, but a single node stays deterministic.
 /// - `UnsafeTracing`: also exposes real wall-clock time to the contract
 ///   (`RuntimeMicroSec`). This can break determinism even on a single machine.

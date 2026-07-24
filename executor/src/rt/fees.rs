@@ -530,7 +530,7 @@ impl DataLimit {
     pub async fn consume_message_fee(&self, cost_fee: &CostVec, cost_receipt: &CostVec) -> bool {
         let mut buckets = self.buckets.lock().await;
 
-        // Build a cumulative deduction map: bucket_index → total to subtract.
+        // Build a cumulative deduction map: bucket_index -> total to subtract.
         let mut deductions: std::collections::BTreeMap<u8, primitive_types::U256> =
             std::collections::BTreeMap::new();
 

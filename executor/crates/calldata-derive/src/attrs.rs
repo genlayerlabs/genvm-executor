@@ -20,6 +20,34 @@ pub struct FieldAttrs {
     pub deserialize_with: Option<syn::Path>,
     /// `#[calldata(default = path::to::fn)]`
     pub default: Option<syn::Path>,
+    /// `#[calldata(option_as_absence)]`: an `Option<T>` field whose `None` is a
+    /// *missing map key* rather than a present `null`. Decode never yields
+    /// `FieldMissing`; encode omits the key (and it is left out of the map
+    /// length). The field must be spelled `Option<T>`; the wire value is the
+    /// inner `T`.
+    pub option_as_absence: bool,
+}
+
+/// Extract `T` from a field type spelled `Option<T>`. Returns `None` for any
+/// other shape (used to reject `option_as_absence` on non-`Option` fields).
+pub fn option_inner_ty(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(tp) = ty else {
+        return None;
+    };
+    if tp.qself.is_some() {
+        return None;
+    }
+    let seg = tp.path.segments.last()?;
+    if seg.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    })
 }
 
 impl ContainerAttrs {
@@ -67,6 +95,7 @@ impl FieldAttrs {
         let mut serialize_with = None;
         let mut deserialize_with = None;
         let mut default = None;
+        let mut option_as_absence = false;
 
         for attr in attrs {
             if !attr.path().is_ident("calldata") {
@@ -98,8 +127,21 @@ impl FieldAttrs {
                     default = Some(value.parse::<syn::Path>()?);
                     return Ok(());
                 }
+                if meta.path.is_ident("option_as_absence") {
+                    option_as_absence = true;
+                    return Ok(());
+                }
                 Err(meta.error("unknown calldata field attribute"))
             })?;
+        }
+
+        if option_as_absence
+            && (default.is_some() || serialize_with.is_some() || deserialize_with.is_some())
+        {
+            return Err(syn::Error::new_spanned(
+                &attrs[0],
+                "`option_as_absence` cannot be combined with `default`, `serialize_with`, or `deserialize_with`",
+            ));
         }
 
         Ok(FieldAttrs {
@@ -107,7 +149,22 @@ impl FieldAttrs {
             serialize_with,
             deserialize_with,
             default,
+            option_as_absence,
         })
+    }
+
+    /// `option_as_absence` is only implemented for *named* struct fields; every
+    /// other field position (tuple structs, all enum-variant shapes) ignores it
+    /// silently, which would apply present-`null` semantics with a mismatched map
+    /// length. Reject it there instead.
+    pub fn reject_option_as_absence_here(&self, span: impl quote::ToTokens) -> syn::Result<()> {
+        if self.option_as_absence {
+            return Err(syn::Error::new_spanned(
+                span,
+                "`option_as_absence` is only supported on named struct fields",
+            ));
+        }
+        Ok(())
     }
 
     /// The wire name for a struct field.

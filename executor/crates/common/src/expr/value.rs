@@ -161,7 +161,7 @@ pub enum Value {
 /// Holds either an already-computed [`Value`] or a deferred computation that
 /// is run at most once, on the first [`Thunk::force`]. Re-entrant forcing of
 /// the same thunk (which would only happen via genuine self-reference, since
-/// `let` is non-recursive — recursion is expressed with the Y combinator)
+/// `let` is non-recursive -- recursion is expressed with the Y combinator)
 /// is detected and reported instead of deadlocking or looping forever.
 #[derive(Clone)]
 pub struct Thunk(Arc<Mutex<ThunkState>>);

@@ -1,8 +1,8 @@
 //! Tests for `Decode` on internally tagged enums whose variants share a field
 //! *name* but give it different *types* ("ambiguous" fields).
 //!
-//! Such a field cannot be decoded eagerly — its type is unknown until the tag is
-//! seen — so the derived decoder buffers it as a deferred `Maybe<Value>` and only
+//! Such a field cannot be decoded eagerly -- its type is unknown until the tag is
+//! seen -- so the derived decoder buffers it as a deferred `Maybe<Value>` and only
 //! decodes it into the exact per-variant type during assembly (via
 //! `Maybe::<Value>::decode_into`). On the byte-backed path that keeps the raw
 //! wire bytes and decodes straight into the target type, never building a `Value`.
@@ -13,7 +13,7 @@
 use genlayer_calldata::codec::Decode;
 use genlayer_calldata::{Decode, Encode, Encoder, Value, codec};
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------------
 
 /// Encode a value to the binary wire format.
 fn to_bytes<T>(val: &T) -> Vec<u8>
@@ -63,7 +63,7 @@ where
     assert_eq!(via_bin, val, "binary-path roundtrip mismatch");
 }
 
-// ── Fixtures ─────────────────────────────────────────────────────────
+// -- Fixtures ---------------------------------------------------------
 
 /// The simplest ambiguous case: field `a` is `u32` in one variant, `String` in
 /// the other.
@@ -116,7 +116,7 @@ enum WithDefaultAmbiguous {
     },
 }
 
-/// An ambiguous field whose types are nested containers — exercises that the
+/// An ambiguous field whose types are nested containers -- exercises that the
 /// deferred bytes decode straight into a structured target.
 #[derive(Debug, PartialEq, Encode, Decode)]
 #[calldata(tag = "kind")]
@@ -125,7 +125,7 @@ enum Container {
     Words { items: Vec<String> },
 }
 
-// ── User-provided baseline ───────────────────────────────────────────
+// -- User-provided baseline -------------------------------------------
 
 #[test]
 fn same_name_1() {
@@ -145,7 +145,7 @@ fn same_name_2() {
     assert_eq!(got, original);
 }
 
-// ── Ambiguous scalar roundtrips (both paths) ─────────────────────────
+// -- Ambiguous scalar roundtrips (both paths) -------------------------
 
 #[test]
 fn ambiguous_int_variant_roundtrips() {
@@ -175,7 +175,7 @@ fn ambiguous_decodes_from_value_path() {
 #[test]
 fn ambiguous_decodes_from_binary_path() {
     // Encode through `Value` to canonical (sorted) wire bytes, then decode
-    // straight into the enum — the deferred field reads from raw bytes.
+    // straight into the enum -- the deferred field reads from raw bytes.
     let bytes = to_bytes(&map([
         ("a", Value::Str("deferred".into())),
         ("type", Value::Str("Bar".into())),
@@ -188,7 +188,7 @@ fn ambiguous_decodes_from_binary_path() {
     );
 }
 
-// ── Mixed: monomorphic + ambiguous (+ deserialize_with) ──────────────
+// -- Mixed: monomorphic + ambiguous (+ deserialize_with) --------------
 
 #[test]
 fn mixed_plain_variant() {
@@ -248,11 +248,11 @@ fn mixed_decodes_from_binary_path() {
     );
 }
 
-// ── Wrong type for the chosen variant ────────────────────────────────
+// -- Wrong type for the chosen variant --------------------------------
 
 #[test]
 fn ambiguous_wrong_type_for_variant_is_rejected() {
-    // Tag says Foo, but the value is a string — decoding it as u32 fails.
+    // Tag says Foo, but the value is a string -- decoding it as u32 fails.
     let val = map([
         ("a", Value::Str("not a number".into())),
         ("type", Value::Str("Foo".into())),
@@ -275,7 +275,7 @@ fn ambiguous_wrong_type_for_variant_is_rejected_on_binary_path() {
     );
 }
 
-// ── Ambiguous field with a default ───────────────────────────────────
+// -- Ambiguous field with a default -----------------------------------
 
 #[test]
 fn ambiguous_default_present() {
@@ -312,7 +312,7 @@ fn ambiguous_default_other_variant() {
     );
 }
 
-// ── Ambiguous container-typed field ──────────────────────────────────
+// -- Ambiguous container-typed field ----------------------------------
 
 #[test]
 fn ambiguous_container_ints_roundtrips() {

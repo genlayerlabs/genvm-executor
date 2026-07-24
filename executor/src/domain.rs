@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use genlayer_sdk::abi;
 use primitive_types::U256;
 
 #[allow(clippy::enum_variant_names)]
@@ -17,7 +18,7 @@ pub enum ExecutionEmission {
     PostMessage {
         call_key: genlayer_sdk::abi::CallKey,
         address: genlayer_sdk::calldata::Address,
-        calldata: genlayer_calldata::codec::Maybe<genlayer_sdk::calldata::Value>,
+        calldata: abi::entry::MainCallData,
         value: U256,
         on: genlayer_sdk::abi::gl_call::On,
         message_fee: U256,
@@ -30,7 +31,7 @@ pub enum ExecutionEmission {
         use_balance: bool,
     },
     DeployContract {
-        calldata: genlayer_calldata::codec::Maybe<genlayer_sdk::calldata::Value>,
+        calldata: abi::entry::MainDeployData,
         code: Bytes,
         value: U256,
         on: genlayer_sdk::abi::gl_call::On,

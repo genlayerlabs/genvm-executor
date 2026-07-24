@@ -270,6 +270,9 @@ pub mod __VmError {
 
     impl WasmTrap {
         pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "wasm_trap"
+        }
         pub const fn unreachable(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap unreachable")) }
         pub const fn stack_overflow(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap stack_overflow")) }
         pub const fn memory_out_of_bounds(&self) -> VmError { VmError(Cow::Borrowed("wasm_trap memory_out_of_bounds")) }
@@ -291,6 +294,9 @@ pub mod __VmError {
 
     impl OutOfMemory {
         pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("out_of memory")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "out_of memory"
+        }
         pub const fn wasm_memory(&self) -> VmError { VmError(Cow::Borrowed("out_of memory wasm_memory")) }
         pub const fn wasm_table(&self) -> VmError { VmError(Cow::Borrowed("out_of memory wasm_table")) }
     }
@@ -298,6 +304,9 @@ pub mod __VmError {
     pub struct OutOfReceipt;
 
     impl OutOfReceipt {
+        pub const fn prefix_(&self) -> &'static str {
+            "out_of receipt"
+        }
         pub const fn nondet_output(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt nondet_output")) }
         pub const fn message(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt message")) }
         pub const fn event(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt event")) }
@@ -306,6 +315,9 @@ pub mod __VmError {
     pub struct OutOfMessageFee;
 
     impl OutOfMessageFee {
+        pub const fn prefix_(&self) -> &'static str {
+            "out_of message_fee"
+        }
         pub const fn total(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee total")) }
         pub const fn node(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node")) }
     }
@@ -313,6 +325,9 @@ pub mod __VmError {
     pub struct OutOf;
 
     impl OutOf {
+        pub const fn prefix_(&self) -> &'static str {
+            "out_of"
+        }
         pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("out_of storage")) }
         pub const fn vm_recursion(&self) -> VmError { VmError(Cow::Borrowed("out_of vm_recursion")) }
         pub const fn nondet_blocks(&self) -> VmError { VmError(Cow::Borrowed("out_of nondet_blocks")) }
@@ -327,6 +342,9 @@ pub mod __VmError {
     pub struct Fee;
 
     impl Fee {
+        pub const fn prefix_(&self) -> &'static str {
+            "fee"
+        }
         pub const fn no_matching_node(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node")) }
         pub const fn below_minimum(&self) -> VmError { VmError(Cow::Borrowed("fee below_minimum")) }
         pub const fn too_many_rounds(&self) -> VmError { VmError(Cow::Borrowed("fee too_many_rounds")) }
@@ -335,12 +353,18 @@ pub mod __VmError {
     pub struct Evm;
 
     impl Evm {
+        pub const fn prefix_(&self) -> &'static str {
+            "evm"
+        }
         pub const fn reverted(&self) -> VmError { VmError(Cow::Borrowed("evm reverted")) }
     }
 
     pub struct InvalidContractWasm;
 
     impl InvalidContractWasm {
+        pub const fn prefix_(&self) -> &'static str {
+            "invalid_contract wasm"
+        }
         pub const fn validating(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract wasm validating")) }
         pub const fn linking(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract wasm linking")) }
         pub const fn entrypoint(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract wasm entrypoint")) }
@@ -350,6 +374,9 @@ pub mod __VmError {
 
     impl InvalidContract {
         pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "invalid_contract"
+        }
         pub const fn absent_runner_comment(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract absent_runner_comment")) }
         pub const fn not_utf8_text(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract not_utf8_text")) }
         pub const fn malformed_runner(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract malformed_runner")) }
@@ -386,6 +413,68 @@ impl VmError {
     pub const fn fee() -> __VmError::Fee { __VmError::Fee }
     pub const fn evm() -> __VmError::Evm { __VmError::Evm }
     pub const fn invalid_contract() -> __VmError::InvalidContract { __VmError::InvalidContract }
+}
+
+#[rustfmt::skip]
+impl VmError {
+    /// Whether `s` is a well-formed `vm_error` path.
+    pub fn is_valid_(s: &str) -> bool {
+        if matches!(s,
+            "timeout" |
+            "absent_leader_nondet_output" |
+            "wasm_trap" |
+            "wasm_trap unreachable" |
+            "wasm_trap stack_overflow" |
+            "wasm_trap memory_out_of_bounds" |
+            "wasm_trap table_out_of_bounds" |
+            "wasm_trap indirect_call_to_null" |
+            "wasm_trap bad_signature" |
+            "wasm_trap integer_overflow" |
+            "wasm_trap integer_divide_by_zero" |
+            "wasm_trap bad_conversion_to_integer" |
+            "wasm_trap heap_misaligned" |
+            "wasm_trap atomic_wait_non_shared_memory" |
+            "wasm_trap out_of_fuel" |
+            "wasm_trap interrupt" |
+            "wasm_trap nondet_instruction" |
+            "wasm_trap fault" |
+            "out_of memory" |
+            "out_of memory wasm_memory" |
+            "out_of memory wasm_table" |
+            "out_of storage" |
+            "out_of receipt nondet_output" |
+            "out_of receipt message" |
+            "out_of receipt event" |
+            "out_of message_fee total" |
+            "out_of message_fee node" |
+            "out_of vm_recursion" |
+            "out_of nondet_blocks" |
+            "out_of locked_slots" |
+            "out_of upgraders" |
+            "out_of fds" |
+            "fee no_matching_node" |
+            "fee below_minimum" |
+            "fee too_many_rounds" |
+            "host_forbidden" |
+            "evm reverted" |
+            "invalid_contract" |
+            "invalid_contract absent_runner_comment" |
+            "invalid_contract not_utf8_text" |
+            "invalid_contract malformed_runner" |
+            "invalid_contract major_mismatch" |
+            "invalid_contract wasm validating" |
+            "invalid_contract wasm linking" |
+            "invalid_contract wasm entrypoint"
+        ) {
+            return true;
+        }
+        if let Some(rest) = s.strip_prefix("exit_code ") {
+            if rest.parse::<i32>().is_ok_and(|v| v.to_string() == rest) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub const EVENT_MAX_TOPICS: u32 = 4;

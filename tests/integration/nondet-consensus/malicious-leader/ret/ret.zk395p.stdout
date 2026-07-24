@@ -1,0 +1,3 @@
+{"fn":"do_return","leader_nondet":[{"kind":"return","value":1}]}
+executed with `Return(null)`
+nondet disagreement: 0

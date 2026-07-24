@@ -1,6 +1,6 @@
 local simple = import 'templates/simple_deploy.jsonnet';
 local util = import 'templates/util.jsonnet';
-// ADR-012 §4 (v2): a nondet block inherits the parent's custom runners by
+// A nondet block inherits the parent's custom runners by
 // default, so a det-registered runner is usable inside `run_nondet`. Both the
 // parent and the nondet child charge it once each (`charged` >= 2 across the
 // run); each VM loads it at most once (no in-VM double charge).

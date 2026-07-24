@@ -112,7 +112,7 @@ impl Archive {
             total_size: original_data.len() as u32,
         };
         // Files are carved from non-overlapping, header/padding-separated slices
-        // of the tar, so their contents sum to at most the whole buffer — the
+        // of the tar, so their contents sum to at most the whole buffer -- the
         // amount `total_size` charges.
         #[cfg(debug_assertions)]
         {

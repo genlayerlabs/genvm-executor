@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_unsorted_map_keys() {
-        // map(2) { "b": null, "a": null } — keys out of order.
+        // map(2) { "b": null, "a": null } -- keys out of order.
         let data = [0x16, 0x01, b'b', 0x00, 0x01, b'a', 0x00];
         assert!(matches!(
             decode(&data),
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_duplicate_map_keys() {
-        // map(2) { "a": null, "a": null } — duplicate keys are not strictly increasing.
+        // map(2) { "a": null, "a": null } -- duplicate keys are not strictly increasing.
         let data = [0x16, 0x01, b'a', 0x00, 0x01, b'a', 0x00];
         assert!(matches!(
             decode(&data),

@@ -6,7 +6,7 @@ fn try_decode_from_value<T: codec::Decode>(val: Value) -> Result<T, codec::Decod
     T::decode(codec::ValueDeserializer(val))
 }
 
-// ── Types ───────────────────────────────────────────────────────────
+// -- Types -----------------------------------------------------------
 
 #[derive(Debug, PartialEq, Decode)]
 struct Named {
@@ -31,7 +31,7 @@ enum Tagged {
     B { v: bool },
 }
 
-// ── Struct: unknown map key ─────────────────────────────────────────
+// -- Struct: unknown map key -----------------------------------------
 
 #[test]
 fn named_struct_rejects_unknown_field() {
@@ -46,7 +46,7 @@ fn named_struct_rejects_unknown_field() {
     assert!(msg.contains("`z`"), "should mention field name: {msg}");
 }
 
-// ── Tuple struct: wrong sequence length ─────────────────────────────
+// -- Tuple struct: wrong sequence length -----------------------------
 
 #[test]
 fn tuple_struct_rejects_too_many_elements() {
@@ -68,7 +68,7 @@ fn tuple_struct_rejects_too_few_elements() {
     assert!(msg.contains("expected 2"), "unexpected error: {msg}");
 }
 
-// ── External enum struct variant: unknown field ─────────────────────
+// -- External enum struct variant: unknown field ---------------------
 
 #[test]
 fn external_enum_struct_variant_rejects_unknown_field() {
@@ -85,7 +85,7 @@ fn external_enum_struct_variant_rejects_unknown_field() {
     assert!(msg.contains("`extra`"), "should mention field name: {msg}");
 }
 
-// ── Tagged enum: unknown field ──────────────────────────────────────
+// -- Tagged enum: unknown field --------------------------------------
 
 #[test]
 fn tagged_enum_rejects_unknown_field() {
@@ -115,7 +115,7 @@ fn tagged_enum_rejects_excess_fields_by_length() {
     assert!(msg.contains("got 3"), "unexpected error: {msg}");
 }
 
-// ── Valid inputs still work ─────────────────────────────────────────
+// -- Valid inputs still work -----------------------------------------
 
 #[test]
 fn named_struct_exact_fields_ok() {

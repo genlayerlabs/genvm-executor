@@ -329,7 +329,7 @@ fn array_nested() {
 
 // `fold` / `foldRange` are not builtins: they are defined in the language
 // itself, with recursion expressed via the Y combinator. This exercises
-// call-by-need evaluation — under call-by-value the Y combinator diverges.
+// call-by-need evaluation -- under call-by-value the Y combinator diverges.
 const PRELUDE: &str = r"
 let Y = \f = (\x = f (\v = x x v)) (\x = f (\v = x x v)) in
 let fold = \arr = \acc = \fn =

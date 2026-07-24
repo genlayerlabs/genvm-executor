@@ -2,7 +2,7 @@
 //!
 //! [`ValueDeserializer`] consumes an owned `Value` (moving leaves out), while
 //! [`RefValueDeserializer`] walks a borrowed `&Value` without deep-cloning
-//! arrays/maps — so validating a borrowed `Value` retains only `O(depth)`.
+//! arrays/maps -- so validating a borrowed `Value` retains only `O(depth)`.
 
 use std::collections::BTreeMap;
 
@@ -170,9 +170,15 @@ impl Decode for Value {
     }
 }
 
-// ValueDeserializer — decode/validate from an owned Value (moving leaves out)
+// ValueDeserializer -- decode/validate from an owned Value (moving leaves out)
 
 pub struct ValueDeserializer(pub Value);
+
+impl ValueDeserializer {
+    pub fn new(value: Value) -> Self {
+        Self(value)
+    }
+}
 
 impl Deserializer for ValueDeserializer {
     fn deserialize<V: Visitor>(self, visitor: V) -> Result<V::Value, DecodeError> {
@@ -251,12 +257,18 @@ impl MapAccess for ValueMapAccess {
     }
 }
 
-// RefValueDeserializer — decode/validate from a borrowed Value without cloning
+// RefValueDeserializer -- decode/validate from a borrowed Value without cloning
 
 /// A [`Deserializer`] over a borrowed [`Value`]. Walks the tree by reference, so
 /// validating (or decoding) does not deep-clone arrays/maps; only retained leaf
 /// scalars are copied (and validation copies nothing).
 pub struct RefValueDeserializer<'a>(pub &'a Value);
+
+impl RefValueDeserializer<'_> {
+    pub fn new(value: &Value) -> RefValueDeserializer<'_> {
+        RefValueDeserializer(value)
+    }
+}
 
 impl Deserializer for RefValueDeserializer<'_> {
     fn deserialize<V: Visitor>(self, visitor: V) -> Result<V::Value, DecodeError> {

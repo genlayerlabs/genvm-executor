@@ -136,6 +136,12 @@
               entry = "${hooks-python}/bin/python3 support/scripts/md-local-links.py";
               types = [ "markdown" ];
             };
+            check-source-text = {
+              enable = true;
+              name = "check-source-text";
+              entry = "${hooks-python}/bin/python3 support/scripts/check-source-text.py";
+              files = "\\.rs$";
+            };
             # --- local guards -----------------------------------------
             # Refuse commits that leave dev-mode on or any hash as "test".
             no-commit-dev-mode = {

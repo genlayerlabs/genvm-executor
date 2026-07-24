@@ -20,6 +20,11 @@ mod run;
 #[cfg(test)]
 mod tests;
 
+// Leader-result parsing/stripping. Pure functions over untrusted bytes,
+// re-exported (rather than making `run` public) so the fuzz targets can reach
+// them.
+pub use run::{parse_leader_result, strip_vm_error_detail};
+
 fn default_entry_stage_data() -> calldata::Value {
     calldata::Value::Null
 }
@@ -145,7 +150,7 @@ pub struct SingleVMData {
     /// `custom:` runner pins granted to this VM by its parent, carried from the
     /// spawning gl_call (so the content survives the parent's death for a queued
     /// nondet VM). The child's spawn performs a load action for each, charging its
-    /// own limiter, before its main runner loads (ADR-012 §1/§4). Empty for the
+    /// own limiter, before its main runner loads. Empty for the
     /// root VM. Drained at spawn.
     pub granted_custom: Vec<crate::runners::cache::ArchivePin>,
 }
@@ -154,7 +159,7 @@ pub struct Context {
     pub data: SingleVMData,
 
     /// This VM's **loaded set**: the charge-dedup set and pin holder for every
-    /// runner it has loaded (ADR-012 §1). A sibling of `data` (not inside its
+    /// runner it has loaded. A sibling of `data` (not inside its
     /// accumulator), so it does not round-trip through sandbox children and is
     /// dropped when this VM's store is torn down.
     pub loaded: crate::runners::cache::LoadedSet,
@@ -1083,8 +1088,8 @@ impl ContextVFS<'_> {
 
         // The load action registers the content (weak registry, dedup while
         // alive), charges `RUNNER_LOAD_COST + code.len()` to this VM before parsing, and
-        // pins it into this VM's loaded set — scoping it to this execution and its
-        // deterministic children only (ADR-012 §3). RegisterRunner is det-only, so
+        // pins it into this VM's loaded set -- scoping it to this execution and its
+        // deterministic children only. RegisterRunner is det-only, so
         // the load folds into the det fingerprint.
         let supervisor = self.context.data.supervisor.clone();
         let limiter = self.context.limiter.clone();

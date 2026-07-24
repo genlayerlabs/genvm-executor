@@ -67,7 +67,7 @@ fn internal_node(
     }
 }
 
-// ── Exact wire layout ───────────────────────────────────────────────
+// -- Exact wire layout -----------------------------------------------
 
 #[test]
 fn external_root_node_matches_exact_encoding() {
@@ -98,7 +98,7 @@ fn external_root_node_matches_exact_encoding() {
     assert_eq!(encoded, expected);
 }
 
-// ── Tree flattening to parent-pointer form ──────────────────────────
+// -- Tree flattening to parent-pointer form --------------------------
 
 #[test]
 fn nested_internal_flattens_with_parent_pointers() {
@@ -157,7 +157,7 @@ fn nested_internal_flattens_with_parent_pointers() {
     );
 }
 
-// ── Chain-derived feeParams fields ──────────────────────────────────
+// -- Chain-derived feeParams fields ----------------------------------
 
 #[test]
 fn internal_params_encode_derived_appeal_rounds() {

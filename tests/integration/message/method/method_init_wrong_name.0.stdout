@@ -1,2 +1,1 @@
-init
-executed with `Return(null)`
+executed with `VMError("malformed_entry")`

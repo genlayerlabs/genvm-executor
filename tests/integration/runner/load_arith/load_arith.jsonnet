@@ -1,6 +1,6 @@
 local simple = import 'templates/simple_deploy.jsonnet';
 local util = import 'templates/util.jsonnet';
-// ADR-012 §1: first load of a runner charges exactly RUNNER_LOAD_COST + size, once.
+// First load of a runner charges exactly RUNNER_LOAD_COST + size, once.
 // A bare raw-wasm contract's runner tree is a single node, so exactly one
 // `charged` record must appear, sized to the raw wasm length, none `cached`.
 {tags: util.features([['runner', 'load']], 'stable'),

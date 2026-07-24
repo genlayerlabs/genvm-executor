@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::consts::*;
 
-// ── Helpers for external types without Arbitrary ─────────────────────
+// -- Helpers for external types without Arbitrary ---------------------
 
 pub fn arb_bytes(u: &mut arbitrary::Unstructured) -> arbitrary::Result<bytes::Bytes> {
     Ok(bytes::Bytes::from(u.arbitrary::<Vec<u8>>()?))
@@ -35,7 +35,7 @@ pub fn arb_btreemap_bytes(
         .collect()
 }
 
-// ── Arbitrary for consts enums ───────────────────────────────────────
+// -- Arbitrary for consts enums ---------------------------------------
 
 macro_rules! impl_arbitrary_via_try_from_u8 {
     ($ty:ty, $max:expr) => {

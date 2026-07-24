@@ -114,8 +114,8 @@ pub struct Supervisor {
     wasm_mod_cache: WasmModuleCache,
 
     /// Weak registry of runtime-registered `custom:<hash>` runners, keyed by
-    /// canonical id. Holds only weak references — a registration lives while some
-    /// VM's loaded set pins it (ADR-012 §3). Pure cross-scope dedup: resolution
+    /// canonical id. Holds only weak references -- a registration lives while some
+    /// VM's loaded set pins it. Pure cross-scope dedup: resolution
     /// never reads it, so a scope can only use what it loaded.
     custom_runners: runners::cache::WeakCache,
 
@@ -128,7 +128,7 @@ pub struct Supervisor {
 impl Drop for Supervisor {
     fn drop(&mut self) {
         // Every VM (and thus every loaded-set pin) is gone by supervisor teardown,
-        // so no registered custom runner may still be resident (ADR-012 §3).
+        // so no registered custom runner may still be resident.
         self.custom_runners
             .assert_empty_on_teardown("custom runner");
     }
@@ -219,7 +219,7 @@ pub async fn await_nondet_vms(zelf: &Arc<Supervisor>) -> anyhow::Result<Option<u
             .try_read_owned()
             .expect("tasks_loop_done already held by writer");
         // Each queued nondet VM carries its own granted custom-runner pins and
-        // pays for them via its spawn-time inherit load actions (ADR-012 §3).
+        // pays for them via its spawn-time inherit load actions.
         // Nondet VMs do not inherit the deterministic limiter; each starts with
         // a fresh RAM limiter when spawned.
         nondet_vm_processor(zelf.clone(), read_permit).await;
@@ -285,25 +285,13 @@ impl Supervisor {
             .and_then(|v| v.get(call_no as usize).cloned())
     }
 
-    /// Records a non-deterministic disagreement for `call_no`, keeping the
-    /// earliest disagreeing call. Mirrors the logic in `nondet_vm_processor`.
-    pub fn mark_nondet_disagreement(&self, call_no: u32) {
-        self.queue
-            .nondet_call_disagree
-            .fetch_min(call_no, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    pub fn is_leader(&self) -> bool {
-        self.leader_nondet_results.is_none()
-    }
-
     pub fn get_storage_limiter(&self) -> rt::vm::storage::Limiter {
         rt::vm::storage::Limiter::new(self.shared_data.gep(|x| &x.data_fees_limit))
     }
 
     /// Inserts the just-deployed contract's runner into the cache and returns a
     /// pin. The cache is weakly held, so the caller (the top-level execution
-    /// scope in `lib.rs`) must keep the pin for the whole run — otherwise the
+    /// scope in `lib.rs`) must keep the pin for the whole run -- otherwise the
     /// entry would be evicted before the contract VM loads it.
     #[must_use]
     pub fn prepopulate_deploy_runner(
@@ -480,7 +468,7 @@ pub async fn spawn(
         });
     }
 
-    // Inherit-at-spawn (ADR-012 §1/§4): perform a load action for each custom
+    // Inherit-at-spawn: perform a load action for each custom
     // runner granted to this child, charging its own limiter, *before* its main
     // runner loads (so a custom entry point granted here is not charged twice).
     // The pins were carried in `SingleVMData`, so the content survives even if the
@@ -572,7 +560,7 @@ async fn apply_contract_actions_inner(
 
     let topmost_runner_id = data.conf.execution.topmost_runner_id.clone();
 
-    // Main-runner load action (ADR-012 §1). Runs *after* the spawn-time inherit
+    // Main-runner load action. Runs *after* the spawn-time inherit
     // loads, so a custom entry point granted to this VM is already loaded (free
     // here, not double charged). Charges this VM's own limiter.
     let arch = {

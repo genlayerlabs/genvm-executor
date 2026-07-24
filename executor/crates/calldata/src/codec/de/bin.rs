@@ -1,4 +1,4 @@
-//! [`BinaryDeserializer`] — reads the calldata wire format directly.
+//! [`BinaryDeserializer`] -- reads the calldata wire format directly.
 
 use crate::consts::*;
 use crate::{Address, BinDecodeError};

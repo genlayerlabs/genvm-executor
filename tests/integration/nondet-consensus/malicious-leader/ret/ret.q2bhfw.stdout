@@ -1,0 +1,2 @@
+{"fn":"do_return","leader_nondet":[{"kind":"return","value":11}]}
+executed with `Return(null)`

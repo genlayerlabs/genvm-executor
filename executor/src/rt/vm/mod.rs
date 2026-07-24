@@ -14,6 +14,17 @@ pub enum RunOk {
     VMError(abi::consts::VmError, Option<anyhow::Error>),
 }
 
+impl RunOk {
+    /// Like clone, but drops the `cause` of a `VMError` if present
+    pub fn duplicate(&self) -> Self {
+        match self {
+            RunOk::Return(buf) => RunOk::Return(buf.clone()),
+            RunOk::UserError(buf) => RunOk::UserError(buf.clone()),
+            RunOk::VMError(e, _cause) => RunOk::VMError(e.clone(), None),
+        }
+    }
+}
+
 pub struct RunResult {
     pub run_ok: RunOk,
     pub backtrace: Option<rt::errors::Backtrace>,

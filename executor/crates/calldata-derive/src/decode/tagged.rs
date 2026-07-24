@@ -4,7 +4,7 @@
 //! with the chosen variant's fields, e.g. `{"type": "Beta", "val": true}`.
 //!
 //! The map keys arrive strictly sorted (see the wire format), so the tag entry
-//! is not guaranteed to come first — historically that forced buffering the whole
+//! is not guaranteed to come first -- historically that forced buffering the whole
 //! map into a [`Value`] before the variant could be resolved. Instead we decode
 //! in a single streaming pass:
 //!
@@ -13,12 +13,12 @@
 //!    any variant can have;
 //! 2. at run time, first check the map length is within `[min, max]`;
 //! 3. then walk the entries: each key is matched against the tag and the union of
-//!    known fields (unknown → error), and its value is decoded into the slot;
+//!    known fields (unknown -> error), and its value is decoded into the slot;
 //! 4. finally dispatch on the tag string to assemble the concrete variant.
 //!
 //! A field name shared by several variants collapses to one union slot. When all
 //! those variants give it the same type and `deserialize_with`, the slot is
-//! *monomorphic* and the value is decoded straight into that type — no
+//! *monomorphic* and the value is decoded straight into that type -- no
 //! intermediate [`Value`]. When they disagree, the type is not knowable until the
 //! tag is seen, so the slot is *ambiguous*: it is decoded into a [`Value`] and
 //! converted to the exact per-variant type during assembly. Ambiguous slots emit
@@ -55,8 +55,8 @@ struct VariantInfo<'a> {
 struct UnionField {
     wire: String,
     /// `Some` when every variant using this name agrees on the decode strategy
-    /// (same type and `deserialize_with`) — decoded eagerly into that type.
-    /// `None` when they disagree — decoded into a `Value` and converted to the
+    /// (same type and `deserialize_with`) -- decoded eagerly into that type.
+    /// `None` when they disagree -- decoded into a `Value` and converted to the
     /// exact type per-variant during assembly.
     mono: Option<MonoDecode>,
     /// Decode signature `(type, deserialize_with)` of the first usage, used to
@@ -85,7 +85,7 @@ pub fn decode(
     data: &syn::DataEnum,
     tag_field: &str,
 ) -> syn::Result<TokenStream> {
-    // ── Collect variants and accumulate the field union ──────────────
+    // -- Collect variants and accumulate the field union --------------
     let mut union: Vec<UnionField> = Vec::new();
     let mut variants: Vec<VariantInfo> = Vec::new();
 
@@ -169,7 +169,7 @@ pub fn decode(
         });
     }
 
-    // ── Ambiguous-field warnings ─────────────────────────────────────
+    // -- Ambiguous-field warnings -------------------------------------
     // Each ambiguous slot reintroduces an intermediate `Value`; warn via the
     // standard stable-Rust deprecation trick (zero runtime cost).
     let warnings = union.iter().filter(|u| u.mono.is_none()).map(|u| {
@@ -188,7 +188,7 @@ pub fn decode(
         }
     });
 
-    // ── Min/max number of map entries across all variants ────────────
+    // -- Min/max number of map entries across all variants ------------
     // Every variant carries the tag entry (+1). A named variant additionally
     // requires its non-defaulted fields (min) and admits all of them (max).
     let mut min_len = usize::MAX;
@@ -207,13 +207,13 @@ pub fn decode(
     let min_len = proc_macro2::Literal::usize_unsuffixed(min_len);
     let max_len = proc_macro2::Literal::usize_unsuffixed(max_len);
 
-    // ── Per-union-field slots + streaming key dispatch ───────────────
+    // -- Per-union-field slots + streaming key dispatch ---------------
     let slot_vars: Vec<syn::Ident> = (0..union.len())
         .map(|i| syn::Ident::new(&format!("__u{i}"), proc_macro2::Span::call_site()))
         .collect();
     // Ambiguous slots buffer the value lazily: a byte-backed deserializer keeps
     // the raw wire bytes (and only validates), so the eventual per-variant decode
-    // reads straight from those bytes — no `Value` is ever built.
+    // reads straight from those bytes -- no `Value` is ever built.
     let deferred_ty = quote! {
         genlayer_calldata::codec::Maybe<genlayer_calldata::Value>
     };
@@ -235,12 +235,12 @@ pub fn decode(
 
         // What goes into the slot for this entry.
         let read = match &u.mono {
-            // Ambiguous → defer into a `Maybe<Value>` (byte-backed sources keep
+            // Ambiguous -> defer into a `Maybe<Value>` (byte-backed sources keep
             // the raw bytes instead of materializing a `Value`).
             None => quote! {
                 __map.next_value::<genlayer_calldata::codec::Maybe<genlayer_calldata::Value>>()?
             },
-            // Monomorphic with `deserialize_with` → `Value` then the function.
+            // Monomorphic with `deserialize_with` -> `Value` then the function.
             Some(MonoDecode {
                 de_with: Some(func),
                 ..
@@ -250,7 +250,7 @@ pub fn decode(
                     #func(__v)?
                 }
             },
-            // Monomorphic plain → decode straight into the typed slot.
+            // Monomorphic plain -> decode straight into the typed slot.
             Some(MonoDecode { ty_tokens, .. }) => {
                 quote! { __map.next_value::<#ty_tokens>()? }
             }
@@ -268,13 +268,13 @@ pub fn decode(
         });
     }
 
-    // ── Tag dispatch → variant assembly ──────────────────────────────
+    // -- Tag dispatch -> variant assembly ------------------------------
     let all_names: Vec<&str> = variants.iter().map(|v| v.wire.as_str()).collect();
     let names_joined = all_names.join(", ");
 
     // Reject any filled slot that does not belong to the selected variant. For a
     // unit variant `used` is empty, so every union slot is foreign and must be
-    // absent — otherwise `{"radius": 1, "type": "Empty"}` would silently decode
+    // absent -- otherwise `{"radius": 1, "type": "Empty"}` would silently decode
     // as `Empty`, ignoring the foreign `radius`.
     let foreign_checks = |used: &std::collections::HashSet<usize>| {
         union

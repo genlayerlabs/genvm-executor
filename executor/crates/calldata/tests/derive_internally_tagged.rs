@@ -1,8 +1,8 @@
 //! Tests for `Decode` derivation on internally tagged enums
 //! (`#[calldata(tag = "...")]`).
 //!
-//! The derived decoder streams the map in a single pass — no intermediate
-//! `Value` is built — so these tests exercise both the in-memory `Value` path
+//! The derived decoder streams the map in a single pass -- no intermediate
+//! `Value` is built -- so these tests exercise both the in-memory `Value` path
 //! (`ValueDeserializer`) and the direct binary path (`decode_obj`), and pin down
 //! the error behaviour: length-range gate, unknown fields, missing tag/fields,
 //! unknown variants and tag-position independence (the tag may be sorted before,
@@ -12,7 +12,7 @@ use genlayer_calldata::codec::Decode;
 use genlayer_calldata::{Decode, Encode, Encoder, Value, codec};
 use std::collections::BTreeMap;
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// -- Helpers ----------------------------------------------------------
 
 /// Encode a value to the binary wire format.
 fn to_bytes<T>(val: &T) -> Vec<u8>
@@ -60,7 +60,7 @@ fn map(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
     )
 }
 
-// ── Fixtures ─────────────────────────────────────────────────────────
+// -- Fixtures ---------------------------------------------------------
 
 /// Mixed variant kinds, and field names chosen so the tag (`"type"`) lands
 /// before, between and after the variant's fields in sorted key order.
@@ -69,23 +69,23 @@ fn map(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
 enum Shape {
     // {"type": "Empty"}
     Empty,
-    // sorted keys: radius, type   → tag last
+    // sorted keys: radius, type   -> tag last
     Circle {
         radius: u32,
     },
-    // sorted keys: height, type, width → tag in the middle
+    // sorted keys: height, type, width -> tag in the middle
     Rect {
         height: u32,
         width: u32,
     },
-    // sorted keys: alpha, type, z_last → tag in the middle, plus renames
+    // sorted keys: alpha, type, z_last -> tag in the middle, plus renames
     #[calldata(rename = "named_shape")]
     Named {
         alpha: i32,
         #[calldata(rename = "z_last")]
         last: String,
     },
-    // sorted keys: type, val → tag first
+    // sorted keys: type, val -> tag first
     Renamed {
         val: i64,
     },
@@ -128,7 +128,7 @@ enum WithDeserializeWith {
     },
 }
 
-// ── Happy-path roundtrips ────────────────────────────────────────────
+// -- Happy-path roundtrips --------------------------------------------
 
 #[test]
 fn unit_variant_roundtrips() {
@@ -173,7 +173,7 @@ fn shared_field_variants_roundtrip() {
     });
 }
 
-// ── Tag-position independence (explicit key orders) ──────────────────
+// -- Tag-position independence (explicit key orders) ------------------
 
 #[test]
 fn decodes_with_tag_in_the_middle() {
@@ -204,7 +204,7 @@ fn decodes_with_tag_last() {
     assert_eq!(got, Shape::Circle { radius: 8 });
 }
 
-// ── Defaults ─────────────────────────────────────────────────────────
+// -- Defaults ---------------------------------------------------------
 
 #[test]
 fn default_field_present() {
@@ -239,7 +239,7 @@ fn default_field_missing_uses_default() {
     );
 }
 
-// ── deserialize_with ─────────────────────────────────────────────────
+// -- deserialize_with -------------------------------------------------
 
 #[test]
 fn deserialize_with_is_applied() {
@@ -251,7 +251,7 @@ fn deserialize_with_is_applied() {
     assert_eq!(got, WithDeserializeWith::Scaled { value: 42 });
 }
 
-// ── Missing tag ──────────────────────────────────────────────────────
+// -- Missing tag ------------------------------------------------------
 
 #[test]
 fn missing_tag_is_field_missing() {
@@ -262,7 +262,7 @@ fn missing_tag_is_field_missing() {
     assert!(msg.contains("type"), "should mention tag field: {msg}");
 }
 
-// ── Missing required field ───────────────────────────────────────────
+// -- Missing required field -------------------------------------------
 
 #[test]
 fn missing_required_field_is_field_missing() {
@@ -277,7 +277,7 @@ fn missing_required_field_is_field_missing() {
     assert!(msg.contains("width"), "should mention missing field: {msg}");
 }
 
-// ── Unknown variant tag ──────────────────────────────────────────────
+// -- Unknown variant tag ----------------------------------------------
 
 #[test]
 fn unknown_variant_tag_is_rejected() {
@@ -288,7 +288,7 @@ fn unknown_variant_tag_is_rejected() {
     assert!(msg.contains("Nope"), "should mention the bad tag: {msg}");
 }
 
-// ── Unknown field (within the length range) ──────────────────────────
+// -- Unknown field (within the length range) --------------------------
 
 #[test]
 fn unknown_field_within_range_is_rejected() {
@@ -303,7 +303,7 @@ fn unknown_field_within_range_is_rejected() {
     assert!(msg.contains("`q`"), "should mention field name: {msg}");
 }
 
-// ── Foreign field (belongs to another variant) ───────────────────────
+// -- Foreign field (belongs to another variant) -----------------------
 
 #[test]
 fn field_of_another_variant_is_rejected() {
@@ -320,7 +320,7 @@ fn field_of_another_variant_is_rejected() {
     assert!(msg.contains("`x_only`"), "should mention field name: {msg}");
 }
 
-// ── Foreign field on a unit variant ──────────────────────────────────
+// -- Foreign field on a unit variant ----------------------------------
 
 #[test]
 fn field_of_another_variant_on_unit_is_rejected() {
@@ -337,7 +337,7 @@ fn field_of_another_variant_on_unit_is_rejected() {
     assert!(msg.contains("`radius`"), "should mention field name: {msg}");
 }
 
-// ── Length range gate ────────────────────────────────────────────────
+// -- Length range gate ------------------------------------------------
 
 #[test]
 fn too_many_fields_is_length_mismatch() {
@@ -363,7 +363,7 @@ fn empty_map_is_length_mismatch() {
     assert!(msg.contains("got 0"), "unexpected error: {msg}");
 }
 
-// ── Tag value of the wrong type ──────────────────────────────────────
+// -- Tag value of the wrong type --------------------------------------
 
 #[test]
 fn non_string_tag_is_rejected() {
@@ -375,7 +375,7 @@ fn non_string_tag_is_rejected() {
     );
 }
 
-// ── Binary-path error parity ─────────────────────────────────────────
+// -- Binary-path error parity -----------------------------------------
 
 #[test]
 fn binary_path_rejects_unknown_field() {

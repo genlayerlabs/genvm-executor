@@ -239,7 +239,7 @@ pub(super) const FEE_PARAM_PRICE_BITS: usize = 96;
 pub(super) const FEE_PARAM_COUNT_BITS: usize = 32;
 
 /// Validates the balance-funded fee fields (`use_balance` / `fee_params`) shared
-/// by `PostMessage` and `DeployContract` (GVM-281 §4.2). Returns the fee params
+/// by `PostMessage` and `DeployContract`. Returns the fee params
 /// to meter against the contract balance when `use_balance` is set, or `None`
 /// for the ordinary allocation-matched path.
 ///
@@ -248,7 +248,7 @@ pub(super) const FEE_PARAM_COUNT_BITS: usize = 32;
 /// reveal: `rotations` must be non-empty (the yaml floor derives
 /// `appealRounds = len - 1` and would go negative otherwise), the three
 /// price caps must be non-zero (the chain reverts `FeeValueMustBeNonZero(4/5/6)`
-/// at reveal), and every numeric field — rotations entries included — is
+/// at reveal), and every numeric field -- rotations entries included -- is
 /// bounded by [`FEE_PARAM_PRICE_BITS`] / [`FEE_PARAM_COUNT_BITS`] so the
 /// metered floor fits in U256. The rotations-length upper bound is
 /// node-config-dependent (validator table length) and is enforced in the yaml
@@ -481,7 +481,7 @@ impl ContextVFS<'_> {
     pub(super) async fn gl_call_post_message(
         &mut self,
         address: calldata::Address,
-        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        calldata: abi::entry::MainCallData,
         value: primitive_types::U256,
         on: gl_call::On,
         use_balance: bool,
@@ -512,14 +512,7 @@ impl ContextVFS<'_> {
             fee_params,
         )?;
 
-        // Peek the (possibly deferred) calldata to derive the fee call key.
-        let calldata_materialized = calldata.clone().materialize().ok();
-        let method_name = calldata_materialized
-            .as_ref()
-            .and_then(|x| x.as_map())
-            .and_then(|x| x.get(""))
-            .and_then(|x| x.as_str());
-        let call_key = if let Some(method_name) = method_name {
+        let call_key = if let Some(method_name) = &calldata.name {
             abi::CallKey::for_method(method_name)
         } else {
             abi::CallKey::UNNAMED
@@ -691,7 +684,7 @@ impl ContextVFS<'_> {
     }
     pub(super) async fn gl_call_deploy_contract(
         &mut self,
-        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        calldata: abi::entry::MainDeployData,
         code: bytes::Bytes,
         value: primitive_types::U256,
         on: gl_call::On,

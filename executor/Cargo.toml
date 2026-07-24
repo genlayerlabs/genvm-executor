@@ -27,6 +27,14 @@ panic = "abort"
 name = "fuzz-genvm-storage"
 path = "fuzz/genvm-storage.rs"
 
+[[example]]
+name = "fuzz-leader-result"
+path = "fuzz/leader-result.rs"
+
+[[example]]
+name = "fuzz-entry-data"
+path = "fuzz/entry-data.rs"
+
 [dependencies.wasmtime]
 default-features = false
 features = [
@@ -54,7 +62,7 @@ genvm-common = { path = "crates/common" }
 # ../../../crates/modules-interfaces resolves to <manager>/crates/modules-interfaces .
 # The host<->executor interface lives in the manager (many executors depend on
 # it). The executor is intentionally NOT standalone-buildable on its own.
-genlayer_calldata = { path = "crates/calldata" }
+genlayer_calldata = { path = "crates/calldata", features = ["arbitrary"] }
 genlayer_sdk = { path = "crates/sdk-rs", default-features = false }
 genvm_modules_interfaces = { path = "crates/modules-interfaces" }
 

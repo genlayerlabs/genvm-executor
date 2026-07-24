@@ -1,4 +1,5 @@
 use super::message::{validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE_BITS};
+use super::run::{parse_leader_result, strip_vm_error_detail};
 use super::*;
 use primitive_types::U256;
 
@@ -110,4 +111,417 @@ fn valid_balance_params_pass_through() {
 fn no_balance_no_params_is_allocation_path() {
     let got = validate_balance_fee(true, false, None).unwrap();
     assert_eq!(got, None);
+}
+
+// ---------------------------------------------------------------------------
+// Leader-proposed nondet result validation.
+//
+// Every case below is leader-authored input on the validator path. None of them
+// may trap: a trap would turn "the leader sent garbage" into a validator
+// internal error (and a timeout vote), which is a leader-controlled way to
+// silence validators. They must all resolve to a VMError the caller can turn
+// into a disagreement.
+// ---------------------------------------------------------------------------
+
+fn leader_bytes(code: public_abi::ResultCode, payload: &[u8]) -> Vec<u8> {
+    let mut res = vec![code as u8];
+    res.extend_from_slice(payload);
+    res
+}
+
+fn malformed() -> public_abi::VmError {
+    rt::errors::convert_vm_error_from_pending_abi(
+        public_abi_pending::VmError::leader_output().malformed(),
+    )
+}
+
+#[test]
+fn leader_empty_result_is_absent() {
+    assert_eq!(
+        parse_leader_result(&[]).unwrap_err(),
+        public_abi::VmError::absent_leader_nondet_output()
+    );
+}
+
+#[test]
+fn leader_unknown_result_code_is_malformed() {
+    for code in [4u8, 7, 0x80, 0xff] {
+        assert_eq!(parse_leader_result(&[code]).unwrap_err(), malformed());
+    }
+}
+
+#[test]
+fn leader_internal_error_code_is_malformed() {
+    // `internal_error` is a live enum variant that `TryFrom<u8>` accepts, but the
+    // wire format (spec: subvm result encoding) admits only 0/1/2. An internal
+    // error is never a proposable result.
+    let data = leader_bytes(public_abi::ResultCode::InternalError, &[]);
+    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+}
+
+#[test]
+fn leader_return_with_invalid_calldata_is_malformed() {
+    // The hole this closes: the executor used to pass the `Return` payload
+    // through undecoded, so bytes like these reached the execution hash before
+    // the guest SDK ever got a chance to reject them.
+    let data = leader_bytes(public_abi::ResultCode::Return, &[0xff, 0xff, 0xff]);
+    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+}
+
+#[test]
+fn leader_return_with_trailing_bytes_is_malformed() {
+    let mut payload = calldata::encode(&calldata::Value::Null);
+    payload.push(0x00);
+    let data = leader_bytes(public_abi::ResultCode::Return, &payload);
+    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+}
+
+#[test]
+fn leader_return_exceeding_depth_limit_is_malformed() {
+    // The undecoded `Return` path bypasses the decoder's depth limit entirely.
+    let mut v = calldata::Value::Null;
+    for _ in 0..200 {
+        v = calldata::Value::Array(vec![v]);
+    }
+    let data = leader_bytes(public_abi::ResultCode::Return, &calldata::encode(&v));
+    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+}
+
+#[test]
+fn leader_valid_return_is_preserved_bytewise() {
+    let value = calldata::Value::Str("ok".to_owned());
+    let payload = calldata::encode(&value);
+    let data = leader_bytes(public_abi::ResultCode::Return, &payload);
+
+    let got = parse_leader_result(&data).unwrap();
+    // Validation must not re-encode: the accepted result has to round-trip to the
+    // exact bytes the leader proposed, or validators would hash a different
+    // value than the one they agreed to.
+    assert_eq!(got.as_bytes(), data);
+}
+
+#[test]
+fn leader_user_error_with_invalid_calldata_is_malformed() {
+    let data = leader_bytes(public_abi::ResultCode::UserError, &[0xff, 0xff]);
+    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+}
+
+#[test]
+fn leader_valid_user_error_passes() {
+    let payload = calldata::encode(&calldata::Value::Str("boom".to_owned()));
+    let data = leader_bytes(public_abi::ResultCode::UserError, &payload);
+    assert_eq!(parse_leader_result(&data).unwrap().as_bytes(), data);
+}
+
+#[test]
+fn leader_vm_error_not_utf8_is_malformed() {
+    let data = leader_bytes(public_abi::ResultCode::VmError, &[0xff, 0xfe]);
+    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+}
+
+#[test]
+fn leader_vm_error_off_trie_code_is_malformed() {
+    // A leader may not invent error codes: the public code must come from the
+    // `vm_error` trie.
+    for code in [
+        "i_made_this_up",
+        "timeou",
+        "timeoutx",
+        "out_of",
+        "out_of nonsense",
+        "exit_code",
+        "exit_code notanumber",
+        "exit_code 99999999999999999999",
+        "wasm_trap not_a_trap",
+        "",
+    ] {
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
+        assert_eq!(
+            parse_leader_result(&data).unwrap_err(),
+            malformed(),
+            "code {code:?} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn leader_vm_error_on_trie_code_passes() {
+    for code in [
+        "timeout",
+        "host_forbidden",
+        "out_of storage",
+        "out_of memory",
+        "out_of memory wasm_memory",
+        "invalid_contract",
+        "invalid_contract wasm linking",
+        "exit_code 1",
+        "exit_code -1",
+        "wasm_trap",
+        "wasm_trap unreachable",
+    ] {
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
+        let got = parse_leader_result(&data)
+            .unwrap_or_else(|e| panic!("code {code:?} should be accepted, got {e:?}"));
+        assert_eq!(got.as_bytes(), data);
+    }
+}
+
+#[test]
+fn leader_vm_error_with_detail_is_malformed() {
+    // The nondet result channel is detail-free: an honest leader strips its own
+    // detail before publishing, so a proposal carrying one is malformed -- not
+    // something to strip and accept. Accepting it would reopen a free-form byte
+    // channel into the execution hash.
+    for code in [
+        "timeout # took too long",
+        "made_up # detail",
+        "timeout # ",
+        " # ",
+    ] {
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
+        assert_eq!(
+            parse_leader_result(&data).unwrap_err(),
+            malformed(),
+            "code {code:?} should be rejected for carrying a detail"
+        );
+    }
+}
+
+#[test]
+fn leader_vm_error_exit_code_must_be_canonical() {
+    // `+7` and `007` parse as 7, so accepting them would let several
+    // byte-different codes name the same error and hash differently.
+    for code in [
+        "exit_code +7",
+        "exit_code 007",
+        "exit_code -0",
+        "exit_code 2147483648",
+    ] {
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
+        assert_eq!(
+            parse_leader_result(&data).unwrap_err(),
+            malformed(),
+            "code {code:?} should be rejected as non-canonical"
+        );
+    }
+
+    for code in [
+        "exit_code 0",
+        "exit_code 7",
+        "exit_code -7",
+        "exit_code 2147483647",
+    ] {
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
+        assert!(
+            parse_leader_result(&data).is_ok(),
+            "code {code:?} should be accepted"
+        );
+    }
+}
+
+#[test]
+fn leader_vm_error_detail_is_rejected_before_the_namespace_remap() {
+    // The one branch interaction the two checks have: a derived-namespace code
+    // carrying a detail is `malformed`, not a remap. Order matters because the
+    // remap hashes the whole proposed string, so running it first would fold an
+    // attacker-chosen detail into the derived code.
+    for code in [
+        "leader_output malformed # x",
+        "absent_leader_nondet_output # x",
+    ] {
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
+        assert_eq!(
+            parse_leader_result(&data).unwrap_err(),
+            malformed(),
+            "code {code:?}: the detail check must win"
+        );
+    }
+}
+
+#[test]
+fn leader_empty_payloads_are_malformed() {
+    // A bare result code with no payload: `Return`/`UserError` need at least the
+    // encoding of some value, so the empty tail fails the decoder.
+    for code in [
+        public_abi::ResultCode::Return,
+        public_abi::ResultCode::UserError,
+    ] {
+        assert_eq!(
+            parse_leader_result(&leader_bytes(code, &[])).unwrap_err(),
+            malformed(),
+            "{code:?} with an empty payload should be rejected"
+        );
+    }
+}
+
+#[test]
+fn leader_user_error_malformed_payloads_match_return() {
+    // `UserError` shares `Return`'s branch shape and must reject the same
+    // payloads -- trailing bytes and over-deep nesting included.
+    let mut trailing = calldata::encode(&calldata::Value::Null);
+    trailing.push(0x00);
+
+    let mut deep = calldata::Value::Null;
+    for _ in 0..200 {
+        deep = calldata::Value::Array(vec![deep]);
+    }
+
+    for payload in [trailing, calldata::encode(&deep)] {
+        let data = leader_bytes(public_abi::ResultCode::UserError, &payload);
+        assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+    }
+}
+
+#[test]
+fn leader_vm_error_in_derived_namespace_is_remapped() {
+    // A proposal must never be byte-equal to what a validator derives from
+    // rejecting it, or "the leader proposed X" and "the proposal was rejected
+    // as X" would be indistinguishable.
+    for code in [
+        "absent_leader_nondet_output",
+        "leader_output",
+        "leader_output malformed",
+        "leader_output uses_this_error abcdef",
+        "leader_output whatever it wants",
+        "absent_leader_nondet_output extra",
+    ] {
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
+        let err = parse_leader_result(&data).unwrap_err();
+
+        assert_eq!(
+            err,
+            rt::errors::vm_error_for_leader_use_this_error(code),
+            "code {code:?} should be remapped out of the derived namespace"
+        );
+        assert_ne!(
+            err.0, code,
+            "the derived outcome must not be byte-equal to the proposal"
+        );
+    }
+}
+
+#[test]
+fn derived_outcomes_are_not_proposable_verbatim() {
+    // Feeding a validator-derived outcome back in as a proposal must be
+    // rejected again -- the namespace is closed under this loop, which is what
+    // the `fix_point` sentinel exists for.
+    for seed in ["", "timeout", "leader_output malformed"] {
+        let derived = rt::errors::vm_error_for_leader_use_this_error(seed);
+        let data = leader_bytes(public_abi::ResultCode::VmError, derived.0.as_bytes());
+        assert!(
+            parse_leader_result(&data).is_err(),
+            "derived outcome {:?} must not be proposable",
+            derived.0
+        );
+    }
+}
+
+#[test]
+fn leader_vm_error_pending_abi_code_is_malformed() {
+    // Pending-ABI codes are not `vm_error` trie paths, so they are unproposable
+    // by construction: `malformed_entry` is an outcome the executor derives.
+    let code = public_abi_pending::VmError::malformed_entry();
+    let data = leader_bytes(public_abi::ResultCode::VmError, code.0.as_bytes());
+    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+}
+
+#[test]
+fn every_generated_trie_code_is_accepted() {
+    // Guards against codegen drift: adding a `vm_error` trie entry without
+    // regenerating `is_valid` would silently make a legitimate leader code
+    // unproposable. Mirrors the constructors the generator emits.
+    //
+    // `absent_leader_nondet_output` is deliberately absent: it is a trie path,
+    // but it lives in the derived-outcome namespace and so is never proposable
+    // (see `leader_vm_error_in_derived_namespace_is_remapped`).
+    let codes = [
+        public_abi::VmError::timeout(),
+        public_abi::VmError::host_forbidden(),
+        public_abi::VmError::wasm_trap().val(),
+        public_abi::VmError::wasm_trap().unreachable(),
+        public_abi::VmError::out_of().storage(),
+        public_abi::VmError::out_of().memory().val(),
+        public_abi::VmError::out_of().memory().wasm_memory(),
+        public_abi::VmError::out_of().receipt().nondet_output(),
+        public_abi::VmError::out_of().message_fee().total(),
+        public_abi::VmError::fee().below_minimum(),
+        public_abi::VmError::evm().reverted(),
+        public_abi::VmError::invalid_contract().val(),
+        public_abi::VmError::invalid_contract().wasm().linking(),
+        public_abi::VmError::exit_code().val_i32(3),
+    ];
+
+    for code in codes {
+        assert!(
+            public_abi::VmError::is_valid_(&code.0),
+            "generated code {:?} must pass its own trie check",
+            code.0
+        );
+
+        let data = leader_bytes(public_abi::ResultCode::VmError, code.0.as_bytes());
+        assert!(
+            parse_leader_result(&data).is_ok(),
+            "generated code {:?} should be proposable",
+            code.0
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Publishing the leader's own result.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn leader_own_error_loses_only_its_detail() {
+    assert_eq!(
+        strip_vm_error_detail("timeout # took too long").0,
+        "timeout"
+    );
+    assert_eq!(strip_vm_error_detail("timeout").0, "timeout");
+    // Only the first separator splits: a detail may itself contain " # ".
+    assert_eq!(
+        strip_vm_error_detail("exit_code 1 # a # b").0,
+        "exit_code 1"
+    );
+}
+
+#[test]
+fn leader_own_error_is_not_self_filtered() {
+    // The acceptance check must not run on the leader's own output: rewriting an
+    // honest result into a derived-namespace code would guarantee a hash mismatch
+    // against honest validators, which unconditionally replace it again.
+    let stripped = strip_vm_error_detail("absent_leader_nondet_output # inner");
+    assert_eq!(stripped.0, "absent_leader_nondet_output");
+    assert!(
+        parse_leader_result(&leader_bytes(
+            public_abi::ResultCode::VmError,
+            stripped.0.as_bytes()
+        ))
+        .is_err(),
+        "sanity: acceptance would have rewritten this code, the publish path must not"
+    );
+}
+
+#[test]
+fn every_stripped_leader_error_round_trips_through_acceptance() {
+    // The invariant the publish path relies on: an honest leader's published
+    // bytes are exactly what an honest validator accepts. Only the derived
+    // namespace is exempt, and the leader cannot reach it (the nondet child
+    // cannot spawn a nondet child of its own).
+    for code in [
+        "timeout",
+        "host_forbidden",
+        "wasm_trap unreachable",
+        "out_of memory wasm_memory",
+        "exit_code 0",
+        "exit_code -7",
+        "invalid_contract wasm linking",
+    ] {
+        let published = strip_vm_error_detail(&format!("{code} # some detail"));
+        let data = leader_bytes(public_abi::ResultCode::VmError, published.0.as_bytes());
+
+        let accepted = parse_leader_result(&data)
+            .unwrap_or_else(|e| panic!("honest leader code {code:?} rejected as {e:?}"));
+        assert_eq!(accepted.as_bytes(), data);
+    }
 }

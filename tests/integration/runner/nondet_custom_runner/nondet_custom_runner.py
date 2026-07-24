@@ -15,7 +15,7 @@ class Contract(gl.contract.Contract):
 			# burn a long loop first, then try to use the det-registered custom
 			# runner from inside nondet. Passing custom_runners=[] grants no
 			# custom runners, so this map MUST fail. The default Python SDK path
-			# omits the field, which ADR-012 defines as grant-all for compatibility.
+			# omits the field, which is defined as grant-all for compatibility.
 			for _ in range(10**4):
 				pass
 			try:

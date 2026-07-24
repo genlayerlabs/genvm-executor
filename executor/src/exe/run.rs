@@ -160,7 +160,13 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     );
 
     let shared_data = sync::DArc::new(genvm::rt::SharedData {
-        is_sync: args.sync,
+        run_mode: if args.sync {
+            genvm::rt::RunMode::Sync
+        } else if execution_data.leader_nondet_results.is_none() {
+            genvm::rt::RunMode::Leader
+        } else {
+            genvm::rt::RunMode::Validator
+        },
         genvm_id: genvm_modules_interfaces::GenVMId(genvm_id),
         debug_mode: args.debug_mode,
         metrics,

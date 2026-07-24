@@ -92,8 +92,8 @@ pub trait Deserializer: Sized {
 
     /// Decode the next value as a [`Maybe<T>`]. Byte-backed deserializers defer:
     /// they validate as `T` (cheap, `O(depth)` retained) and keep the raw wire
-    /// bytes ([`Maybe::Checked`]). For other sources there are no bytes to keep —
-    /// the in-memory value already exists — so decoding eagerly into the (usually
+    /// bytes ([`Maybe::Checked`]). For other sources there are no bytes to keep --
+    /// the in-memory value already exists -- so decoding eagerly into the (usually
     /// smaller) `T` ([`Maybe::Materialized`]) is both simpler and cheaper.
     fn deserialize_maybe<T: Decode>(self) -> Result<Maybe<T>, DecodeError> {
         Ok(Maybe::Materialized(T::decode(self)?))
@@ -124,7 +124,7 @@ pub trait MapAccess {
     /// call before the following `next_key`.
     ///
     /// Unlike [`MapAccess::next_element`], this lets the caller pick the value's
-    /// target type *after* seeing the key — so a value can be decoded directly
+    /// target type *after* seeing the key -- so a value can be decoded directly
     /// from the underlying deserializer (e.g. deferred into [`super::Maybe`])
     /// instead of being materialized into a [`Value`] first.
     fn next_key(&mut self) -> Result<Option<&str>, DecodeError>;

@@ -5,7 +5,7 @@ from genlayer.vm import map_file, register_runner, run_nondet
 
 class Contract(gl.contract.Contract):
 	def __init__(self):
-		# ADR-012 §4 (new v2 behavior): a `RunNondet` child inherits the parent's
+		# A `RunNondet` child inherits the parent's
 		# entire custom-runner set by default (custom_runners=None). A runner
 		# registered in the deterministic parent is therefore visible inside the
 		# nondet block — the opposite of the pre-v2 blanket ban. The nondet child

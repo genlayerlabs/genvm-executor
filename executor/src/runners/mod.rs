@@ -61,17 +61,17 @@ impl ChainState {
 
 /// A parsed runner id. Runner ids come in the following forms:
 ///
-/// - `name:hash` — a packaged runner identified by its human readable name and
+/// - `name:hash` -- a packaged runner identified by its human readable name and
 ///   content hash (in debug mode `hash` may also be `test`/`latest`).
-/// - `contract` — the runner of the contract that is currently being executed.
-/// - `chain:<address>:<a|f>:<slot>` — read the runner code blob from a storage
+/// - `contract` -- the runner of the contract that is currently being executed.
+/// - `chain:<address>:<a|f>:<slot>` -- read the runner code blob from a storage
 ///   slot of an arbitrary contract. `address` is a `0x`-prefixed 20 byte hex
 ///   address, `a`/`f` selects accepted (latest non final) / finalized state and
 ///   `slot` is a 32 byte slot id encoded with GVM32 (Crockford Base32).
 ///   Both `<a|f>` and `<slot>` are optional: `<a|f>` defaults to `a` and
 ///   `<slot>` defaults to reading the target contract's root slot during
 ///   resolution (i.e. `chain:<address>` and `chain:<address>:a` are valid).
-/// - `custom:<hash>` — a runner registered at runtime, looked up by its hash.
+/// - `custom:<hash>` -- a runner registered at runtime, looked up by its hash.
 #[derive(Debug)]
 pub enum IdUnresolved {
     Builtin {
@@ -240,7 +240,7 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
     if name.is_empty() || hash.is_empty() {
         return None;
     }
-    // ADR-011 reserves `contract`, `chain` and `custom` as prefixes. `chain:`/`custom:`
+    // The runner-id scheme reserves `contract`, `chain` and `custom` as prefixes. `chain:`/`custom:`
     // are already handled above; a `contract:<hash>` id must not fall through to the
     // generic builtin arm (the bare `contract` literal is handled at the top).
     if matches!(name, "contract" | "chain" | "custom") {
@@ -276,7 +276,7 @@ mod parse_runner_id_tests {
 
     #[test]
     fn contract_is_a_reserved_builtin_name() {
-        // ADR-011 reserves `contract`; a `contract:<hash>` id must not fall through to
+        // The runner-id scheme reserves `contract`; a `contract:<hash>` id must not fall through to
         // the generic `name:hash` builtin arm.
         assert!(parse_runner_id("contract:abc123").is_none());
     }
@@ -292,9 +292,9 @@ mod parse_runner_id_tests {
 }
 
 /// The dev-mode magic builtin/custom runner hash. Its GVM32 form is the literal
-/// string `test` padded with `0`s to 52 chars (`test0000…`), which is what shows
+/// string `test` padded with `0`s to 52 chars (`test0000...`), which is what shows
 /// up on disk and in `all.json`/`latest.json`. The raw bytes below are exactly
-/// `gvm32::decode("test0000…")`. Kept in sync with `hashToIDHash` in
+/// `gvm32::decode("test0000...")`. Kept in sync with `hashToIDHash` in
 /// `runners/support/default.nix`.
 pub const TEST_RUNNER_HASH: Bytes32Hash = {
     let mut bytes = [0u8; 32];

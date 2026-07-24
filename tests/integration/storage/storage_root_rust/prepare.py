@@ -16,7 +16,15 @@ _build_info_path = (
 	Path(_build_info_env) if _build_info_env else repo_root.joinpath('build', 'info.json')
 )
 build_info = json.loads(_build_info_path.read_text())
-target_dir = Path(build_info['rust_target_dir'])
+# Every executor line has its own cargo target dir, keyed by the line's
+# manager-relative mount; a standalone build-info has no such key.
+try:
+	_mount = str(repo_root.relative_to(Path(build_info['build_dir']).parent))
+except (KeyError, ValueError):
+	_mount = ''
+target_dir = Path(
+	build_info.get('rust_target_dirs', {}).get(_mount, build_info['rust_target_dir'])
+)
 
 subprocess.run(
 	[

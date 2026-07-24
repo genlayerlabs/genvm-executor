@@ -6,6 +6,11 @@ lives in the manager's ``.genvm-tool.py``; commit hooks live in this repo's
 flake (git-hooks.nix).
 """
 
+import typing
+
+if typing.TYPE_CHECKING:
+	import genvm_tool_plugins.ninja
+
 
 def integration():
 	"""Per-executor integration test configuration.
@@ -18,7 +23,7 @@ def integration():
 	}
 
 
-def configure(line):
+def configure(line: 'genvm_tool_plugins.ninja.LineContext'):
 	"""Per-line build configuration for `genvm-tool configure`.
 
 	``line`` is a ``genvm_tool_plugins.ninja.LineContext`` the configure command
@@ -26,16 +31,9 @@ def configure(line):
 	manifests are derived through the umbrella nix machinery (``nix_manifests``),
 	which imports every active line's runners.
 	"""
-	line.register_standard_codegen()
-	# Pending public-abi constants (ADR-012): constants that logically belong to
-	# the public ABI but are parked here so they do not regenerate the runner
-	# `public_abi.py` (which would change frozen runner hashes). Generated into the
-	# `common` crate only — never the runner tree.
-	line.codegen(
-		line.exec_root / 'executor/crates/common/src/public_abi_pending.rs',
-		'rust',
-		line.exec_root / 'executor/codegen/data/public-abi-pending.json',
-	)
+	if not line.is_support_only:
+		line.register_standard_codegen()
+
 	line.register_standard_crates()
 	line.nix_manifests()
 	line.install_tree()

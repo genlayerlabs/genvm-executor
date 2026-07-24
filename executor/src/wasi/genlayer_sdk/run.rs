@@ -20,6 +20,115 @@ async fn consume_nondet_output(
     Ok(())
 }
 
+/// Is this leader-proposed `vm_error` code acceptable as-is?
+///
+/// `Err` carries the code a validator derives instead -- either
+/// `leader_output malformed` or, for a proposal that reaches into the
+/// derived-outcome namespace, `leader_output uses_this_error <h>`.
+fn validate_leader_vm_error(code: &str) -> Result<(), public_abi::VmError> {
+    // An honest leader strips its own detail before publishing, so a proposal
+    // carrying one is malformed rather than something to strip.
+    if code.contains(" # ") {
+        return Err(malformed_leader_result());
+    }
+
+    // The derived-outcome namespace is checked *before* validity, so proposing
+    // the literal `leader_output malformed` cannot yield an output byte-equal
+    // to the proposal.
+    if rt::errors::vm_error_is_of_kind(code, public_abi_pending::VmError::leader_output().prefix_())
+        || rt::errors::vm_error_is_of_kind(
+            code,
+            &abi::consts::VmError::absent_leader_nondet_output().0,
+        )
+    {
+        return Err(rt::errors::vm_error_for_leader_use_this_error(code));
+    }
+
+    // Only `vm_error` trie paths are proposable. The pending-ABI codes are
+    // deliberately excluded: `malformed_entry` is an outcome the executor
+    // derives, never one a leader may claim.
+    if !public_abi::VmError::is_valid_(code) {
+        return Err(malformed_leader_result());
+    }
+
+    Ok(())
+}
+
+fn malformed_leader_result() -> public_abi::VmError {
+    rt::errors::convert_vm_error_from_pending_abi(
+        public_abi_pending::VmError::leader_output().malformed(),
+    )
+}
+
+/// The leader's own `VMError` code as it is published to the host. The fused
+/// ` # <detail>` suffix is dropped -- the non-deterministic result channel is
+/// detail-free -- and *nothing else* happens: running the leader-result
+/// acceptance check over an honest result could only rewrite it into a
+/// derived-namespace code that validators replace again, which is a guaranteed
+/// hash mismatch between honest nodes.
+///
+/// The remaining validity is by construction (codes come from the generated
+/// constructors and from canonical `exit_code <i32>`); the assertion is a
+/// codegen-drift tripwire, not a runtime check.
+pub fn strip_vm_error_detail(code: &str) -> public_abi::VmError {
+    let public_code = code.split_once(" # ").map_or(code, |(c, _)| c);
+
+    debug_assert!(
+        public_abi::VmError::is_valid_(public_code),
+        "leader computed a vm_error outside the trie: {public_code:?}"
+    );
+
+    public_abi::VmError(std::borrow::Cow::Owned(public_code.to_owned()))
+}
+
+/// The one total parse of a leader-proposed non-deterministic result. `Ok`
+/// means the bytes are accepted verbatim (`as_bytes()` reproduces `data`);
+/// `Err` carries the VM error the validator derives instead. Malformed input
+/// never traps and never bypasses the comparison stage.
+pub fn parse_leader_result(data: &[u8]) -> Result<rt::vm::RunOk, public_abi::VmError> {
+    let Some((&code, rest)) = data.split_first() else {
+        return Err(public_abi::VmError::absent_leader_nondet_output());
+    };
+
+    let code = public_abi::ResultCode::try_from(code).map_err(|()| malformed_leader_result())?;
+
+    match code {
+        public_abi::ResultCode::Return => {
+            // Decoding yields a byte-faithful `Maybe::Checked(Raw(..))`, so keep it
+            // directly instead of re-copying `rest` into a fresh `Raw`.
+            let ret: calldata::unparsed::Maybe<calldata::Value> =
+                calldata::decode_obj(rest).map_err(|_| malformed_leader_result())?;
+
+            Ok(rt::vm::RunOk::Return(ret))
+        }
+        public_abi::ResultCode::UserError => {
+            let err: calldata::unparsed::Maybe<calldata::Value> =
+                calldata::decode_obj(rest).map_err(|_| malformed_leader_result())?;
+
+            Ok(rt::vm::RunOk::UserError(err))
+        }
+        public_abi::ResultCode::VmError => {
+            let code = std::str::from_utf8(rest).map_err(|_| malformed_leader_result())?;
+
+            validate_leader_vm_error(code)?;
+
+            Ok(rt::vm::RunOk::VMError(
+                public_abi::VmError(std::borrow::Cow::Owned(code.to_owned())),
+                None,
+            ))
+        }
+
+        public_abi::ResultCode::InternalError => Err(malformed_leader_result()),
+    }
+}
+
+struct RunNondetGetVMTaskArgs {
+    child_topmost_id: runners::Id,
+    storage_checkpoint: rt::vm::storage::Storage<wasi::genlayer_sdk::StorageHostHolder>,
+    child_custom: Vec<runners::cache::ArchivePin>,
+    call_no: u32,
+}
+
 impl ContextVFS<'_> {
     pub(super) async fn gl_call_eth_call(
         &mut self,
@@ -42,10 +151,62 @@ impl ContextVFS<'_> {
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
         self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
     }
+
+    fn run_nondet_get_vm_task(
+        &mut self,
+        message_data: ExtendedMessage,
+        args: RunNondetGetVMTaskArgs,
+    ) -> rt::supervisor::NonDetVMTask {
+        let fake_accum = VMDataAccumulator {
+            data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
+            messages_value_decremented: self.context.data.accumulator.messages_value_decremented,
+            emissions: Vec::new(),
+            message_fee_allocation: Vec::new(),
+        };
+
+        let vm_data = Box::new(SingleVMData {
+            limiter: Default::default(),
+            depth: self.context.data.depth + 1,
+            spawn_kind: "run_nondet".to_owned(),
+            // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
+            conf: base::Config {
+                needs_error_fingerprint: false,
+                permissions: base::Permissions {
+                    deterministic: false,
+                    write_storage: false,
+                    send_messages: false,
+                    call_others: false,
+                    spawn_nondet: false,
+                    register_runners: false,
+                    can_use_balance_for_message_fees: false,
+                },
+                execution: base::Execution {
+                    state_mode: public_abi::StorageType::Default,
+                    topmost_runner_id: args.child_topmost_id,
+                },
+            },
+            message_data,
+            supervisor: self.context.data.supervisor.clone(),
+            storage: args.storage_checkpoint,
+            accumulator: fake_accum,
+            det_subvm_hashes: Default::default(), // won't be used
+            // The nondet child is granted exactly the parent-computed set; the
+            // pins keep the content alive until the (possibly queued) child
+            // spawns and load-actions them against its own limiter.
+            granted_custom: args.child_custom,
+        });
+
+        rt::supervisor::NonDetVMTask {
+            task: vm_data,
+            call_no: args.call_no,
+            tasks_done: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
     pub(super) async fn gl_call_contract(
         &mut self,
         address: calldata::Address,
-        calldata: calldata::unparsed::Maybe<calldata::Value>,
+        calldata: abi::entry::MainCallData,
         mut state: public_abi::StorageType,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         if !self.context.data.conf.permissions.deterministic {
@@ -59,13 +220,10 @@ impl ContextVFS<'_> {
 
         let my_conf = self.context.data.conf.clone();
 
-        let calldata_encoded = calldata::encode_obj(&calldata);
-
-        let mut my_data = self
-            .context
-            .data
-            .message_data
-            .fork(public_abi::EntryKind::Main, calldata_encoded.into());
+        let mut my_data = self.context.data.message_data.fork(
+            public_abi::EntryKind::Main,
+            calldata::encode_obj(&calldata).into(),
+        );
         my_data.message.stack.push(my_data.message.contract_address);
 
         if state == public_abi::StorageType::Default {
@@ -143,8 +301,8 @@ impl ContextVFS<'_> {
                 message_fee_allocation: Vec::new(),
             },
             det_subvm_hashes: Default::default(),
-            // A CallContract child is granted the caller's full custom set
-            // (ADR-012 §4); its spawn load-actions each into the child.
+            // A CallContract child is granted the caller's full custom set;
+            // its spawn load-actions each into the child.
             granted_custom: self.context.loaded.custom_pins(),
         });
 
@@ -153,7 +311,7 @@ impl ContextVFS<'_> {
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         // The child is read-only (static), so its accumulator must be
-        // empty — otherwise an effect was charged but discarded here.
+        // empty -- otherwise an effect was charged but discarded here.
         res.vm_data
             .accumulator
             .check_empty()
@@ -164,6 +322,7 @@ impl ContextVFS<'_> {
 
         self.set_vm_run_result(res.run_ok).map(|x| x.0)
     }
+
     pub(super) async fn run_nondet(
         &mut self,
         data_leader: bytes::Bytes,
@@ -177,7 +336,7 @@ impl ContextVFS<'_> {
 
         // Resolve the runner to execute and the child's custom-runner visibility
         // in this (deterministic parent) scope, so malformed inputs fail
-        // deterministically at gl_call time (ADR-012 §4).
+        // deterministically at gl_call time.
         let supervisor = self.context.data.supervisor.clone();
         let parent_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
         let child_topmost_id = match &runner {
@@ -208,189 +367,72 @@ impl ContextVFS<'_> {
             )));
         }
 
-        let leaders_res_bytes = self
-            .context
-            .data
-            .supervisor
-            .get_leader_nondet_result(call_no);
-
-        let leaders_res = match leaders_res_bytes {
-            None if self.context.data.supervisor.is_leader() => None,
-            None => {
-                return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                    rt::errors::Error::vm(abi::consts::VmError::absent_leader_nondet_output())
-                        .into(),
-                )));
-            }
-            Some(data) if data.is_empty() => {
-                // A zero-length leader result is malformed: it carries no result
-                // code byte to dispatch on. It is contract-triggerable, so it must
-                // not panic via out-of-bounds indexing. In `sync` mode there are no
-                // validators to disagree, so surface a canonical VMError; otherwise
-                // record a non-deterministic disagreement and return that VMError to
-                // the validator's contract.
-                if !self.context.data.supervisor.shared_data.is_sync {
-                    self.context
-                        .data
-                        .supervisor
-                        .mark_nondet_disagreement(call_no);
-                }
-
-                let result = rt::vm::RunOk::VMError(
-                    abi::consts::VmError::absent_leader_nondet_output(),
-                    None,
-                );
-
-                consume_nondet_output(
-                    &self.context.data.supervisor.shared_data,
-                    result.as_bytes().len() as u64,
-                )
-                .await?;
-
-                return self.set_vm_run_result(result).map(|x| x.0);
-            }
-            Some(data) => {
-                use crate::public_abi::ResultCode;
-                let rest = &data[1..];
-                let res = match data[0] {
-                    x if x == ResultCode::Return as u8 => {
-                        rt::vm::RunOk::Return(calldata::unparsed::Maybe::Checked(
-                            calldata::unparsed::Raw(bytes::Bytes::copy_from_slice(rest)),
-                        ))
-                    }
-                    x if x == ResultCode::UserError as u8 => {
-                        let val = calldata::decode(rest).map_err(|e| {
-                            generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                                anyhow::anyhow!(e),
-                            ))
-                        })?;
-                        rt::vm::RunOk::UserError(calldata::unparsed::Maybe::Materialized(val))
-                    }
-                    x if x == ResultCode::VmError as u8 => {
-                        let code = std::str::from_utf8(rest).map_err(|e| {
-                            generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                                anyhow::anyhow!(e),
-                            ))
-                        })?;
-                        rt::vm::RunOk::VMError(
-                            public_abi::VmError(std::borrow::Cow::Owned(code.to_owned())),
-                            None,
-                        )
-                    }
-                    x => {
-                        return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                            anyhow::anyhow!("invalid leader result code: {}", x),
-                        )));
-                    }
-                };
-                Some(res)
-            }
+        let run_nondet_get_vm_task_args = RunNondetGetVMTaskArgs {
+            child_topmost_id,
+            storage_checkpoint: self.context.data.storage.clone(),
+            child_custom,
+            call_no,
         };
 
-        let result_to_return = if self.context.data.supervisor.shared_data.is_sync {
-            match leaders_res {
-                None => {
-                    return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                        anyhow::anyhow!("absent leader result in sync mode, call_no: {}", call_no),
-                    )))
+        let result_to_return = if self.context.data.supervisor.shared_data.run_mode
+            == rt::RunMode::Leader
+        {
+            let vm_ext_msg = self.context.data.message_data.fork_leader(
+                public_abi::EntryKind::ConsensusStage,
+                data_leader,
+                None,
+            );
+
+            let task = self.run_nondet_get_vm_task(vm_ext_msg, run_nondet_get_vm_task_args);
+
+            let computed_result = task
+                .run_now(&self.context.data.supervisor)
+                .await
+                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+            let computed_result = match computed_result {
+                // Publish the bare code, keep the detail as a local cause.
+                rt::vm::RunOk::VMError(err, cause) => {
+                    rt::vm::RunOk::VMError(strip_vm_error_detail(&err.0), cause)
                 }
-                Some(v) => v,
-            }
+                computed_result => computed_result,
+            };
+
+            self.context
+                .data
+                .supervisor
+                .push_nondet_result(call_no, bytes::Bytes::from(computed_result.as_bytes()))
+                .await;
+
+            computed_result
         } else {
-            let storage_checkpoint = self.context.data.storage.clone();
+            let leaders_res_bytes = self
+                .context
+                .data
+                .supervisor
+                .get_leader_nondet_result(call_no);
 
-            let message_data = match &leaders_res {
-                None => self.context.data.message_data.fork_leader(
+            // Absent and empty must produce the same outcome (`Supervisor`
+            // pads gaps with empty `Bytes`), which is exactly what the empty
+            // slice already yields -- so one call covers both.
+            let leaders_res = match parse_leader_result(&leaders_res_bytes.unwrap_or_default()) {
+                Ok(res) => res,
+                Err(vm_error) => rt::vm::RunOk::VMError(vm_error, None),
+            };
+
+            if self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Validator {
+                let vm_ext_msg = self.context.data.message_data.fork_leader(
                     public_abi::EntryKind::ConsensusStage,
-                    data_leader,
-                    None,
-                ),
-                Some(leaders_res) => {
-                    let dup = match leaders_res {
-                        rt::vm::RunOk::Return(items) => rt::vm::RunOk::Return(items.clone()),
-                        rt::vm::RunOk::UserError(msg) => rt::vm::RunOk::UserError(msg.clone()),
-                        rt::vm::RunOk::VMError(msg, _) => rt::vm::RunOk::VMError(msg.clone(), None),
-                    };
-                    self.context.data.message_data.fork_leader(
-                        public_abi::EntryKind::ConsensusStage,
-                        data_validator,
-                        Some(dup),
-                    )
-                }
-            };
+                    data_validator,
+                    Some(leaders_res.duplicate()),
+                );
 
-            let fake_accum = VMDataAccumulator {
-                data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
-                messages_value_decremented: self
-                    .context
-                    .data
-                    .accumulator
-                    .messages_value_decremented,
-                emissions: Vec::new(),
-                message_fee_allocation: Vec::new(),
-            };
+                let task = self.run_nondet_get_vm_task(vm_ext_msg, run_nondet_get_vm_task_args);
 
-            let vm_data = Box::new(SingleVMData {
-                limiter: Default::default(),
-                depth: self.context.data.depth + 1,
-                spawn_kind: "run_nondet".to_owned(),
-                // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
-                conf: base::Config {
-                    needs_error_fingerprint: false,
-                    permissions: base::Permissions {
-                        deterministic: false,
-                        write_storage: false,
-                        send_messages: false,
-                        call_others: false,
-                        spawn_nondet: false,
-                        register_runners: false,
-                        can_use_balance_for_message_fees: false,
-                    },
-                    execution: base::Execution {
-                        state_mode: public_abi::StorageType::Default,
-                        topmost_runner_id: child_topmost_id,
-                    },
-                },
-                message_data,
-                supervisor: supervisor.clone(),
-                storage: storage_checkpoint,
-                accumulator: fake_accum,
-                det_subvm_hashes: Default::default(), // won't be used
-                // The nondet child is granted exactly the parent-computed set; the
-                // pins keep the content alive until the (possibly queued) child
-                // spawns and load-actions them against its own limiter (ADR-012 §4).
-                granted_custom: child_custom,
-            });
-
-            let task_done = Arc::new(tokio::sync::Notify::new());
-            let task = rt::supervisor::NonDetVMTask {
-                task: vm_data,
-                call_no,
-                tasks_done: task_done.clone(),
-            };
-
-            match leaders_res {
-                None => {
-                    let res = task
-                        .run_now(&self.context.data.supervisor)
-                        .await
-                        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-
-                    self.context
-                        .data
-                        .supervisor
-                        .push_nondet_result(call_no, bytes::Bytes::from(res.as_bytes()))
-                        .await;
-
-                    res
-                }
-                Some(leaders_res) => {
-                    rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task)
-                        .await;
-
-                    leaders_res
-                }
+                rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task).await;
             }
+
+            leaders_res
         };
 
         consume_nondet_output(
@@ -419,10 +461,10 @@ impl ContextVFS<'_> {
                 .await
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
-        // Grants are validated against, and drawn from, this VM's loaded set (§4).
+        // Grants are validated against, and drawn from, this VM's loaded set.
         // No flow-back is possible by construction: the child's own loaded set (and
         // any runner it registers) dies with it, and the parent's loaded set is
-        // never mutated here (§5).
+        // never mutated here.
         let child_custom = rt::supervisor::actions::resolve_child_custom_runners(
             &self.context.loaded,
             custom_runners,

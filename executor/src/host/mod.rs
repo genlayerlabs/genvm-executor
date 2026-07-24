@@ -429,7 +429,7 @@ fn convert_emission(
         } => genvm_modules_interfaces::ExecutionEmission::PostMessage {
             call_key: convert_call_key(call_key),
             address,
-            calldata,
+            calldata: calldata::unparsed::Maybe::from_raw(calldata::encode_obj(&calldata).into()),
             value,
             on: convert_on(on),
             message_fee,
@@ -450,7 +450,7 @@ fn convert_emission(
             subtree,
             use_balance,
         } => genvm_modules_interfaces::ExecutionEmission::DeployContract {
-            calldata,
+            calldata: calldata::unparsed::Maybe::from_raw(calldata::encode_obj(&calldata).into()),
             code,
             value,
             on: convert_on(on),

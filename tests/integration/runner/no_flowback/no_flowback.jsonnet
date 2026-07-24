@@ -1,6 +1,6 @@
 local simple = import 'templates/simple_deploy.jsonnet';
 local util = import 'templates/util.jsonnet';
-// ADR-012 §4: a sandbox-scoped `RegisterRunner` does not flow back to the
+// A sandbox-scoped `RegisterRunner` does not flow back to the
 // parent. The child charges the custom exactly once (`charged`); the parent's
 // later attempt to resolve that id fails deterministically (no parent charge
 // record for it) and the run ends as an invalid-contract VM error.

@@ -1,6 +1,5 @@
 //! Backward-compat / round-trip coverage for the runner-visibility fields
-//! (`custom_runners`, and `RunNondet::runner`) added to `Sandbox` / `RunNondet`
-//! (ADR-012).
+//! (`custom_runners`, and `RunNondet::runner`) added to `Sandbox` / `RunNondet`.
 
 use bytes::Bytes;
 use genlayer_sdk::abi::gl_call::Message;
@@ -17,7 +16,7 @@ macro_rules! encode {
 }
 
 /// A `Sandbox` map produced before the field existed (no `custom_runners` key)
-/// decodes with `None` — the "inherit the parent's whole set" default.
+/// decodes with `None` -- the "inherit the parent's whole set" default.
 #[test]
 fn sandbox_old_encoding_defaults_to_none() {
     // Mirrors the pre-feature `Sandbox` variant (same wire name and fields), so

@@ -17,7 +17,7 @@ fn decode_from_value<T: codec::Decode>(val: Value) -> T {
     T::decode(codec::ValueDeserializer(val)).unwrap()
 }
 
-// ── Struct types ─────────────────────────────────────────────────────
+// -- Struct types -----------------------------------------------------
 
 #[derive(Debug, PartialEq, Encode, Decode)]
 struct Simple {
@@ -31,7 +31,7 @@ struct Newtype(u64);
 #[derive(Debug, PartialEq, Encode, Decode)]
 struct Unit;
 
-// ── Enum types ───────────────────────────────────────────────────────
+// -- Enum types -------------------------------------------------------
 
 #[derive(Debug, PartialEq, Encode, Decode)]
 enum External {
@@ -51,7 +51,7 @@ enum Tagged {
     Beta { val: bool },
 }
 
-// ── Struct with default ──────────────────────────────────────────────
+// -- Struct with default ----------------------------------------------
 
 fn default_score() -> u32 {
     42
@@ -64,7 +64,7 @@ struct WithDefault {
     score: u32,
 }
 
-// ── Tests ────────────────────────────────────────────────────────────
+// -- Tests ------------------------------------------------------------
 
 #[test]
 fn struct_roundtrip() {

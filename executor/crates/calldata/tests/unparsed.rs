@@ -6,7 +6,7 @@ fn sample_value() -> Value {
     Value::Array(vec![Value::Null, Value::Null, Value::Null])
 }
 
-// ── Maybe: deferred decode ───────────────────────────────────────────
+// -- Maybe: deferred decode -------------------------------------------
 
 #[test]
 fn maybe_from_wire_keeps_raw_bytes() {
@@ -37,7 +37,7 @@ fn maybe_from_value_materializes_eagerly() {
     assert_eq!(m.materialize().unwrap(), val);
 }
 
-// ── Maybe: validation against the target type ────────────────────────
+// -- Maybe: validation against the target type ------------------------
 
 #[test]
 fn maybe_validates_target_type_at_decode_time() {
@@ -52,7 +52,7 @@ fn maybe_validates_target_type_at_decode_time() {
     assert!(err.to_string().contains("str"), "unexpected error: {err}");
 }
 
-// ── Raw ──────────────────────────────────────────────────────────────
+// -- Raw --------------------------------------------------------------
 
 #[test]
 fn raw_from_wire_is_the_original_bytes() {
@@ -75,7 +75,7 @@ fn raw_from_value_is_the_canonical_encoding() {
     assert_eq!(raw.decode_as::<Value>().unwrap(), val);
 }
 
-// ── A host-action enum whose heavy payloads stay deferred ────────────
+// -- A host-action enum whose heavy payloads stay deferred ------------
 //
 // The enum structure (which variant, the `topics`) is decoded eagerly, while
 // the bulky `Value` / `Map` payloads are kept as validated raw bytes until a

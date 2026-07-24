@@ -49,7 +49,7 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-// ── Structs ──────────────────────────────────────────────────────────
+// -- Structs ----------------------------------------------------------
 
 fn encode_struct(fields: &Fields) -> syn::Result<TokenStream> {
     match fields {
@@ -57,6 +57,7 @@ fn encode_struct(fields: &Fields) -> syn::Result<TokenStream> {
         Fields::Unnamed(fields) => {
             if fields.unnamed.len() == 1 {
                 let attrs = FieldAttrs::from_ast(&fields.unnamed[0].attrs)?;
+                attrs.reject_option_as_absence_here(&fields.unnamed[0])?;
                 if let Some(func) = &attrs.serialize_with {
                     Ok(quote! { #func(&self.0, __enc) })
                 } else {
@@ -73,6 +74,7 @@ fn encode_struct(fields: &Fields) -> syn::Result<TokenStream> {
                     .map(|(i, f)| {
                         let idx = syn::Index::from(i);
                         let attrs = FieldAttrs::from_ast(&f.attrs)?;
+                        attrs.reject_option_as_absence_here(f)?;
                         if let Some(func) = &attrs.serialize_with {
                             Ok(quote! { #func(&self.#idx, __enc)?; })
                         } else {
@@ -108,18 +110,59 @@ fn encode_named_fields(
     fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
     access: FieldAccess,
 ) -> syn::Result<TokenStream> {
-    let mut entries: Vec<(String, &syn::Ident, FieldAttrs)> = Vec::new();
+    let mut entries: Vec<(String, &syn::Ident, &syn::Type, FieldAttrs)> = Vec::new();
     for f in fields {
         let ident = f.ident.as_ref().unwrap();
         let attrs = FieldAttrs::from_ast(&f.attrs)?;
+        // Reject `option_as_absence` on a non-`Option<T>` field early, with a
+        // clear message, rather than letting the generated `.is_some()` fail to
+        // compile with a cryptic one.
+        if attrs.option_as_absence && crate::attrs::option_inner_ty(&f.ty).is_none() {
+            return Err(syn::Error::new_spanned(
+                ident,
+                "`option_as_absence` requires the field to be spelled `Option<T>`",
+            ));
+        }
         let wire = attrs.wire_name(ident);
-        entries.push((wire, ident, attrs));
+        entries.push((wire, ident, &f.ty, attrs));
     }
+
     // BTreeMap-order: sort by wire name.
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let len = entries.len() as u64;
-    let encodes = entries.iter().map(|(wire, ident, attrs)| {
+    let access_field = |ident: &syn::Ident| match access {
+        FieldAccess::SelfDot => quote! { self.#ident },
+        FieldAccess::Binding => quote! { (*#ident) },
+    };
+
+    // Fields without `option_as_absence` are always present; the rest add a
+    // runtime `is_some()` term so the map length matches the emitted keys.
+    let base_len = entries
+        .iter()
+        .filter(|(_, _, _, a)| !a.option_as_absence)
+        .count() as u64;
+    let len_terms = entries
+        .iter()
+        .filter(|(_, _, _, a)| a.option_as_absence)
+        .map(|(_, ident, _, _)| {
+            let acc = access_field(ident);
+            quote! { + (#acc.is_some() as u64) }
+        });
+
+    let encodes = entries.iter().map(|(wire, ident, _, attrs)| {
+        // `option_as_absence` is incompatible with `serialize_with` (rejected in
+        // `FieldAttrs::from_ast`), so the inner value always uses the plain path.
+        if attrs.option_as_absence {
+            let acc = access_field(ident);
+            // Encode the inner `T` (not the `Option`), and only when present.
+            return quote! {
+                if let ::core::option::Option::Some(__v) = &#acc {
+                    __enc.push_map_k(#wire)?;
+                    genlayer_calldata::codec::Encode::encode(__v, __enc)?;
+                }
+            };
+        }
+
         let key_encode = quote! { __enc.push_map_k(#wire)?; };
 
         let value_encode = match access {
@@ -146,13 +189,14 @@ fn encode_named_fields(
     });
 
     Ok(quote! {
-        __enc.start_map(#len)?;
+        let __len: u64 = #base_len #(#len_terms)*;
+        __enc.start_map(__len)?;
         #(#encodes)*
         Ok(())
     })
 }
 
-// ── Enums ────────────────────────────────────────────────────────────
+// -- Enums ------------------------------------------------------------
 
 fn encode_enum(data: &syn::DataEnum, container: &ContainerAttrs) -> syn::Result<TokenStream> {
     if container.untagged {
@@ -184,6 +228,7 @@ fn encode_enum_external(data: &syn::DataEnum) -> syn::Result<TokenStream> {
 
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                     let fattrs = FieldAttrs::from_ast(&fields.unnamed[0].attrs)?;
+                    fattrs.reject_option_as_absence_here(&fields.unnamed[0])?;
                     let ser_fn = fattrs
                         .serialize_with
                         .as_ref()
@@ -216,6 +261,7 @@ fn encode_enum_external(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                         .zip(&bindings)
                         .map(|(f, b)| {
                             let fattrs = FieldAttrs::from_ast(&f.attrs)?;
+                            fattrs.reject_option_as_absence_here(f)?;
                             if let Some(func) = &fattrs.serialize_with {
                                 Ok(quote! { #func(#b, __enc)?; })
                             } else {
@@ -241,6 +287,7 @@ fn encode_enum_external(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                     for f in &fields.named {
                         let ident = f.ident.as_ref().unwrap();
                         let attrs = FieldAttrs::from_ast(&f.attrs)?;
+                        attrs.reject_option_as_absence_here(ident)?;
                         let w = attrs.wire_name(ident);
                         entries.push((w, ident, attrs));
                     }
@@ -305,6 +352,7 @@ fn encode_enum_untagged(data: &syn::DataEnum) -> syn::Result<TokenStream> {
 
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                     let fattrs = FieldAttrs::from_ast(&fields.unnamed[0].attrs)?;
+                    fattrs.reject_option_as_absence_here(&fields.unnamed[0])?;
                     let ser_fn = fattrs
                         .serialize_with
                         .as_ref()
@@ -334,6 +382,7 @@ fn encode_enum_untagged(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                         .zip(&bindings)
                         .map(|(f, b)| {
                             let fattrs = FieldAttrs::from_ast(&f.attrs)?;
+                            fattrs.reject_option_as_absence_here(f)?;
                             if let Some(func) = &fattrs.serialize_with {
                                 Ok(quote! { #func(#b, __enc)?; })
                             } else {
@@ -356,6 +405,7 @@ fn encode_enum_untagged(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                     for f in &fields.named {
                         let ident = f.ident.as_ref().unwrap();
                         let attrs = FieldAttrs::from_ast(&f.attrs)?;
+                        attrs.reject_option_as_absence_here(ident)?;
                         let w = attrs.wire_name(ident);
                         entries.push((w, ident, attrs));
                     }
@@ -433,6 +483,7 @@ fn encode_enum_tagged(data: &syn::DataEnum, tag_field: &str) -> syn::Result<Toke
                     for f in &fields.named {
                         let ident = f.ident.as_ref().unwrap();
                         let attrs = FieldAttrs::from_ast(&f.attrs)?;
+                        attrs.reject_option_as_absence_here(ident)?;
                         let w = attrs.wire_name(ident);
                         if w == tag_field {
                             return Err(syn::Error::new_spanned(

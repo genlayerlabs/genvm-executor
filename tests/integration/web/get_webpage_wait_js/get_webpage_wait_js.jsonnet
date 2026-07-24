@@ -5,12 +5,6 @@ local util = import 'templates/util.jsonnet';
 {tags: util.features([['web', 'render'], ['nondet']], 'unstable'),
 	entry: util.addPaths([util.chain([
 	s {
-		"calldata": |||
-			{
-				"": "main",
-				"args": ["15s"]
-			}
-		|||,
 		deadline: 60,
 		stable_hash: false,
 	},

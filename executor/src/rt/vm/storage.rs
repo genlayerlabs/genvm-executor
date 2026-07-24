@@ -489,10 +489,9 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
     }
 
     /// Reads the 4-byte little-endian length prefix of the code blob at
-    /// `code_slot`. Cheap (one slot read, no fee metering) — the runner load
+    /// `code_slot`. Cheap (one slot read, no fee metering) -- the runner load
     /// action reads this first to learn the size to charge *before* fetching the
-    /// blob, so a single `RUNNER_LOAD_COST + code_size` charge covers the peak
-    /// (ADR-012 §1).
+    /// blob, so a single `RUNNER_LOAD_COST + code_size` charge covers the peak.
     pub async fn read_code_len(&mut self, code_slot: SlotID) -> rt::errors::Result<u32> {
         let mut len_buf = [0; 4];
         self.read(code_slot, 0, &mut len_buf).await?;
@@ -520,7 +519,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
 mod tests {
     use super::*;
 
-    // ── code slot reads (runner load action support) ────────────────────
+    // -- code slot reads (runner load action support) --------------------
 
     /// In-memory host: one slot whose content is `code_len_le ++ code`; reads
     /// beyond the content are zero-filled (like unwritten storage).
@@ -588,7 +587,7 @@ mod tests {
     }
 
     /// The runner load action reads the 4-byte length prefix first (to know
-    /// what to charge), then the blob at offset 4 — the two reads must
+    /// what to charge), then the blob at offset 4 -- the two reads must
     /// reassemble exactly the stored code.
     #[tokio::test]
     async fn code_len_then_blob_reassembles_the_code() {
@@ -612,7 +611,7 @@ mod tests {
         assert!(storage.read_code_blob(slot, 0).await.unwrap().is_empty());
     }
 
-    // ── page id ordering ────────────────────────────────────────────────
+    // -- page id ordering ------------------------------------------------
 
     #[test]
     fn pages_sorted_correctly_1_byte() {

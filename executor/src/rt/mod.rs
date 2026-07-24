@@ -46,9 +46,16 @@ impl<T> DetNondet<T> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RunMode {
+    Sync,
+    Leader,
+    Validator,
+}
+
 /// basic data that is shared across all VMs
 pub struct SharedData {
-    pub is_sync: bool,
+    pub run_mode: RunMode,
     pub genvm_id: genvm_modules_interfaces::GenVMId,
     pub debug_mode: genvm_common::DebugMode,
     pub metrics: crate::Metrics,

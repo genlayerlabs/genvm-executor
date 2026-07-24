@@ -134,6 +134,20 @@ impl VmErrorDetail {
     pub const fn external() -> Self { Self(Cow::Borrowed("external")) }
 }
 
+#[rustfmt::skip]
+impl VmErrorDetail {
+    /// Whether `s` is a well-formed `vm_error_detail` path.
+    pub fn is_valid_(s: &str) -> bool {
+        if matches!(s,
+            "internal" |
+            "external"
+        ) {
+            return true;
+        }
+        false
+    }
+}
+
 pub const CURRENT_MAJOR: u8 = 0;
 pub const CURRENT_MAJOR_STR: &'static str = "v0.0.0";
 

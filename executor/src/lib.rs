@@ -7,6 +7,7 @@ pub mod rt;
 pub mod runners;
 pub mod wasi;
 
+use genlayer_sdk::abi;
 pub use genlayer_sdk::abi::consts as public_abi;
 
 pub use genlayer_sdk::calldata;
@@ -170,6 +171,29 @@ fn convert_message_data(
     }
 }
 
+fn extra_leader_output_error(
+    supervisor: &rt::supervisor::Supervisor,
+    run_ok: &rt::vm::RunOk,
+) -> Option<public_abi::VmError> {
+    if supervisor.shared_data.run_mode == rt::RunMode::Leader {
+        return None;
+    }
+
+    let executed = supervisor
+        .nondet_call_no
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let published = supervisor
+        .leader_nondet_results
+        .as_ref()
+        .map_or(0, |v| v.len() as u32);
+
+    if published <= executed {
+        return None;
+    }
+
+    Some(rt::errors::vm_error_for_leader_extra(&run_ok.as_bytes()))
+}
+
 pub async fn run_with_impl(
     entry_data: genvm_modules_interfaces::ExecutionData,
     context: &ExecutionContext,
@@ -192,6 +216,27 @@ pub async fn run_with_impl(
     );
 
     let (topmost_runner_id, root_permissions) = match async {
+        let entry_call_data: abi::entry::MainCallData = calldata::decode_obj(&entry_data.calldata)
+            .map_err(|e| rt::errors::Error {
+                kind: rt::errors::ErrorKind::Vm(
+                    rt::errors::convert_vm_error_from_pending_abi(
+                        public_abi_pending::VmError::malformed_entry(),
+                    ),
+                    None,
+                ),
+                context: Vec::new(),
+                source: Some(Box::new(e)),
+            })?;
+
+        if entry_data.message.is_init && entry_call_data.name.is_some() {
+            return Err(
+                rt::errors::Error::vm(rt::errors::convert_vm_error_from_pending_abi(
+                    public_abi_pending::VmError::malformed_entry(),
+                ))
+                .into(),
+            );
+        }
+
         // Contract-owned permissions live in the root slot, not the node-granted
         // `permissions` string; pre-read them before running the wasm.
         let root_permissions = topmost_storage.read_permissions().await?;
@@ -243,9 +288,13 @@ pub async fn run_with_impl(
         // failure: surface it as a VMError result. Genuine internal errors still
         // propagate via `?`.
         Err(e) => {
-            return Ok(rt::vm::FullResult::empty_from(
-                rt::errors::unwrap_vm_errors(e.into())?,
-            ));
+            let run_ok = rt::errors::unwrap_vm_errors(e.into())?;
+            if let Some(code) = extra_leader_output_error(&supervisor, &run_ok) {
+                return Ok(rt::vm::FullResult::empty_from(rt::vm::RunOk::VMError(
+                    code, None,
+                )));
+            }
+            return Ok(rt::vm::FullResult::empty_from(run_ok));
         }
     };
 
@@ -298,6 +347,12 @@ pub async fn run_with_impl(
 
     let run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
 
+    if let Some(code) = extra_leader_output_error(&supervisor, &run_result.run_ok) {
+        return Ok(rt::vm::FullResult::empty_from(rt::vm::RunOk::VMError(
+            code, None,
+        )));
+    }
+
     Ok(rt::vm::FullResult {
         kind: match &run_result.run_ok {
             rt::vm::RunOk::Return(_) => public_abi::ResultCode::Return,
@@ -324,9 +379,9 @@ pub async fn run_with(
     context: ExecutionContext,
     permissions: &str,
 ) -> anyhow::Result<host::FullResult> {
-    // Deploy-time weak-cache bridge (ADR-012): the prepopulated deploy-runner
+    // Deploy-time weak-cache bridge: the prepopulated deploy-runner
     // entry must outlive not just the deterministic run but also the secondary
-    // nondet validator queue — a queued nondet VM whose runner is `contract`
+    // nondet validator queue -- a queued nondet VM whose runner is `contract`
     // during deploy attaches to this very entry at spawn. Dropping the pin
     // earlier would make that load's outcome depend on which queue processed it.
     let mut deploy_pin: Option<runners::cache::ArchivePin> = None;

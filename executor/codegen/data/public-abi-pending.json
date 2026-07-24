@@ -1,2 +1,17 @@
 [
+  {
+    "type": "str_trie",
+    "name": "vm_error",
+    "values": [
+      "malformed_entry",
+      {
+        "head": "leader_output",
+        "tail": [
+          "malformed",
+          { "head": "uses_this_error", "tail": "$str" },
+          { "head": "extra", "tail": "$str" }
+        ]
+      }
+    ]
+  }
 ]

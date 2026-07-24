@@ -7,6 +7,8 @@ root = Path(__file__).parent
 # Resolve the executor checkout root by marker, independent of how deep
 # this test sits under tests/ (so moving cases never breaks this).
 repo_root = next(p for p in root.parents if (p / '.genvm-executor-root').exists())
+
+# Build artifacts live in the manager (umbrella) root; the harness passes the
 # absolute build-info path via GENVM_BUILD_INFO. Fall back to the old relative
 # location for standalone use.
 _build_info_env = os.environ.get('GENVM_BUILD_INFO')
@@ -14,7 +16,15 @@ _build_info_path = (
 	Path(_build_info_env) if _build_info_env else repo_root.joinpath('build', 'info.json')
 )
 build_info = json.loads(_build_info_path.read_text())
-target_dir = Path(build_info['rust_target_dir'])
+# Every executor line has its own cargo target dir, keyed by the line's
+# manager-relative mount; a standalone build-info has no such key.
+try:
+	_mount = str(repo_root.relative_to(Path(build_info['build_dir']).parent))
+except (KeyError, ValueError):
+	_mount = ''
+target_dir = Path(
+	build_info.get('rust_target_dirs', {}).get(_mount, build_info['rust_target_dir'])
+)
 
 subprocess.run(
 	[

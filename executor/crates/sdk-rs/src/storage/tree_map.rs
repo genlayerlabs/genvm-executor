@@ -229,7 +229,7 @@ where
     {
         let (mut seq, is_left) = self.find_path(k);
 
-        // key exists → update value
+        // key exists -> update value
         if *seq.last().unwrap() != 0 {
             let node = self.node(*seq.last().unwrap());
             V::storage_set(&node.value(), v);

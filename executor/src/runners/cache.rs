@@ -14,7 +14,7 @@ pub type Cell = Arc<tokio::sync::OnceCell<ArchiveCache>>;
 /// held the content stays resident; when the last pin drops the weak map's entry
 /// becomes dead and is purged on next access, freeing the bytes. Pins live in a
 /// VM's [`LoadedSet`] (its store data) and thus die with the VM, when the bytes
-/// become freeable (ADR-012).
+/// become freeable.
 #[derive(Clone)]
 pub struct ArchivePin(Cell);
 
@@ -25,8 +25,8 @@ impl ArchivePin {
             .expect("an ArchivePin always wraps an initialized cell")
     }
 
-    /// The charged size of this runner's content — the archive `total_size`,
-    /// which for every source equals the raw content length (ADR-012 §1).
+    /// The charged size of this runner's content -- the archive `total_size`,
+    /// which for every source equals the raw content length.
     pub fn total_size(&self) -> u32 {
         self.entry().files.total_size
     }
@@ -52,13 +52,13 @@ impl std::fmt::Debug for ArchivePin {
 /// canonical runner id to the pin keeping its content resident. Stored next to
 /// the VM's limiter (in its store data), **not** in the accumulator: the
 /// accumulator round-trips through sandbox children, whereas the loaded set must
-/// die with its VM. It is both the "already loaded → free" set and the pin
-/// holder; those must never be split (ADR-012 §1).
+/// die with its VM. It is both the "already loaded -> free" set and the pin
+/// holder; those must never be split.
 #[derive(Default)]
 pub struct LoadedSet(HashMap<GlobalSymbol, ArchivePin>);
 
 impl LoadedSet {
-    /// Whether `id` is already loaded in this VM (→ a load action is free).
+    /// Whether `id` is already loaded in this VM (-> a load action is free).
     pub fn contains(&self, id: GlobalSymbol) -> bool {
         self.0.contains_key(&id)
     }
@@ -81,8 +81,8 @@ impl LoadedSet {
         self.assert_invariants();
     }
 
-    /// Pins of the `custom:` runners loaded in this VM, in id order — the set a
-    /// child may be granted (ADR-012 §4). The string-prefix filter is sound
+    /// Pins of the `custom:` runners loaded in this VM, in id order -- the set a
+    /// child may be granted. The string-prefix filter is sound
     /// because `parse_runner_id` reserves `custom:` (a builtin name can never be
     /// `custom`), so no other id kind can produce the prefix canonically.
     pub fn custom_pins(&self) -> Vec<ArchivePin> {
@@ -113,8 +113,8 @@ impl LoadedSet {
 /// Weakly-held content index: the map owns only [`Weak`](std::sync::Weak)
 /// references, so an entry lives exactly as long as some [`ArchivePin`] to it
 /// does. Dead weaks are purged lazily when their key is next touched. Backs both
-/// the disk/chain archive cache and the custom-runner registry — a pure dedup
-/// mechanism whose state a VM cannot observe (ADR-012 §1).
+/// the disk/chain archive cache and the custom-runner registry -- a pure dedup
+/// mechanism whose state a VM cannot observe.
 pub struct WeakCache(
     dashmap::DashMap<GlobalSymbol, std::sync::Weak<tokio::sync::OnceCell<ArchiveCache>>>,
 );
@@ -186,8 +186,8 @@ impl WeakCache {
     }
 
     /// Teardown check: no live entry may remain. Called after every VM (and thus
-    /// every pin) is dropped, asserting the ADR-012 invariant that resident
-    /// content is always covered by a live pin — with no live VMs, none is
+    /// every pin) is dropped, asserting the invariant that resident
+    /// content is always covered by a live pin -- with no live VMs, none is
     /// pinned. Debug-only.
     #[cfg(debug_assertions)]
     pub fn assert_empty_on_teardown(&self, what: &str) {
@@ -253,7 +253,7 @@ pub struct Reader {
 impl Drop for Reader {
     fn drop(&mut self) {
         // Supervisor teardown happens after every VM is dropped, so every pin is
-        // gone and the weak map must hold no live entry (ADR-012 §1).
+        // gone and the weak map must hold no live entry.
         #[cfg(debug_assertions)]
         self.cache.assert_empty_on_teardown("archive");
     }
@@ -315,7 +315,7 @@ impl Reader {
 
     /// The shared, weakly-held content cell for a disk/`chain:` runner id. The
     /// load action attaches to it (if a live pin already initialized it) or
-    /// initializes it via its own creator (ADR-012 §1).
+    /// initializes it via its own creator.
     pub fn cell(&self, id: symbol_table::GlobalSymbol) -> Cell {
         self.cache.cell(id)
     }
@@ -386,7 +386,7 @@ mod tests {
         (cache, ArchivePin(cell))
     }
 
-    // ── LoadedSet ───────────────────────────────────────────────────────
+    // -- LoadedSet -------------------------------------------------------
 
     #[test]
     fn loaded_set_reports_membership_and_pin() {
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(ids, vec!["custom:aaa", "custom:bbb"], "only custom, sorted");
     }
 
-    // ── WeakCache eviction ──────────────────────────────────────────────
+    // -- WeakCache eviction ----------------------------------------------
 
     #[test]
     fn weak_cache_evicts_when_last_pin_drops() {

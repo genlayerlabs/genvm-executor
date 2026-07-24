@@ -56,52 +56,6 @@ fn encode_datetime_rfc3339<W: calldata::Writer>(
     enc.push_str(&s)
 }
 
-fn entry_kind_as_int<S>(data: &EntryKind, s: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    s.serialize_u8(*data as u8)
-}
-
-fn entry_kind_from_int<'de, D>(deserializer: D) -> Result<EntryKind, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct Visitor;
-
-    impl serde::de::Visitor<'_> for Visitor {
-        type Value = EntryKind;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("an integer 0, 1, or 2")
-        }
-
-        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            match v {
-                0 => Ok(EntryKind::Main),
-                1 => Ok(EntryKind::Sandbox),
-                2 => Ok(EntryKind::ConsensusStage),
-                _ => Err(E::invalid_value(
-                    serde::de::Unexpected::Unsigned(v),
-                    &"0, 1, or 2",
-                )),
-            }
-        }
-
-        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            self.visit_u64(v as u64)
-        }
-    }
-
-    deserializer.deserialize_any(Visitor)
-}
-
 fn default_stack() -> Vec<Address> {
     Vec::new()
 }
@@ -114,6 +68,26 @@ fn default_datetime() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339("2024-11-26T06:42:42.424242Z")
         .unwrap()
         .to_utc()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, calldata::Encode, calldata::Decode)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct MainCallData {
+    #[calldata(rename = "", option_as_absence)]
+    pub name: Option<String>,
+    #[calldata(option_as_absence)]
+    pub args: Option<Vec<calldata::unparsed::Maybe<Value>>>,
+    #[calldata(option_as_absence)]
+    pub kwargs: Option<calldata::Map<calldata::unparsed::Maybe<Value>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, calldata::Encode, calldata::Decode)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct MainDeployData {
+    #[calldata(option_as_absence)]
+    pub args: Option<Vec<calldata::unparsed::Maybe<Value>>>,
+    #[calldata(option_as_absence)]
+    pub kwargs: Option<calldata::Map<calldata::unparsed::Maybe<Value>>>,
 }
 
 /// Core message data that represents the transaction context.
@@ -183,22 +157,19 @@ impl<'a> arbitrary::Arbitrary<'a> for MessageData {
 
 /// Flat struct with all fields manually listed (no flatten) to avoid serde's Content buffering
 /// which breaks type-name-based Address handling during deserialization.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, calldata::Encode, calldata::Decode)]
+#[derive(Debug, Clone, PartialEq, calldata::Encode, calldata::Decode)]
 pub struct ExtendedMessageFlat {
     // MessageData fields
     pub contract_address: Address,
     pub sender_address: Address,
     pub origin_address: Address,
     pub signer_address: Address,
-    #[serde(default)]
     #[calldata(default = default_stack)]
     pub stack: Vec<Address>,
     pub chain_id: num_bigint::BigInt,
-    #[serde(default)]
     #[calldata(default = default_bigint)]
     pub value: num_bigint::BigInt,
     pub is_init: bool,
-    #[serde(default = "default_datetime")]
     #[calldata(
         serialize_with = encode_datetime_rfc3339,
         deserialize_with = decode_datetime_rfc3339
@@ -207,10 +178,6 @@ pub struct ExtendedMessageFlat {
     pub datetime: chrono::DateTime<chrono::Utc>,
 
     // ExtendedMessage-specific fields
-    #[serde(
-        serialize_with = "entry_kind_as_int",
-        deserialize_with = "entry_kind_from_int"
-    )]
     #[calldata(
         serialize_with = encode_entry_kind,
         deserialize_with = decode_entry_kind
@@ -262,25 +229,15 @@ impl From<ExtendedMessage> for ExtendedMessageFlat {
 
 /// Extended message that includes entry point information.
 /// This is the full message passed to WebAssembly contracts via stdin.
-#[derive(Debug, Clone, Serialize, calldata::Encode)]
+#[derive(Debug, Clone, calldata::Encode)]
 pub struct ExtendedMessage {
     pub message: MessageData,
 
-    #[serde(serialize_with = "entry_kind_as_int")]
     #[calldata(serialize_with = encode_entry_kind)]
     pub entry_kind: EntryKind,
     pub entry_data: bytes::Bytes,
 
     pub entry_stage_data: Value,
-}
-
-impl<'de> Deserialize<'de> for ExtendedMessage {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        ExtendedMessageFlat::deserialize(deserializer).map(Into::into)
-    }
 }
 
 /// Contract definition types and traits.

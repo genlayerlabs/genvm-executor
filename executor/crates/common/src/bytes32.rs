@@ -1,4 +1,4 @@
-//! A 32-byte hash (runner content hash, `custom:` hash, …) with GVM32 formatting.
+//! A 32-byte hash (runner content hash, `custom:` hash, ...) with GVM32 formatting.
 
 /// A 32-byte hash value. Formats (and parses) as GVM32 / Crockford Base32 (see
 /// [`genlayer_sdk::gvm32`]).

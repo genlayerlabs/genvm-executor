@@ -85,7 +85,7 @@ pub(crate) enum ResolvedKind {
         name: symbol_table::GlobalSymbol,
         hash: Bytes32Hash,
     },
-    /// `chain:<address>:<a|f>:<slot>` — code blob read from a storage slot. The
+    /// `chain:<address>:<a|f>:<slot>` -- code blob read from a storage slot. The
     /// current contract (`contract`) also resolves here, pointing at its own
     /// address/state/`code_slot`.
     Chain {
@@ -93,7 +93,7 @@ pub(crate) enum ResolvedKind {
         on: runners::ChainState,
         slot: crate::SlotID,
     },
-    /// `custom:<hash>` — a runner registered at runtime. Carries no data: a
+    /// `custom:<hash>` -- a runner registered at runtime. Carries no data: a
     /// `custom:` runner resolves against the VM's loaded set only, never a
     /// registry lookup, so the load action needs nothing but the canonical id.
     Custom,
@@ -237,10 +237,10 @@ async fn resolve_runner(
 }
 
 /// Validates a `Sandbox`/`RunNondet` `custom_runners` grant list against the
-/// parent's loaded set and returns the pins to grant the child (ADR-012 §4).
+/// parent's loaded set and returns the pins to grant the child.
 ///
-/// - `list == None` → grant every `custom:` runner in the parent's loaded set.
-/// - `list == Some(list)` → grant exactly `list`: every element must be a
+/// - `list == None` -> grant every `custom:` runner in the parent's loaded set.
+/// - `list == Some(list)` -> grant exactly `list`: every element must be a
 ///   `custom:<hash>` id, without duplicates, and present in the parent's loaded
 ///   set (i.e. the parent registered or was itself granted it).
 ///
@@ -307,7 +307,7 @@ pub(crate) fn resolve_child_custom_runners(
         }
     }
 
-    // Every granted pin is drawn from the parent's loaded set (ADR-012 §4).
+    // Every granted pin is drawn from the parent's loaded set.
     #[cfg(debug_assertions)]
     for pin in &grants {
         debug_assert!(
@@ -322,7 +322,7 @@ pub(crate) fn resolve_child_custom_runners(
 
 /// A charged det-mode load folds its canonical runner id into the execution
 /// fingerprint; when `None` (nondet mode, or a free/cached load) nothing is
-/// folded (ADR-012 §5). The id is hashed to a fixed 32 bytes first, so
+/// folded. The id is hashed to a fixed 32 bytes first, so
 /// variable-length ids cannot alias each other (or a 32-byte sub-VM small-hash)
 /// in the shared fingerprint stream.
 fn fold_det_fingerprint(
@@ -336,7 +336,7 @@ fn fold_det_fingerprint(
     }
 }
 
-/// The stable per-load-action observability line (ADR-012): operators and the
+/// The stable per-load-action observability line: operators and the
 /// integration harness grep for the `runner load` message. `status` is
 /// `charged` or `cached`. (`const` is a Rust keyword, hence `runner_load_cost`.)
 fn log_runner_load(id: symbol_table::GlobalSymbol, size: u32, status: &'static str) {
@@ -372,7 +372,7 @@ fn out_of_memory() -> anyhow::Error {
     rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into()
 }
 
-/// Charges `RUNNER_LOAD_COST + size` to the VM's limiter, OOM on failure (ADR-012 §1).
+/// Charges `RUNNER_LOAD_COST + size` to the VM's limiter, OOM on failure.
 /// A `size` past `u32::MAX`, or a sum that overflows, cannot fit any budget and
 /// maps to the same OOM.
 fn charge_load(limiter: &rt::memlimiter::Limiter, size: usize) -> anyhow::Result<()> {
@@ -404,7 +404,7 @@ fn record_charged_load(
 
 /// Attaches to an already-materialized shared cell: charges `RUNNER_LOAD_COST + size`
 /// then records the load. Its charge equals a miss's by content-determinism, so
-/// a VM cannot observe whether it materialized or attached (ADR-012 §1).
+/// a VM cannot observe whether it materialized or attached.
 fn attach_load(
     limiter: &rt::memlimiter::Limiter,
     loaded: &mut runners::cache::LoadedSet,
@@ -417,16 +417,16 @@ fn attach_load(
     Ok(out)
 }
 
-/// The **load action**: the single way any runner enters a VM (ADR-012 §1).
+/// The **load action**: the single way any runner enters a VM.
 ///
-/// 1. already in the VM's loaded set → free, done;
+/// 1. already in the VM's loaded set -> free, done;
 /// 2. else charge `RUNNER_LOAD_COST + size` to `limiter` (OOM on failure),
 ///    materialize-or-attach the content, insert the pin, fold the det
 ///    fingerprint.
 ///
 /// `custom:` runners resolve against the loaded set *only*: they enter it via
 /// `RegisterRunner` or an inherited grant (both insert directly), so a `custom:`
-/// id that is not already loaded here is a malformed-runner error — never a
+/// id that is not already loaded here is a malformed-runner error -- never a
 /// registry lookup.
 pub(crate) async fn load_action(
     supervisor: &rt::supervisor::Supervisor,
@@ -530,7 +530,7 @@ pub(crate) async fn load_action(
             }
             // Read the 4-byte length prefix, charge, then fetch the blob inside
             // the creator: a single `RUNNER_LOAD_COST + code_size` charge covers the peak
-            // (ADR-012 §1) — the old chain double-charge is gone.
+            // -- the old chain double-charge is gone.
             let code_size = storage
                 .read_code_len(slot)
                 .await
@@ -562,8 +562,8 @@ pub(crate) async fn load_action(
 }
 
 /// Inherit-at-spawn load action for a granted custom runner: the child already
-/// holds the pin (carried in `SingleVMData`), so this attaches to it — charging
-/// the child's limiter and inserting into the child's loaded set (ADR-012 §1/§4).
+/// holds the pin (carried in `SingleVMData`), so this attaches to it -- charging
+/// the child's limiter and inserting into the child's loaded set.
 /// Idempotent: a grant equal to the child's `custom:` entry point is loaded once.
 pub(crate) fn inherit_load(
     limiter: &rt::memlimiter::Limiter,
@@ -580,22 +580,22 @@ pub(crate) fn inherit_load(
 }
 
 /// Registers `code` as a `custom:<hash>` runner via the load action against the
-/// current VM (ADR-012 §3). The error ladder (spec: `RegisterRunner` error
+/// current VM. The error ladder (spec: `RegisterRunner` error
 /// guarantees), in check order:
 ///
-/// 1. already in this VM's loaded set → free no-op, same id;
-/// 2. charge `RUNNER_LOAD_COST + code.len()` → OOM error, nothing charged or
+/// 1. already in this VM's loaded set -> free no-op, same id;
+/// 2. charge `RUNNER_LOAD_COST + code.len()` -> OOM error, nothing charged or
 ///    registered;
-/// 3. parse (attach to a live registry entry, or parse and insert) → a parse
+/// 3. parse (attach to a live registry entry, or parse and insert) -> a parse
 ///    failure is a deterministic invalid-contract error; the charge is retained
 ///    (released with the VM like any charge) and the runner is not in the loaded
 ///    set, hence not resolvable;
-/// 4. success → pin inserted into the loaded set, canonical id returned.
+/// 4. success -> pin inserted into the loaded set, canonical id returned.
 ///
 /// The registered code length equals the archive `total_size`, so the charge
 /// equals a later re-register's or an inherit's. A malformed `code` never enters
 /// the weak registry (parse runs before insert), so the attach shortcut cannot
-/// mask a parse error — outcomes depend only on the bytes, never cache state.
+/// mask a parse error -- outcomes depend only on the bytes, never cache state.
 pub(crate) async fn register_runner_load(
     supervisor: &rt::supervisor::Supervisor,
     limiter: &rt::memlimiter::Limiter,
@@ -760,8 +760,8 @@ impl Ctx<'_, '_> {
         resolved: Resolved,
     ) -> anyhow::Result<(symbol_table::GlobalSymbol, runners::cache::ArchivePin)> {
         // A `Depends`/`With` in a runner.json goes through the load action, so a
-        // `custom:` dependency resolves against this VM's loaded set only —
-        // a granted `custom:` runner cannot pull in a non-granted one (ADR-012 §4).
+        // `custom:` dependency resolves against this VM's loaded set only --
+        // a granted `custom:` runner cannot pull in a non-granted one.
         let id = resolved.id;
         let is_det = self.vm.config_copy.permissions.deterministic;
         let data = self.vm.store.data_mut();
@@ -1361,7 +1361,7 @@ mod tests {
         );
     }
 
-    // ── load-action charging ────────────────────────────────────────────
+    // -- load-action charging --------------------------------------------
 
     fn limiter_with_budget(budget: u32) -> rt::memlimiter::Limiter {
         let limiter = rt::memlimiter::Limiter::new();
@@ -1414,7 +1414,7 @@ mod tests {
         assert_eq!(limiter.get_remaining_memory(), u32::MAX);
     }
 
-    // ── inherit load (grant transport) ──────────────────────────────────
+    // -- inherit load (grant transport) ----------------------------------
 
     #[test]
     fn inherit_load_charges_once_then_is_free() {
@@ -1457,7 +1457,7 @@ mod tests {
         assert_eq!(limiter.get_remaining_memory(), budget);
     }
 
-    // ── det fingerprint ─────────────────────────────────────────────────
+    // -- det fingerprint -------------------------------------------------
 
     #[test]
     fn det_fingerprint_folds_charged_loads_in_execution_order() {
@@ -1494,7 +1494,7 @@ mod tests {
         assert_eq!(fingerprint_of(&fp), after_charged);
     }
 
-    // ── RegisterRunner error ladder ─────────────────────────────────────
+    // -- RegisterRunner error ladder -------------------------------------
 
     fn valid_code() -> bytes::Bytes {
         bytes::Bytes::from_static(b"# { \"Depends\": \"py-genlayer:test\" }\n")
@@ -1607,9 +1607,9 @@ mod tests {
         );
     }
 
-    /// Grant transport (ADR-012 §4): the pins handed to a child at `RunNondet`/
+    /// Grant transport: the pins handed to a child at `RunNondet`/
     /// `Sandbox` call time keep the content alive even after the granting parent
-    /// dies — a queued nondet validator task must still find it and load it into
+    /// dies -- a queued nondet validator task must still find it and load it into
     /// its own set, charged to its own limiter.
     #[tokio::test]
     async fn granted_pins_keep_content_alive_after_parent_death() {
