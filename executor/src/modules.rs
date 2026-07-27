@@ -194,7 +194,11 @@ impl Module {
                     genvm_modules_interfaces::Result::Ok(v) => Ok(Ok(v)),
                     genvm_modules_interfaces::Result::UserError(value) => Ok(Err(value)),
                     genvm_modules_interfaces::Result::FatalError(value) => {
-                        log_error!(error = value; "module error");
+                        // Load-bearing log contract: nodes distinguish module/infra
+                        // failure from contract failure by this record (message
+                        // "module error") and attribute it via `name` ("llm"/"web").
+                        // Keep message and fields stable.
+                        log_error!(name = self.name, error = value; "module error");
                         Err(anyhow::anyhow!("module error: {value}"))
                     }
                 }
