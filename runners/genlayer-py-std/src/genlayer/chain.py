@@ -130,11 +130,11 @@ class Event:
 	"""
 	.. code-block:: python
 
-	        class TransferOccurredEvent(gl.Event):
+	        class TransferOccurredEvent(gl.chain.Event):
 	          def __init__(self, sender: Address, to: Address, /): ...
 
 
-	        class TransferOccurredEvent(gl.Event):
+	        class TransferOccurredEvent(gl.chain.Event):
 	          def __init__(self, sender: Address, to: Address, /, **blob): ...
 	"""
 
