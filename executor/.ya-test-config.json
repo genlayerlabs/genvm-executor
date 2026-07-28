@@ -1,4 +1,5 @@
 {
+  "cargo_afl_build_flags": ["--features", "fuzzing"],
   "skip": {
     "bins": [
       "genvm"
