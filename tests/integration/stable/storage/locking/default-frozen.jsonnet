@@ -16,7 +16,7 @@ local util = import 'templates/util.jsonnet';
 		code: null,
 		"calldata": |||
 			{
-				"method": "try_modify",
+				"": "try_modify",
 			}
 		|||
 	},
@@ -24,7 +24,7 @@ local util = import 'templates/util.jsonnet';
 		code: null,
 		"calldata": |||
 			{
-				"method": "nop",
+				"": "nop",
 			}
 		|||
 	}

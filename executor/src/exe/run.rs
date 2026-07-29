@@ -13,6 +13,45 @@ use genvm::{
 
 const EXECUTION_DATA_HELP: &str = "path to file containing encoded execution data (use '-' for stdin, 'fd://N' for file descriptor N)";
 
+fn fill_nested_fee_buckets(
+    is_nested: bool,
+    max_bucket_no: usize,
+    bucket_totals: &mut Vec<primitive_types::U256>,
+) {
+    if is_nested && bucket_totals.is_empty() {
+        bucket_totals.resize(max_bucket_no + 1, primitive_types::U256::zero());
+    }
+}
+
+/// Rejects permissions a nested run cannot act on whatever its caller derived.
+///
+/// A delegated run has no module connection, no fee allocation and no writable
+/// storage, so accepting one of these would let it start and then fail at the
+/// first use. The manager checks the same thing when it builds the envelope;
+/// this executor does not get to assume that whoever spawned it did.
+fn check_nested_permissions(
+    permissions: genvm_modules_interfaces::NestedPermissions,
+) -> Result<()> {
+    use genvm_modules_interfaces::NestedPermissions as P;
+
+    for (bit, name) in [
+        (P::SPAWN_NONDET, "spawn_nondet"),
+        (P::WRITE_STORAGE, "write_storage"),
+        (P::SEND_MESSAGES, "send_messages"),
+        (
+            P::USE_BALANCE_FOR_MESSAGE_FEES,
+            "use_balance_for_message_fees",
+        ),
+    ] {
+        anyhow::ensure!(
+            !permissions.contains(bit),
+            "nested execution data asserts `{name}`, which a run crossing a major boundary never carries"
+        );
+    }
+
+    Ok(())
+}
+
 #[derive(clap::Args, Debug)]
 pub struct Args {
     #[arg(
@@ -83,6 +122,17 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     let message = &execution_data.message;
     let host_data = rt::parse_host_data(&execution_data)?;
 
+    let can_write_storage = match &execution_data.nested {
+        Some(nested) => {
+            check_nested_permissions(nested.permissions)?;
+            nested
+                .permissions
+                .contains(genvm_modules_interfaces::NestedPermissions::WRITE_STORAGE)
+        }
+        None => args.permissions.contains('w'),
+    };
+    let is_nested = execution_data.nested.is_some();
+
     let runtime = config
         .base
         .create_rt()
@@ -109,7 +159,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         .collect::<Vec<_>>();
     metrics.hosts = Box::from(metrics_for_each_host);
 
-    let bucket_totals = execution_data
+    let mut bucket_totals = execution_data
         .bucket_totals
         .iter()
         .map(|bi| {
@@ -138,6 +188,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     .max()
     .unwrap_or(0);
 
+    fill_nested_fee_buckets(is_nested, max_bucket_no as usize, &mut bucket_totals);
     anyhow::ensure!(
         (max_bucket_no as usize) < bucket_totals.len(),
         "fees config references bucket {max_bucket_no} but only {} bucket(s) provided",
@@ -154,6 +205,9 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             config.fees.clone(),
             execution_data.gas_data.clone(),
         )?,
+        det_fuel_budget: genvm::rt::DetFuelBudget::new(
+            execution_data.nested.as_ref().map(|n| n.remaining_det_fuel),
+        ),
         llm_consumption: tokio::sync::Mutex::new(primitive_types::U256::zero()),
     });
 
@@ -163,7 +217,11 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         .enumerate()
         .map(|(id, uri)| {
             let metrics = shared_data.gep(|x| &x.metrics.hosts[id]);
-            genvm::Host::connect(uri, metrics)
+            let hello_data = execution_data
+                .host_hello_data
+                .get(id)
+                .map_or(&[][..], bytes::Bytes::as_ref);
+            genvm::Host::connect(uri, metrics, hello_data)
                 .with_context(|| format!("connecting host {id} to {uri}"))
         })
         .collect::<Result<_>>()?;
@@ -183,8 +241,12 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     // Charge the per-bucket up-front fees now that the hosts are connected. If a
     // bucket cannot cover its `subtract_on_start`, report the resulting VM error
     // to the host as a normal receipt instead of crashing during setup.
-    if let Some(insufficient_err) = runtime.block_on(shared_data.data_fees_limit.consume_initial())
-    {
+    let insufficient_err = if is_nested {
+        None
+    } else {
+        runtime.block_on(shared_data.data_fees_limit.consume_initial())
+    };
+    if let Some(insufficient_err) = insufficient_err {
         let host_for = |method: genvm::host::host_fns::Methods| -> usize {
             let m = method as usize;
             if m < method_hosts.len() {
@@ -216,9 +278,9 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         hosts[host_for(genvm::host::host_fns::Methods::ConsumeResult)]
             .consume_result(&result)
             .context("consume result")?;
-        hosts[host_for(genvm::host::host_fns::Methods::NotifyFinished)]
-            .notify_finished()
-            .context("notify finished")?;
+        for host in &mut hosts {
+            host.flush().context("flush host before exit")?;
+        }
 
         runtime.shutdown_timeout(std::time::Duration::from_millis(30));
 
@@ -251,6 +313,8 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             gas_data: execution_data.gas_data.clone(),
             initial_time_units_allocation: execution_data.initial_time_units_allocation,
             leader_nondet_results: execution_data.leader_nondet_results.clone(),
+            memory_limit: execution_data.nested.as_ref().map(|n| n.memory_limit),
+            can_write_storage,
         },
         host_data,
         shared_data,

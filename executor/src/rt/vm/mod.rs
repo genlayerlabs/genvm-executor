@@ -1,6 +1,5 @@
 use crate::{domain, public_abi, rt, wasi};
 
-use genlayer_calldata::codec::Encode;
 use genlayer_sdk::abi;
 use genvm_common::*;
 use itertools::Itertools;
@@ -288,46 +287,35 @@ impl calldata::Writer for &mut Sha3Writer {
 }
 
 impl RunResult {
-    fn small_hash_impl(&self) -> std::result::Result<[u8; 32], std::convert::Infallible> {
-        use sha3::Digest;
+    /// Fingerprint an in-process caller folds for this child.
+    ///
+    /// Deliberately the same definition a caller in another executor folds for a
+    /// child reached over the nested protocol (see
+    /// [`genvm_modules_interfaces::small_hash`]) -- if the two ever drift, the
+    /// same call hashes differently depending on how the host routed it.
+    pub fn small_hash(&self) -> [u8; 32] {
+        use genvm_modules_interfaces::{small_hash, ResultCode};
+        use sha3::Digest as _;
 
-        let mut hasher = Sha3Writer(sha3::Sha3_256::new());
+        let subvm_hashes = self.vm_data.det_subvm_hashes.clone().finalize();
+        let wasm_store_hashes = &self.wasm_store_hashes;
 
-        let mut enc = calldata::Encoder::new(&mut hasher);
-
-        enc.start_map(4)?;
-        enc.push_map_k("kind")?;
-        match &self.run_ok {
-            RunOk::Return(_) => enc.push_str("Return")?,
-            RunOk::UserError(_) => enc.push_str("UserError")?,
-            RunOk::VMError(_, _) => enc.push_str("VMError")?,
-        }
-        enc.push_map_k("result")?;
         match &self.run_ok {
             RunOk::Return(buf) => {
-                buf.encode(&mut enc)?;
+                small_hash(ResultCode::Return, buf, &subvm_hashes, wasm_store_hashes)
             }
-            RunOk::UserError(buf) => {
-                enc.push_str(buf)?;
-            }
-            RunOk::VMError(data, _) => {
-                enc.push_str(&data.0)?;
-            }
-        }
-
-        enc.push_map_k("subvm_hashes")?;
-        enc.push_bytes(&self.vm_data.det_subvm_hashes.clone().finalize())?;
-
-        enc.push_map_k("wasm_store_hashes")?;
-        self.wasm_store_hashes.encode(&mut enc)?;
-
-        Ok(hasher.0.finalize().into())
-    }
-
-    pub fn small_hash(&self) -> [u8; 32] {
-        match self.small_hash_impl() {
-            Ok(hash) => hash,
-            Err(e) => match e {},
+            RunOk::UserError(message) => small_hash(
+                ResultCode::UserError,
+                &calldata::Value::Str(message.clone()),
+                &subvm_hashes,
+                wasm_store_hashes,
+            ),
+            RunOk::VMError(data, _) => small_hash(
+                ResultCode::VmError,
+                &calldata::Value::Str(data.0.to_string()),
+                &subvm_hashes,
+                wasm_store_hashes,
+            ),
         }
     }
 }

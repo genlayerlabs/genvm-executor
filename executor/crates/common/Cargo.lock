@@ -217,9 +217,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.42"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "145052bdd345b87320e369255277e3fb5152762ad123a901ef5c262dd38fe8d2"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -527,6 +527,7 @@ dependencies = [
  "dashmap",
  "genlayer_calldata",
  "genlayer_sdk",
+ "genvm_modules_interfaces",
  "hex",
  "libc",
  "num-bigint",
@@ -541,6 +542,26 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "symbol_table",
+ "tokio",
+]
+
+[[package]]
+name = "genvm_modules_interfaces"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "genlayer_calldata",
+ "num-bigint",
+ "num-traits",
+ "primitive-types",
+ "regex",
+ "serde",
+ "serde_bytes",
+ "serde_derive",
+ "serde_json",
+ "sha3",
  "tokio",
 ]
 

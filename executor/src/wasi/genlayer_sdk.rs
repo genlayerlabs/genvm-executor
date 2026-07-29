@@ -27,6 +27,61 @@ fn oom_trap(error: abi::consts::VmError) -> generated::types::Error {
     ))
 }
 
+fn cross_major_internal(operation: &str, error: impl std::fmt::Display) -> generated::types::Error {
+    generated::types::Error::trap(crate::anyhow_to_wasmtime(
+        rt::errors::Error::internal(format!("{operation}: {error}")).into(),
+    ))
+}
+
+fn nested_run_ok(
+    reply: genvm_modules_interfaces::NestedRunReply,
+) -> anyhow::Result<(rt::vm::RunOk, bytes::Bytes)> {
+    anyhow::ensure!(
+        reply.effect_free,
+        "nested CallContract result contains effects"
+    );
+    anyhow::ensure!(
+        reply.small_hash.len() == 32,
+        "nested CallContract small hash has length {}, expected 32",
+        reply.small_hash.len()
+    );
+
+    let run_ok = match reply.result.kind {
+        genvm_modules_interfaces::ResultCode::Return => rt::vm::RunOk::Return(reply.result.data),
+        genvm_modules_interfaces::ResultCode::UserError => {
+            let data = reply.result.data.materialize()?;
+            match data {
+                calldata::Value::Str(message) => rt::vm::RunOk::UserError(message),
+                payload => {
+                    // User errors on this line are strings, so a callee raising
+                    // structured data produced something this ABI cannot carry.
+                    // That is the callee's ordinary failure, not a fault, so it
+                    // must stay a contract-visible error rather than become an
+                    // internal one. The payload is dropped and survives only
+                    // here, which is the sole record of what actually failed.
+                    log_error!(payload:? = payload; "nested CallContract user error is not a string");
+                    rt::vm::RunOk::VMError(
+                        public_abi::VmError::invalid_contract().major_mismatch(),
+                        None,
+                    )
+                }
+            }
+        }
+        genvm_modules_interfaces::ResultCode::VmError => {
+            let data = reply.result.data.materialize()?;
+            let calldata::Value::Str(code) = data else {
+                anyhow::bail!("nested CallContract VM error is not a string");
+            };
+            rt::vm::RunOk::VMError(public_abi::VmError(std::borrow::Cow::Owned(code)), None)
+        }
+        genvm_modules_interfaces::ResultCode::InternalError => {
+            anyhow::bail!("nested executor returned an internal error");
+        }
+    };
+
+    Ok((run_ok, reply.small_hash))
+}
+
 /// Named arguments for [`consume_message_fee_internal`].
 struct ConsumeInternalArgs {
     is_deploy: bool,
@@ -273,12 +328,28 @@ impl VMDataAccumulator {
 
 pub struct SingleVMData {
     pub conf: base::Config,
-    pub depth: u32,
+    /// Recursion budget left to this VM and everything it spawns, inherited
+    /// from the chain root rather than counted up from zero, so a chain that
+    /// crosses executor lines keeps the bound its root minted.
+    pub remaining_recursion: u32,
+    /// Transaction signer. This line's contract-facing message has no such
+    /// field, so it is carried beside the message rather than inside it, to be
+    /// forwarded to executors that do expose it.
+    pub signer_address: calldata::Address,
     pub message_data: ExtendedMessage,
     pub supervisor: Arc<rt::supervisor::Supervisor>,
     pub storage: rt::vm::storage::Storage<StorageHostHolder>,
     pub accumulator: VMDataAccumulator,
     pub det_subvm_hashes: sha3::Sha3_256,
+}
+
+impl SingleVMData {
+    /// How deep this VM sits, for logs only. Exact while the chain stays on
+    /// one line; an approximation once it crosses into a line whose own limit
+    /// differs.
+    pub fn depth(&self) -> u32 {
+        public_abi::top_limits::VM_RECURSION.saturating_sub(self.remaining_recursion)
+    }
 }
 
 pub struct Context {
@@ -710,7 +781,10 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 }
 
                 if state == public_abi::StorageType::Default {
-                    state = public_abi::StorageType::LatestNonFinal;
+                    state = match self.context.data.conf.state_mode {
+                        public_abi::StorageType::Default => public_abi::StorageType::LatestNonFinal,
+                        inherited => inherited,
+                    };
                 }
 
                 let supervisor = self.context.data.supervisor.clone();
@@ -726,8 +800,6 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .fork(public_abi::EntryKind::Main, calldata_encoded.into());
                 my_data.message.stack.push(my_data.message.contract_address);
 
-                let calldata_encoded = calldata::encode_obj(&calldata);
-
                 let mut child_storage = rt::vm::storage::Storage::new(
                     address,
                     supervisor.get_storage_limiter(),
@@ -740,6 +812,18 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     ),
                 );
 
+                // Roots on this line carry no major field, so the executor
+                // has nothing to read: it reports the never-written default and
+                // leaves the decision entirely to the host.
+                const ADVISORY_MAJOR: u8 = 0;
+
+                let routing_payload = supervisor
+                    .host
+                    .lock_for(host::host_fns::Methods::ResolveCallcontractExecutor)
+                    .await
+                    .resolve_callcontract_executor(address, state, ADVISORY_MAJOR)
+                    .map_err(|e| cross_major_internal("resolving CallContract executor", e))?;
+
                 let code_slot = child_storage
                     .check_major_and_resolve_code_slot()
                     .await
@@ -748,8 +832,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     })?;
 
                 let vm_data = Box::new(SingleVMData {
-                    depth: self.context.data.depth + 1,
-                    // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+                    remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
+                    signer_address: self.context.data.signer_address,
+                    // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
                     conf: base::Config {
                         needs_error_fingerprint: true,
                         is_deterministic: true,
@@ -802,6 +887,111 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     },
                     det_subvm_hashes: Default::default(),
                 });
+
+                if let Some(routing_payload) = routing_payload {
+                    if vm_data.remaining_recursion == 0 {
+                        return Err(oom_trap(public_abi::VmError::oom().val()));
+                    }
+                    // Custom runners are process-local: the envelope carries no
+                    // archives, so a callee in another executor could not load
+                    // them and would silently run with an empty set. Refuse the
+                    // call instead, so the caller sees a canonical error rather
+                    // than a child that resolves `custom:` ids differently per
+                    // route.
+                    if !vm_data.accumulator.custom_runners.is_empty() {
+                        return Err(generated::types::Errno::Inval.into());
+                    }
+                    use genvm_modules_interfaces::{
+                        NestedPermissions as P, NestedRunEnvelope, NestedRunnerId,
+                        NestedStorageType,
+                    };
+
+                    let mut nested_calldata = calldata::decode(&vm_data.message_data.entry_data)
+                        .map_err(|e| {
+                            cross_major_internal("decoding nested CallContract calldata", e)
+                        })?;
+                    super::method_compat::method_legacy_to_new(&mut nested_calldata);
+                    let nested_calldata = bytes::Bytes::from(calldata::encode(&nested_calldata));
+
+                    let host_remaining_fuel = supervisor
+                        .host
+                        .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+                        .await
+                        .remaining_fuel_as_gen()
+                        .map_err(|e| {
+                            cross_major_internal("reading nested deterministic fuel", e)
+                        })?;
+                    let remaining_det_fuel = supervisor
+                        .shared_data
+                        .remaining_det_fuel(host_remaining_fuel)
+                        .await;
+
+                    let mut permissions = P::default();
+                    if vm_data.conf.is_deterministic {
+                        permissions |= P::DETERMINISTIC;
+                    }
+                    if vm_data.conf.can_read_storage {
+                        permissions |= P::READ_STORAGE;
+                    }
+                    if vm_data.conf.can_write_storage {
+                        permissions |= P::WRITE_STORAGE;
+                    }
+                    if vm_data.conf.can_send_messages {
+                        permissions |= P::SEND_MESSAGES;
+                    }
+                    if vm_data.conf.can_call_others {
+                        permissions |= P::CALL_OTHERS;
+                    }
+                    // This line lets a `CallContract` child inherit the parent's
+                    // nondet permission; the boundary does not, so a callee on
+                    // another line is never handed authority its own derivation
+                    // would have cleared.
+                    if vm_data.conf.can_register_runners {
+                        permissions |= P::REGISTER_RUNNERS;
+                    }
+
+                    let state_mode = match vm_data.conf.state_mode {
+                        public_abi::StorageType::Default => NestedStorageType::Default,
+                        public_abi::StorageType::LatestFinal => NestedStorageType::LatestFinal,
+                        public_abi::StorageType::LatestNonFinal => {
+                            NestedStorageType::LatestNonFinal
+                        }
+                    };
+                    let message = &vm_data.message_data.message;
+                    let envelope = NestedRunEnvelope {
+                        routing_payload,
+                        calldata: nested_calldata,
+                        message: genvm_modules_interfaces::MessageData {
+                            contract_address: message.contract_address,
+                            sender_address: message.sender_address,
+                            origin_address: message.origin_address,
+                            signer_address: vm_data.signer_address,
+                            chain_id: message.chain_id.clone(),
+                            value: message.value.clone(),
+                            is_init: message.is_init,
+                            datetime: message.datetime,
+                        },
+                        stack: message.stack.clone(),
+                        permissions,
+                        state_mode,
+                        topmost_runner_id: NestedRunnerId("contract".to_owned()),
+                        remaining_recursion: vm_data.remaining_recursion,
+                        remaining_det_fuel,
+                        memory_limit: supervisor.limiter.get(true).get_remaining_memory(),
+                    };
+
+                    let reply = supervisor
+                        .host
+                        .lock_for(host::host_fns::Methods::RunNested)
+                        .await
+                        .run_nested(&envelope)
+                        .map_err(|e| cross_major_internal("running nested executor", e))?;
+                    let (run_ok, small_hash) = nested_run_ok(reply)
+                        .map_err(|e| cross_major_internal("reading nested result", e))?;
+
+                    self.context.data.det_subvm_hashes.update(&small_hash);
+                    return self.set_vm_run_result(run_ok).map(|x| x.0);
+                }
 
                 let res = rt::spawn_apply_run(&supervisor, vm_data)
                     .await
@@ -1006,7 +1196,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 );
 
                 log_debug!(
-                    depth = self.context.data.depth,
+                    depth = self.context.data.depth(),
                     emissions_total = self.context.data.accumulator.emissions.len();
                     "PostMessage emission pushed to accumulator"
                 );
@@ -1204,7 +1394,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     return Err(generated::types::Errno::Inval.into());
                 }
 
-                let remaining_fuel_as_gen = self
+                let host_remaining_fuel = self
                     .context
                     .data
                     .supervisor
@@ -1213,6 +1403,13 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .await
                     .remaining_fuel_as_gen()
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+                let remaining_fuel_as_gen = self
+                    .context
+                    .data
+                    .supervisor
+                    .shared_data
+                    .remaining_det_fuel(host_remaining_fuel)
+                    .await;
 
                 let sup = self.context.data.supervisor.clone();
                 let response_format = prompt_payload.response_format;
@@ -1240,6 +1437,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         .lock_for(host::host_fns::Methods::ConsumeFuel)
                         .await
                         .consume_fuel(result.consumed_gen)?;
+                    sup.shared_data.consume_det_fuel(result.consumed_gen).await;
 
                     if result.consumed_gen == primitive_types::U256::MAX {
                         return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
@@ -1288,7 +1486,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 );
 
                 // Get remaining fuel from host
-                let remaining_fuel_as_gen = self
+                let host_remaining_fuel = self
                     .context
                     .data
                     .supervisor
@@ -1297,6 +1495,13 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .await
                     .remaining_fuel_as_gen()
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+                let remaining_fuel_as_gen = self
+                    .context
+                    .data
+                    .supervisor
+                    .shared_data
+                    .remaining_det_fuel(host_remaining_fuel)
+                    .await;
 
                 let sup = self.context.data.supervisor.clone();
                 let task = taskify(async move {
@@ -1319,6 +1524,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                             .lock_for(host::host_fns::Methods::ConsumeFuel)
                             .await
                             .consume_fuel(*consumed_gen)?;
+                        sup.shared_data.consume_det_fuel(*consumed_gen).await;
                         if *consumed_gen == primitive_types::U256::MAX {
                             return Err(
                                 rt::errors::Error::vm(abi::consts::VmError::timeout()).into()
@@ -1853,8 +2059,9 @@ impl ContextVFS<'_> {
             };
 
             let vm_data = Box::new(SingleVMData {
-                depth: self.context.data.depth + 1,
-                // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+                remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
+                signer_address: self.context.data.signer_address,
+                // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
                 conf: base::Config {
                     needs_error_fingerprint: false,
                     is_deterministic: false,
@@ -1949,8 +2156,9 @@ impl ContextVFS<'_> {
         let stolen_data = fake_my_data;
 
         let vm_data = Box::new(SingleVMData {
-            depth: self.context.data.depth + 1,
-            // Permission model: doc/website/src/spec/03-vm/05-permissions.rst
+            remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
+            signer_address: self.context.data.signer_address,
+            // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
             conf: base::Config {
                 needs_error_fingerprint: false,
                 is_deterministic: zelf_conf.is_deterministic,

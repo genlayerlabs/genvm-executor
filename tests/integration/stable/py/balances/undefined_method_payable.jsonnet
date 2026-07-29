@@ -6,7 +6,7 @@ local util = import 'templates/util.jsonnet';
 	s {
 		"calldata": |||
 			{
-				"method": "main",
+				"": "main",
 				"args": [],
 			}
 		|||,
@@ -19,7 +19,7 @@ local util = import 'templates/util.jsonnet';
 		message: msg,
 		"calldata": |||
 			{
-				"method": "main",
+				"": "main",
 				"args": [],
 			}
 		|||,

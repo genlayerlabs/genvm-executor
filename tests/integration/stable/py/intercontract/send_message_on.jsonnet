@@ -6,7 +6,7 @@ local util = import 'templates/util.jsonnet';
 	s {
 		"calldata": |||
 			{
-				"method": "main",
+				"": "main",
 				"args": ["finalized"],
 			}
 		|||
@@ -16,7 +16,7 @@ local util = import 'templates/util.jsonnet';
 		message: msg,
 		"calldata": |||
 			{
-				"method": "main",
+				"": "main",
 				"args": ["accepted"],
 			}
 		|||
@@ -26,7 +26,7 @@ local util = import 'templates/util.jsonnet';
 		message: msg,
 		"calldata": |||
 			{
-				"method": "main",
+				"": "main",
 				"args": ["random"],
 			}
 		|||

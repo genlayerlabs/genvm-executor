@@ -46,6 +46,28 @@ impl<T> DetNondet<T> {
     }
 }
 
+pub struct DetFuelBudget(tokio::sync::Mutex<Option<primitive_types::U256>>);
+
+impl DetFuelBudget {
+    pub fn new(initial: Option<primitive_types::U256>) -> Self {
+        Self(tokio::sync::Mutex::new(initial))
+    }
+
+    async fn remaining(&self, host_remaining: primitive_types::U256) -> primitive_types::U256 {
+        match *self.0.lock().await {
+            Some(imported) => imported.min(host_remaining),
+            None => host_remaining,
+        }
+    }
+
+    async fn consume(&self, consumed: primitive_types::U256) {
+        let mut budget = self.0.lock().await;
+        if let Some(remaining) = budget.as_mut() {
+            *remaining = remaining.saturating_sub(consumed);
+        }
+    }
+}
+
 /// basic data that is shared across all VMs
 pub struct SharedData {
     pub is_sync: bool,
@@ -53,7 +75,21 @@ pub struct SharedData {
     pub debug_mode: genvm_common::DebugMode,
     pub metrics: crate::Metrics,
     pub data_fees_limit: fees::DataLimit,
+    pub det_fuel_budget: DetFuelBudget,
     pub llm_consumption: tokio::sync::Mutex<primitive_types::U256>,
+}
+
+impl SharedData {
+    pub async fn remaining_det_fuel(
+        &self,
+        host_remaining: primitive_types::U256,
+    ) -> primitive_types::U256 {
+        self.det_fuel_budget.remaining(host_remaining).await
+    }
+
+    pub async fn consume_det_fuel(&self, consumed: primitive_types::U256) {
+        self.det_fuel_budget.consume(consumed).await;
+    }
 }
 
 pub fn parse_host_data(
@@ -104,6 +140,25 @@ async fn spawn_apply_run_inner(
     let vm = supervisor::apply_contract_actions(supervisor, vm).await?;
 
     vm.run().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn imported_deterministic_fuel_is_the_initial_budget() {
+        let budget = DetFuelBudget::new(Some(primitive_types::U256::from(10)));
+        assert_eq!(
+            budget.remaining(primitive_types::U256::from(20)).await,
+            primitive_types::U256::from(10)
+        );
+        budget.consume(primitive_types::U256::from(3)).await;
+        assert_eq!(
+            budget.remaining(primitive_types::U256::from(20)).await,
+            primitive_types::U256::from(7)
+        );
+    }
 }
 
 use anyhow::Context;

@@ -50,12 +50,16 @@ impl Limiter {
     }
 
     pub fn new(id: &'static str) -> Self {
+        Self::with_limit(id, u32::MAX)
+    }
+
+    pub fn with_limit(id: &'static str, limit: u32) -> Self {
         Self(Arc::new(LimiterInner {
             id,
             consumed_memory: AtomicU32::new(0),
             data: Arc::new(LimiterInnerData {
-                remaining_memory: Arc::new(AtomicU32::new(u32::MAX)),
-                least_remaining_memory: Arc::new(AtomicU32::new(u32::MAX)),
+                remaining_memory: Arc::new(AtomicU32::new(limit)),
+                least_remaining_memory: Arc::new(AtomicU32::new(limit)),
             }),
         }))
     }

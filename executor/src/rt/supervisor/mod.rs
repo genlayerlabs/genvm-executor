@@ -364,7 +364,7 @@ pub async fn spawn(
     vm: Box<wasi::genlayer_sdk::SingleVMData>,
     limiter: rt::memlimiter::Limiter,
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
-    if vm.depth >= public_abi::top_limits::VM_RECURSION {
+    if vm.remaining_recursion == 0 {
         return Err(rt::SpawnError {
             error: rt::errors::Error::vm(public_abi::VmError::oom().val()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),

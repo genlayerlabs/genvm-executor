@@ -3,7 +3,7 @@ local util = import 'templates/util.jsonnet';
 {entry: util.addPaths([simple.run('${jsonnetDir}/methods.py') {
 	"calldata": |||
 		{
-			"method": "pub",
+			"": "pub",
 			"args": []
 		}
 	|||,

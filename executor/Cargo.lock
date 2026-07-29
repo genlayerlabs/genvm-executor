@@ -1057,6 +1057,7 @@ dependencies = [
  "dashmap",
  "genlayer_calldata",
  "genlayer_sdk",
+ "genvm_modules_interfaces",
  "hex",
  "libc",
  "num-bigint",
@@ -1090,6 +1091,7 @@ dependencies = [
  "serde_bytes",
  "serde_derive",
  "serde_json",
+ "sha3",
  "tokio",
 ]
 
