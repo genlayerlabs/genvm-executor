@@ -29,8 +29,12 @@ impl Default for Limiter {
 
 impl Limiter {
     pub fn new() -> Self {
+        Self::with_limit(u32::MAX)
+    }
+
+    pub fn with_limit(limit: u32) -> Self {
         Self(Arc::new(LimiterInner {
-            remaining_memory: AtomicU32::new(u32::MAX),
+            remaining_memory: AtomicU32::new(limit),
         }))
     }
 
@@ -161,5 +165,19 @@ impl wasmtime::ResourceLimiter for Limiter {
 
     fn memories(&self) -> usize {
         100
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_spawn_limit_is_honored() {
+        let limiter = Limiter::with_limit(100);
+        assert_eq!(limiter.get_remaining_memory(), 100);
+        assert!(limiter.consume(40));
+        assert_eq!(limiter.get_remaining_memory(), 60);
+        assert!(!limiter.consume(61));
     }
 }

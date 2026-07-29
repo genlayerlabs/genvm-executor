@@ -1,5 +1,8 @@
 use super::message::{validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE_BITS};
-use super::run::{parse_leader_result, strip_vm_error_detail};
+use super::run::{
+    call_contract_route, derive_call_contract_permissions, nested_run_ok, parse_leader_result,
+    strip_vm_error_detail, CallContractRoute,
+};
 use super::*;
 use primitive_types::U256;
 
@@ -111,6 +114,72 @@ fn valid_balance_params_pass_through() {
 fn no_balance_no_params_is_allocation_path() {
     let got = validate_balance_fee(true, false, None).unwrap();
     assert_eq!(got, None);
+}
+
+#[test]
+fn non_null_resolve_selects_nested_path_before_local_spawn() {
+    let payload = bytes::Bytes::from_static(b"route");
+    let ours = genvm_common::version::CURRENT.major as u8;
+    assert_eq!(
+        call_contract_route(Some(payload.clone()), ours),
+        CallContractRoute::Nested(payload)
+    );
+    assert_eq!(
+        call_contract_route(None, ours),
+        CallContractRoute::InProcess
+    );
+}
+
+#[test]
+fn a_major_this_line_does_not_serve_goes_to_the_manager() {
+    let unservable = genvm_common::version::CURRENT.major as u8 + 1;
+    let CallContractRoute::Nested(payload) = call_contract_route(None, unservable) else {
+        panic!("a major this line cannot serve must not stay in-process");
+    };
+    let routing: genvm_modules_interfaces::ExecutorSelector =
+        calldata::decode_obj(&payload).unwrap();
+    assert_eq!(
+        routing,
+        genvm_modules_interfaces::ExecutorSelector::MajorOverride {
+            major: unservable as u32
+        }
+    );
+}
+
+#[test]
+fn call_contract_child_is_deterministic_only() {
+    let parent = base::Permissions {
+        deterministic: true,
+        write_storage: true,
+        send_messages: true,
+        call_others: true,
+        spawn_nondet: true,
+        register_runners: true,
+        can_use_balance_for_message_fees: true,
+    };
+    let child = derive_call_contract_permissions(&parent);
+
+    assert!(child.deterministic);
+    assert!(child.call_others);
+    assert!(child.register_runners);
+    assert!(!child.spawn_nondet);
+    assert!(!child.write_storage);
+    assert!(!child.send_messages);
+    assert!(!child.can_use_balance_for_message_fees);
+}
+
+#[test]
+fn nested_result_must_be_effect_free() {
+    let reply = genvm_modules_interfaces::NestedRunReply {
+        result: genvm_modules_interfaces::NestedRunResult {
+            kind: genvm_modules_interfaces::ResultCode::Return,
+            data: calldata::Value::Null.into(),
+        },
+        small_hash: bytes::Bytes::from(vec![1; 32]),
+        effect_free: false,
+    };
+
+    assert!(nested_run_ok(reply).is_err());
 }
 
 // ---------------------------------------------------------------------------

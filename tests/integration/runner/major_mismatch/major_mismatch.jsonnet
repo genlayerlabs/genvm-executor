@@ -15,6 +15,11 @@ local entries = [
 			code: null,
 			message: msg,
 			calldata: std.manifestJsonEx({'': 'foo', args: []}, '    '),
+			// The host claims a major this executor serves, because the subject
+			// here is the executor's own check rather than the manager's
+			// routing. Entry 3 covers the other half, where the host reports
+			// the contract's real (unservable) major.
+			major: 0,
 		}],
 	},
 	// 1: CallContract into a major-mismatched contract
@@ -35,6 +40,23 @@ local entries = [
 			}
 		|||
 	),
+	// 3: the host reports the contract's real major, which no installed line
+	// provides. The manager has nothing to route to, and a major written by a
+	// contract into its own root slot must not be able to abort the run: it
+	// falls back to the newest line, whose own check answers with the same
+	// canonical error as entry 0.
+	{
+		vars: {},
+		code: '${jsonnetDir}/target.py',
+		message: msg + {is_init: true},
+		calldata: '{}',
+		next: [{
+			vars: {},
+			code: null,
+			message: msg,
+			calldata: std.manifestJsonEx({'': 'foo', args: []}, '    '),
+		}],
+	},
 ];
 
 {tags: util.features([['runner', 'malformed'], ['message']], 'stable'),

@@ -174,7 +174,11 @@ pub(crate) async fn resolve_runner_id(
 
             let hash_gvm32 = hash.to_gvm32();
             if !supervisor.runner_cache.has_in_all(&name, &hash_gvm32) {
-                anyhow::bail!("runner {}:{} not found", name, hash_gvm32);
+                // A contract picks this pair, so an uninstalled one must reach it
+                // as a canonical error rather than as an internal abort.
+                return Err(make_malformed_runner_error(&format!(
+                    "runner `{name}:{hash_gvm32}` is not installed"
+                )));
             }
 
             runners::Id::Builtin {

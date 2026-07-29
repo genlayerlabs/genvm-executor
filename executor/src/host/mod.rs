@@ -38,9 +38,9 @@ impl Host {
     pub fn new(sock: Box<dyn Sock>, metrics: sync::DArc<Metrics>) -> Host {
         Self { sock, metrics }
     }
-    pub fn connect(addr: &str, metrics: sync::DArc<Metrics>) -> Result<Host> {
+    pub fn connect(addr: &str, metrics: sync::DArc<Metrics>, hello_data: &[u8]) -> Result<Host> {
         const UNIX: &str = "unix://";
-        let sock: Box<dyn Sock> = if let Some(addr_suff) = addr.strip_prefix(UNIX) {
+        let mut sock: Box<dyn Sock> = if let Some(addr_suff) = addr.strip_prefix(UNIX) {
             Box::new(bufreaderwriter::seq::BufReaderWriterSeq::new_writer(
                 std::os::unix::net::UnixStream::connect(std::path::Path::new(addr_suff))
                     .with_context(|| format!("connecting to {addr}"))?,
@@ -57,6 +57,12 @@ impl Host {
                     .with_context(|| format!("connecting to {addr}"))?,
             ))
         };
+        if !hello_data.is_empty() {
+            sock.write_all(hello_data)
+                .with_context(|| format!("writing host hello to {addr}"))?;
+            sock.flush()
+                .with_context(|| format!("flushing host hello to {addr}"))?;
+        }
         Ok(Host { sock, metrics })
     }
 }
@@ -141,6 +147,10 @@ pub fn write_result_to_sock(sock: &mut dyn Sock, res: &Result<FullResult>) -> Re
 pub struct LockedSlotsSet(Box<[SlotID]>);
 
 impl LockedSlotsSet {
+    pub fn empty() -> Self {
+        Self(Box::new([]))
+    }
+
     pub fn contains(&self, slot: SlotID) -> bool {
         self.0.binary_search(&slot).is_ok()
     }
@@ -177,6 +187,7 @@ impl FullResult {
         Self {
             reported: genvm_modules_interfaces::ReportedResult {
                 execution_hash: bytes::Bytes::new(),
+                small_hash: bytes::Bytes::new(),
                 kind: genvm_modules_interfaces::ResultCode::InternalError,
                 data: calldata::Value::Str(msg).into(),
                 backtrace: None,
@@ -269,9 +280,23 @@ impl FullResult {
         }
         let execution_hash = bytes::Bytes::from(sha3::Digest::finalize(hasher.0).to_vec());
 
+        // The route-invariant half of the same outcome. A caller in another
+        // executor folds this, exactly as an in-process caller folds
+        // `RunResult::small_hash`, so the two routes agree.
+        let small_hash = bytes::Bytes::from(
+            genvm_modules_interfaces::small_hash(
+                convert_result_code(rt_result.kind),
+                &rt_result.data,
+                &rt_result.subvm_hashes,
+                &rt_result.wasm_store_hashes,
+            )
+            .to_vec(),
+        );
+
         Self {
             reported: genvm_modules_interfaces::ReportedResult {
                 execution_hash,
+                small_hash,
 
                 data: rt_result.data,
                 backtrace: rt_result.backtrace.map(convert_backtrace),
@@ -600,6 +625,39 @@ impl Host {
         Ok(())
     }
 
+    pub fn resolve_callcontract_executor(
+        &mut self,
+        contract_address: calldata::Address,
+        state_mode: StorageType,
+        advisory_major: u8,
+    ) -> Result<Option<bytes::Bytes>> {
+        log_trace!("resolve_callcontract_executor");
+
+        let mut sock = self.lock_sock();
+        sock.write_all(&[host_fns::Methods::ResolveCallcontractExecutor as u8])?;
+        sock.write_all(&contract_address.raw())?;
+        sock.write_all(&[state_mode as u8, advisory_major])?;
+
+        handle_host_error(&mut **sock, "resolve_callcontract_executor")?;
+        let encoded = read_bytes(&mut **sock, "resolve_callcontract_executor result")?;
+        calldata::decode_obj(&encoded).context("decoding resolve_callcontract_executor result")
+    }
+
+    pub fn run_nested(
+        &mut self,
+        envelope: &genvm_modules_interfaces::NestedRunEnvelope,
+    ) -> Result<genvm_modules_interfaces::NestedRunReply> {
+        log_trace!("run_nested");
+
+        let encoded = calldata::encode_obj(envelope);
+        let mut sock = self.lock_sock();
+        sock.write_all(&[host_fns::Methods::RunNested as u8])?;
+        write_slice(&mut **sock, &encoded)?;
+
+        let reply = read_bytes(&mut **sock, "run_nested result")?;
+        calldata::decode_obj(&reply).context("decoding run_nested result")
+    }
+
     pub fn consume_result(&mut self, res: &Result<FullResult>) -> Result<()> {
         log_trace!("consume_result");
 
@@ -624,21 +682,6 @@ impl Host {
         sock.read_exact(&mut int_buf)?;
 
         log_debug!("consume_result: ACK");
-
-        Ok(())
-    }
-
-    pub fn notify_finished(&mut self) -> Result<()> {
-        log_trace!("notify_finished");
-
-        let mut sock = self.lock_sock();
-        sock.write_all(&[host_fns::Methods::NotifyFinished as u8])?;
-        sock.flush()?;
-
-        let mut int_buf = [0; 1];
-        sock.read_exact(&mut int_buf)?;
-
-        log_debug!("notify_finished: ACK");
 
         Ok(())
     }
@@ -712,6 +755,10 @@ impl Host {
 
         Ok(())
     }
+
+    pub fn flush(&mut self) -> Result<()> {
+        self.lock_sock().flush().context("flushing host socket")
+    }
 }
 
 pub struct MultiHost {
@@ -734,5 +781,191 @@ impl MultiHost {
             0
         };
         self.hosts[idx].lock().await
+    }
+
+    pub async fn flush_all(&self) -> Result<()> {
+        for host in &self.hosts {
+            host.lock().await.flush()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+    use std::thread;
+
+    fn metrics() -> sync::DArc<Metrics> {
+        sync::DArc::new(Metrics::default())
+    }
+
+    fn bind_socket(name: &str) -> (PathBuf, String, UnixListener) {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "genvm-host-{name}-{}-{suffix}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind unix listener");
+        let addr = format!("unix://{}", path.display());
+        (path, addr, listener)
+    }
+
+    fn connect_consume_fuel_and_read(hello_data: &[u8], read_len: usize) -> Vec<u8> {
+        let (path, addr, listener) = bind_socket("hello");
+        let reader = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept host connection");
+            let mut buf = vec![0; read_len];
+            stream.read_exact(&mut buf).expect("read host bytes");
+            buf
+        });
+
+        let mut host = Host::connect(&addr, metrics(), hello_data).expect("connect host");
+        host.consume_fuel(primitive_types::U256::from(7))
+            .expect("consume fuel");
+        let buf = reader.join().expect("reader thread");
+        let _ = std::fs::remove_file(path);
+        buf
+    }
+
+    #[test]
+    fn writes_hello_before_first_method_byte() {
+        let hello_data = b"hello-prefix";
+        let buf = connect_consume_fuel_and_read(hello_data, hello_data.len() + 1 + 32);
+
+        assert_eq!(&buf[..hello_data.len()], hello_data);
+        assert_eq!(buf[hello_data.len()], host_fns::Methods::ConsumeFuel as u8);
+    }
+
+    #[test]
+    fn short_hello_vector_means_empty_for_missing_host_index() {
+        let host_hello_data = [bytes::Bytes::from_static(b"host-zero-only")];
+        let hello_data = host_hello_data.get(1).map_or(&[][..], bytes::Bytes::as_ref);
+        let buf = connect_consume_fuel_and_read(hello_data, 1 + 32);
+
+        assert_eq!(buf[0], host_fns::Methods::ConsumeFuel as u8);
+    }
+
+    fn resolve_reply(reply: Option<bytes::Bytes>) -> Option<bytes::Bytes> {
+        let (path, addr, listener) = bind_socket("resolve");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept host connection");
+            let mut request = [0; 23];
+            stream
+                .read_exact(&mut request)
+                .expect("read resolve request");
+            assert_eq!(
+                request[0],
+                host_fns::Methods::ResolveCallcontractExecutor as u8
+            );
+            assert_eq!(&request[1..21], &[7; 20]);
+            assert_eq!(request[21], StorageType::LatestFinal as u8);
+            assert_eq!(request[22], 3);
+
+            let encoded = calldata::encode_obj(&reply);
+            stream
+                .write_all(&[host_fns::Errors::Ok as u8])
+                .expect("write host status");
+            stream
+                .write_all(&(encoded.len() as u32).to_le_bytes())
+                .expect("write resolve length");
+            stream.write_all(&encoded).expect("write resolve reply");
+        });
+
+        let mut host = Host::connect(&addr, metrics(), &[]).expect("connect host");
+        let result = host
+            .resolve_callcontract_executor(
+                calldata::Address::from([7; 20]),
+                StorageType::LatestFinal,
+                3,
+            )
+            .expect("resolve executor");
+        server.join().expect("server thread");
+        let _ = std::fs::remove_file(path);
+        result
+    }
+
+    #[test]
+    fn resolve_callcontract_executor_preserves_null_and_empty_payload() {
+        assert_eq!(resolve_reply(None), None);
+        assert_eq!(
+            resolve_reply(Some(bytes::Bytes::new())),
+            Some(bytes::Bytes::new())
+        );
+    }
+
+    #[test]
+    fn run_nested_uses_length_prefixed_calldata_frames() {
+        let (path, addr, listener) = bind_socket("nested");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept host connection");
+            let mut method = [0; 1];
+            stream.read_exact(&mut method).expect("read nested method");
+            assert_eq!(method[0], host_fns::Methods::RunNested as u8);
+
+            let mut len = [0; 4];
+            stream.read_exact(&mut len).expect("read nested length");
+            let mut body = vec![0; u32::from_le_bytes(len) as usize];
+            stream.read_exact(&mut body).expect("read nested body");
+            let envelope: genvm_modules_interfaces::NestedRunEnvelope =
+                calldata::decode_obj(&body).expect("decode nested envelope");
+            assert_eq!(
+                envelope.routing_payload,
+                bytes::Bytes::from_static(b"route")
+            );
+            assert_eq!(envelope.remaining_recursion, 4);
+
+            let reply = genvm_modules_interfaces::NestedRunReply {
+                result: genvm_modules_interfaces::NestedRunResult {
+                    kind: genvm_modules_interfaces::ResultCode::Return,
+                    data: calldata::Value::Null.into(),
+                },
+                small_hash: bytes::Bytes::from(vec![9; 32]),
+                effect_free: true,
+            };
+            let encoded = calldata::encode_obj(&reply);
+            stream
+                .write_all(&(encoded.len() as u32).to_le_bytes())
+                .expect("write nested length");
+            stream.write_all(&encoded).expect("write nested reply");
+        });
+
+        let envelope = genvm_modules_interfaces::NestedRunEnvelope {
+            routing_payload: bytes::Bytes::from_static(b"route"),
+            calldata: bytes::Bytes::from_static(b"call"),
+            message: genvm_modules_interfaces::MessageData {
+                contract_address: calldata::Address::zero(),
+                sender_address: calldata::Address::zero(),
+                origin_address: calldata::Address::zero(),
+                signer_address: calldata::Address::zero(),
+                chain_id: num_bigint::BigInt::ZERO,
+                value: num_bigint::BigInt::ZERO,
+                is_init: false,
+                datetime: chrono::DateTime::parse_from_rfc3339("2026-07-28T00:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+            },
+            stack: Vec::new(),
+            permissions: genvm_modules_interfaces::NestedPermissions::DETERMINISTIC,
+            state_mode: genvm_modules_interfaces::NestedStorageType::LatestNonFinal,
+            topmost_runner_id: genvm_modules_interfaces::NestedRunnerId("contract".to_owned()),
+            remaining_recursion: 4,
+            remaining_det_fuel: primitive_types::U256::from(10),
+            memory_limit: 1024,
+        };
+        let mut host = Host::connect(&addr, metrics(), &[]).expect("connect host");
+        let reply = host.run_nested(&envelope).expect("run nested");
+        assert!(reply.effect_free);
+        assert_eq!(reply.small_hash, bytes::Bytes::from(vec![9; 32]));
+
+        server.join().expect("server thread");
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -393,7 +393,7 @@ pub async fn spawn(
     zelf: &Arc<Supervisor>,
     vm: Box<wasi::genlayer_sdk::SingleVMData>,
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
-    if vm.depth >= public_abi::top_limits::VM_RECURSION {
+    if vm.remaining_recursion == 0 {
         return Err(rt::SpawnError {
             error: rt::errors::Error::vm(public_abi::VmError::out_of().vm_recursion()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
@@ -416,7 +416,7 @@ pub async fn spawn(
             "vm_spawn",
             BTreeMap::from([
                 ("spawn_kind".to_owned(), vm.spawn_kind.clone()),
-                ("depth".to_owned(), vm.depth.to_string()),
+                ("depth".to_owned(), vm.depth().to_string()),
                 (
                     "runner_id".to_owned(),
                     vm.conf.execution.topmost_runner_id.to_string(),

@@ -19,7 +19,7 @@ pub mod templater;
 pub mod version;
 
 pub mod expr;
-pub mod host_fns;
+pub use genvm_modules_interfaces::host_fns;
 pub mod public_abi_pending;
 pub mod util;
 

@@ -668,7 +668,7 @@ impl ContextVFS<'_> {
             });
 
         log_debug!(
-            depth = self.context.data.depth,
+            depth = self.context.data.depth(),
             emissions_total = self.context.data.accumulator.emissions.len();
             "PostMessage emission pushed to accumulator"
         );

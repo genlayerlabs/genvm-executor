@@ -27,6 +27,7 @@ pub mod __VmError {
 
     impl LeaderOutputUsesThisError {
         pub fn val_str(&self, v: &str) -> VmError {
+            debug_assert!(!v.is_empty(), "leader_output uses_this_error needs a non-empty description");
             VmError(Cow::Owned(format!("leader_output uses_this_error {v}")))
         }
     }
@@ -35,6 +36,7 @@ pub mod __VmError {
 
     impl LeaderOutputExtra {
         pub fn val_str(&self, v: &str) -> VmError {
+            debug_assert!(!v.is_empty(), "leader_output extra needs a non-empty description");
             VmError(Cow::Owned(format!("leader_output extra {v}")))
         }
     }

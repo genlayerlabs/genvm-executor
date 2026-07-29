@@ -129,6 +129,83 @@ struct RunNondetGetVMTaskArgs {
     call_no: u32,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CallContractRoute {
+    InProcess,
+    Nested(bytes::Bytes),
+}
+
+pub(super) fn call_contract_route(
+    routing_payload: Option<bytes::Bytes>,
+    advisory_major: u8,
+) -> CallContractRoute {
+    if let Some(payload) = routing_payload {
+        return CallContractRoute::Nested(payload);
+    }
+    // The host declined to place the callee. A major this line does not serve
+    // is still not ours to reject: the manager owns the mapping from a major to
+    // an executor line, so hand the call over and let it answer.
+    if rt::vm::storage::Storage::<StorageHostHolder>::check_major(advisory_major).is_err() {
+        let payload =
+            calldata::encode_obj(&genvm_modules_interfaces::ExecutorSelector::MajorOverride {
+                major: advisory_major as u32,
+            });
+        return CallContractRoute::Nested(payload.into());
+    }
+    CallContractRoute::InProcess
+}
+
+pub(super) fn derive_call_contract_permissions(parent: &base::Permissions) -> base::Permissions {
+    base::Permissions {
+        deterministic: true,
+        write_storage: false,
+        spawn_nondet: false,
+        call_others: parent.call_others,
+        send_messages: false,
+        register_runners: parent.register_runners,
+        can_use_balance_for_message_fees: false,
+    }
+}
+
+fn cross_major_internal(operation: &str, error: impl std::fmt::Display) -> generated::types::Error {
+    generated::types::Error::trap(crate::anyhow_to_wasmtime(
+        rt::errors::Error::internal(format!("{operation}: {error}")).into(),
+    ))
+}
+
+pub(super) fn nested_run_ok(
+    reply: genvm_modules_interfaces::NestedRunReply,
+) -> anyhow::Result<(rt::vm::RunOk, bytes::Bytes)> {
+    anyhow::ensure!(
+        reply.effect_free,
+        "nested CallContract result contains effects"
+    );
+    anyhow::ensure!(
+        reply.small_hash.len() == 32,
+        "nested CallContract small hash has length {}, expected 32",
+        reply.small_hash.len()
+    );
+
+    let run_ok = match reply.result.kind {
+        genvm_modules_interfaces::ResultCode::Return => rt::vm::RunOk::Return(reply.result.data),
+        genvm_modules_interfaces::ResultCode::UserError => {
+            rt::vm::RunOk::UserError(reply.result.data)
+        }
+        genvm_modules_interfaces::ResultCode::VmError => {
+            let data = reply.result.data.materialize()?;
+            let calldata::Value::Str(code) = data else {
+                anyhow::bail!("nested CallContract VM error is not a string");
+            };
+            rt::vm::RunOk::VMError(public_abi::VmError(std::borrow::Cow::Owned(code)), None)
+        }
+        genvm_modules_interfaces::ResultCode::InternalError => {
+            anyhow::bail!("nested executor returned an internal error");
+        }
+    };
+
+    Ok((run_ok, reply.small_hash))
+}
+
 impl ContextVFS<'_> {
     pub(super) async fn gl_call_eth_call(
         &mut self,
@@ -166,7 +243,7 @@ impl ContextVFS<'_> {
 
         let vm_data = Box::new(SingleVMData {
             limiter: Default::default(),
-            depth: self.context.data.depth + 1,
+            remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
             spawn_kind: "run_nondet".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
             conf: base::Config {
@@ -203,66 +280,30 @@ impl ContextVFS<'_> {
         }
     }
 
-    pub(super) async fn gl_call_contract(
-        &mut self,
+    fn derive_call_contract_vm_data(
+        &self,
         address: calldata::Address,
-        calldata: abi::entry::MainCallData,
-        mut state: public_abi::StorageType,
-    ) -> Result<generated::types::Fd, generated::types::Error> {
-        if !self.context.data.conf.permissions.deterministic {
-            return Err(generated::types::Errno::Forbidden.into());
-        }
-        if !self.context.data.conf.permissions.call_others {
-            return Err(generated::types::Errno::Forbidden.into());
-        }
-
+        calldata: &abi::entry::MainCallData,
+        state: public_abi::StorageType,
+        code_slot: SlotID,
+        child_storage: rt::vm::storage::Storage<StorageHostHolder>,
+    ) -> Box<SingleVMData> {
         let supervisor = self.context.data.supervisor.clone();
-
         let my_conf = self.context.data.conf.clone();
-
         let mut my_data = self.context.data.message_data.fork(
             public_abi::EntryKind::Main,
-            calldata::encode_obj(&calldata).into(),
+            calldata::encode_obj(calldata).into(),
         );
         my_data.message.stack.push(my_data.message.contract_address);
 
-        if state == public_abi::StorageType::Default {
-            state = my_conf.execution.state_mode;
-        }
-
-        let mut child_storage = rt::vm::storage::Storage::new(
-            address,
-            supervisor.get_storage_limiter(),
-            StorageHostHolder(
-                supervisor.host.clone(),
-                ReadToken {
-                    account: address,
-                    mode: state,
-                },
-            ),
-        );
-
-        let code_slot = child_storage
-            .check_major_and_resolve_code_slot()
-            .await
-            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
-
-        let vm_data = Box::new(SingleVMData {
+        Box::new(SingleVMData {
             limiter: self.context.limiter.derived(),
-            depth: self.context.data.depth + 1,
+            remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
             spawn_kind: "call_contract".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
             conf: base::Config {
                 needs_error_fingerprint: true,
-                permissions: base::Permissions {
-                    deterministic: true,
-                    write_storage: false,
-                    spawn_nondet: false,
-                    call_others: my_conf.permissions.call_others,
-                    send_messages: false,
-                    register_runners: my_conf.permissions.register_runners,
-                    can_use_balance_for_message_fees: false,
-                },
+                permissions: derive_call_contract_permissions(&my_conf.permissions),
                 execution: base::Execution {
                     state_mode: state,
                     topmost_runner_id: runners::Id::Chain {
@@ -293,7 +334,7 @@ impl ContextVFS<'_> {
                 entry_stage_data: default_entry_stage_data(),
             },
             storage: child_storage,
-            supervisor: supervisor.clone(),
+            supervisor,
             accumulator: VMDataAccumulator {
                 data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
                 messages_value_decremented: primitive_types::U256::zero(),
@@ -304,23 +345,182 @@ impl ContextVFS<'_> {
             // A CallContract child is granted the caller's full custom set;
             // its spawn load-actions each into the child.
             granted_custom: self.context.loaded.custom_pins(),
-        });
+        })
+    }
 
-        let res = spawn_sub_vm(supervisor.clone(), vm_data)
+    async fn run_nested_call_contract(
+        &mut self,
+        routing_payload: bytes::Bytes,
+        vm_data: Box<SingleVMData>,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        use genvm_modules_interfaces::{
+            NestedPermissions as P, NestedRunEnvelope, NestedRunnerId, NestedStorageType,
+        };
+
+        let host_remaining_fuel = vm_data
+            .supervisor
+            .host
+            .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
             .await
-            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+            .remaining_fuel_as_gen()
+            .map_err(|e| cross_major_internal("reading nested deterministic fuel", e))?;
+        let remaining_det_fuel = vm_data
+            .supervisor
+            .shared_data
+            .remaining_det_fuel(host_remaining_fuel)
+            .await;
 
-        // The child is read-only (static), so its accumulator must be
-        // empty -- otherwise an effect was charged but discarded here.
-        res.vm_data
-            .accumulator
-            .check_empty()
-            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+        let mut permissions = P::READ_STORAGE;
+        if vm_data.conf.permissions.deterministic {
+            permissions |= P::DETERMINISTIC;
+        }
+        if vm_data.conf.permissions.write_storage {
+            permissions |= P::WRITE_STORAGE;
+        }
+        if vm_data.conf.permissions.send_messages {
+            permissions |= P::SEND_MESSAGES;
+        }
+        if vm_data.conf.permissions.call_others {
+            permissions |= P::CALL_OTHERS;
+        }
+        if vm_data.conf.permissions.spawn_nondet {
+            permissions |= P::SPAWN_NONDET;
+        }
+        if vm_data.conf.permissions.register_runners {
+            permissions |= P::REGISTER_RUNNERS;
+        }
+        if vm_data.conf.permissions.can_use_balance_for_message_fees {
+            permissions |= P::USE_BALANCE_FOR_MESSAGE_FEES;
+        }
 
-        let hash = res.small_hash();
-        self.context.data.det_subvm_hashes.update(&hash);
+        let state_mode = match vm_data.conf.execution.state_mode {
+            public_abi::StorageType::Default => NestedStorageType::Default,
+            public_abi::StorageType::LatestFinal => NestedStorageType::LatestFinal,
+            public_abi::StorageType::LatestNonFinal => NestedStorageType::LatestNonFinal,
+        };
+        let message = &vm_data.message_data.message;
+        let envelope = NestedRunEnvelope {
+            routing_payload,
+            calldata: vm_data.message_data.entry_data.clone(),
+            message: genvm_modules_interfaces::MessageData {
+                contract_address: message.contract_address,
+                sender_address: message.sender_address,
+                origin_address: message.origin_address,
+                signer_address: message.signer_address,
+                chain_id: message.chain_id.clone(),
+                value: message.value.clone(),
+                is_init: message.is_init,
+                datetime: message.datetime,
+            },
+            stack: message.stack.clone(),
+            permissions,
+            state_mode,
+            topmost_runner_id: NestedRunnerId("contract".to_owned()),
+            remaining_recursion: vm_data.remaining_recursion,
+            remaining_det_fuel,
+            memory_limit: vm_data.limiter.get_remaining_memory(),
+        };
 
-        self.set_vm_run_result(res.run_ok).map(|x| x.0)
+        let reply = vm_data
+            .supervisor
+            .host
+            .lock_for(host::host_fns::Methods::RunNested)
+            .await
+            .run_nested(&envelope)
+            .map_err(|e| cross_major_internal("running nested executor", e))?;
+        let (run_ok, small_hash) =
+            nested_run_ok(reply).map_err(|e| cross_major_internal("reading nested result", e))?;
+
+        self.context.data.det_subvm_hashes.update(&small_hash);
+        self.set_vm_run_result(run_ok).map(|x| x.0)
+    }
+
+    pub(super) async fn gl_call_contract(
+        &mut self,
+        address: calldata::Address,
+        calldata: abi::entry::MainCallData,
+        mut state: public_abi::StorageType,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        if !self.context.data.conf.permissions.deterministic {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+        if !self.context.data.conf.permissions.call_others {
+            return Err(generated::types::Errno::Forbidden.into());
+        }
+
+        let supervisor = self.context.data.supervisor.clone();
+
+        if state == public_abi::StorageType::Default {
+            state = self.context.data.conf.execution.state_mode;
+        }
+
+        let mut child_storage = rt::vm::storage::Storage::new(
+            address,
+            supervisor.get_storage_limiter(),
+            StorageHostHolder(
+                supervisor.host.clone(),
+                ReadToken {
+                    account: address,
+                    mode: state,
+                },
+            ),
+        );
+
+        let (advisory_major, code_slot) = child_storage
+            .read_major_and_resolve_code_slot()
+            .await
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+        let routing_payload = supervisor
+            .host
+            .lock_for(host::host_fns::Methods::ResolveCallcontractExecutor)
+            .await
+            .resolve_callcontract_executor(address, state, advisory_major)
+            .map_err(|e| cross_major_internal("resolving CallContract executor", e))?;
+        let route = call_contract_route(routing_payload, advisory_major);
+        let vm_data =
+            self.derive_call_contract_vm_data(address, &calldata, state, code_slot, child_storage);
+
+        match route {
+            CallContractRoute::Nested(routing_payload) => {
+                if vm_data.remaining_recursion == 0 {
+                    return Err(internal_trap(rt::errors::Error::vm(
+                        public_abi::VmError::out_of().vm_recursion(),
+                    )));
+                }
+                // Custom runners are process-local: the envelope carries no
+                // archives, so a callee in another executor could not load them
+                // and would silently run with an empty set. Refuse the call
+                // instead, so the caller sees a canonical error rather than a
+                // child that resolves `custom:` ids differently per route.
+                if !vm_data.granted_custom.is_empty() {
+                    return Err(generated::types::Errno::Inval.into());
+                }
+                self.run_nested_call_contract(routing_payload, vm_data)
+                    .await
+            }
+            CallContractRoute::InProcess => {
+                rt::vm::storage::Storage::<StorageHostHolder>::check_major(advisory_major)
+                    .map_err(|e| {
+                        generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into()))
+                    })?;
+
+                let res = spawn_sub_vm(supervisor, vm_data)
+                    .await
+                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+                // The child is read-only (static), so its accumulator must be
+                // empty -- otherwise an effect was charged but discarded here.
+                res.vm_data
+                    .accumulator
+                    .check_empty()
+                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+                let hash = res.small_hash();
+                self.context.data.det_subvm_hashes.update(&hash);
+
+                self.set_vm_run_result(res.run_ok).map(|x| x.0)
+            }
+        }
     }
 
     pub(super) async fn run_nondet(
@@ -495,7 +695,7 @@ impl ContextVFS<'_> {
 
         let vm_data = Box::new(SingleVMData {
             limiter: self.context.limiter.derived(),
-            depth: self.context.data.depth + 1,
+            remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
             spawn_kind: "sandbox".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
             conf: base::Config {

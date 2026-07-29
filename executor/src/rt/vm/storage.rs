@@ -478,6 +478,11 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
     /// is returned so the caller surfaces it as a contract error.
     pub async fn check_major_and_resolve_code_slot(&mut self) -> rt::errors::Result<SlotID> {
         let contract_major = self.read_major().await?;
+        Self::check_major(contract_major)?;
+        self.resolve_code_slot().await
+    }
+
+    pub fn check_major(contract_major: u8) -> rt::errors::Result<()> {
         let node_major = genvm_common::version::CURRENT.major;
         if contract_major as u16 != node_major {
             return Err(rt::errors::Error::wrap(
@@ -485,7 +490,16 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
                 anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
             ));
         }
-        self.resolve_code_slot().await
+        Ok(())
+    }
+
+    /// Reads the advisory major and resolves the code slot without enforcing
+    /// compatibility. Callers must either delegate the contract or perform the
+    /// major check before using the returned slot in this executor.
+    pub async fn read_major_and_resolve_code_slot(&mut self) -> rt::errors::Result<(u8, SlotID)> {
+        let contract_major = self.read_major().await?;
+        let code_slot = self.resolve_code_slot().await?;
+        Ok((contract_major, code_slot))
     }
 
     /// Reads the 4-byte little-endian length prefix of the code blob at
@@ -609,6 +623,23 @@ mod tests {
         let slot = default_code_slot();
         assert_eq!(storage.read_code_len(slot).await.unwrap(), 0);
         assert!(storage.read_code_blob(slot, 0).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn advisory_major_is_returned_with_resolved_code_slot() {
+        let expected_slot = SlotID::from_bytes([0x5a; 32]);
+        let mut root = vec![0; (root_offsets::CODE_SLOT + SlotID::SIZE) as usize];
+        root[root_offsets::MAJOR as usize] = 2;
+        root[root_offsets::CODE_SLOT as usize..].copy_from_slice(&expected_slot.raw());
+        let mut storage = Storage::new(
+            calldata::Address::zero(),
+            data_fees(u64::MAX),
+            FakeHost(std::sync::Arc::new(root)),
+        );
+
+        let (major, slot) = storage.read_major_and_resolve_code_slot().await.unwrap();
+        assert_eq!(major, 2);
+        assert_eq!(slot, expected_slot);
     }
 
     // -- page id ordering ------------------------------------------------

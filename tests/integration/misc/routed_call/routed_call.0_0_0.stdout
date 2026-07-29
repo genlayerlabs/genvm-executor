@@ -1,0 +1,3 @@
+routed_call from.main
+42
+executed with `Return(null)`

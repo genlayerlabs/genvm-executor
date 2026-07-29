@@ -140,7 +140,10 @@ impl VMDataAccumulator {
 pub struct SingleVMData {
     pub conf: base::Config,
     pub limiter: rt::memlimiter::Limiter,
-    pub depth: u32,
+    /// Recursion budget left to this VM and everything it spawns, inherited
+    /// from the chain root rather than counted up from zero, so a chain that
+    /// crosses executor lines keeps the bound its root minted.
+    pub remaining_recursion: u32,
     pub spawn_kind: String,
     pub message_data: ExtendedMessage,
     pub supervisor: Arc<rt::supervisor::Supervisor>,
@@ -153,6 +156,15 @@ pub struct SingleVMData {
     /// own limiter, before its main runner loads. Empty for the
     /// root VM. Drained at spawn.
     pub granted_custom: Vec<crate::runners::cache::ArchivePin>,
+}
+
+impl SingleVMData {
+    /// How deep this VM sits, for logs and recorded actions only. Exact while
+    /// the chain stays on one line; an approximation once it crosses into a
+    /// line whose own limit differs.
+    pub fn depth(&self) -> u32 {
+        public_abi::top_limits::VM_RECURSION.saturating_sub(self.remaining_recursion)
+    }
 }
 
 pub struct Context {
@@ -872,7 +884,7 @@ impl ContextVFS<'_> {
             return Err(generated::types::Errno::Inval.into());
         }
 
-        let remaining_fuel_as_gen = self
+        let host_remaining_fuel = self
             .context
             .data
             .supervisor
@@ -881,6 +893,13 @@ impl ContextVFS<'_> {
             .await
             .remaining_fuel_as_gen()
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+        let remaining_fuel_as_gen = self
+            .context
+            .data
+            .supervisor
+            .shared_data
+            .remaining_det_fuel(host_remaining_fuel)
+            .await;
 
         let sup = self.context.data.supervisor.clone();
 
@@ -907,6 +926,7 @@ impl ContextVFS<'_> {
                 .lock_for(host::host_fns::Methods::ConsumeFuel)
                 .await
                 .consume_fuel(result.consumed_gen)?;
+            sup.shared_data.consume_det_fuel(result.consumed_gen).await;
 
             if result.consumed_gen == primitive_types::U256::MAX {
                 return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
@@ -940,7 +960,7 @@ impl ContextVFS<'_> {
         );
 
         // Get remaining fuel from host
-        let remaining_fuel_as_gen = self
+        let host_remaining_fuel = self
             .context
             .data
             .supervisor
@@ -949,6 +969,13 @@ impl ContextVFS<'_> {
             .await
             .remaining_fuel_as_gen()
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+        let remaining_fuel_as_gen = self
+            .context
+            .data
+            .supervisor
+            .shared_data
+            .remaining_det_fuel(host_remaining_fuel)
+            .await;
 
         let sup = self.context.data.supervisor.clone();
         let task = taskify(async move {
@@ -969,6 +996,7 @@ impl ContextVFS<'_> {
                     .lock_for(host::host_fns::Methods::ConsumeFuel)
                     .await
                     .consume_fuel(*consumed_gen)?;
+                sup.shared_data.consume_det_fuel(*consumed_gen).await;
                 if *consumed_gen == primitive_types::U256::MAX {
                     return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
                 }

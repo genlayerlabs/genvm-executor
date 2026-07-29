@@ -92,6 +92,9 @@
   {
     "type": "str_trie",
     "name": "vm_error",
+    "docs": {
+      "invalid_contract major_mismatch": "This error remains terminal for top-level and runner loads. During :ref:`gvm-def-gl-call-call-contract`, the host may select another executor before the local major check."
+    },
     "values": [
       "timeout",
       "absent_leader_nondet_output",
