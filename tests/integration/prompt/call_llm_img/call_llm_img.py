@@ -1,24 +1,68 @@
 # { "Depends": "py-genlayer:test" }
 
+import io
+import re
 import sys
 
 import genlayer as gl
+from PIL import Image
 
-# 6 color rainbow
-im_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x80\x00\x00\x00O\x04\x03\x00\x00\x00\xd1\xae\xd0\x99\x00\x00\x00'PLTE@@\xff\xff\x81\x00\x00y?\xff\xff\x00\xa0\x00\xc0\xf0\x00\x00R4\xf3\x00oE\xfch\x00\xff\xd4\x00\x80\xbc \x16f\x80\xffx\x00\xeeM\xf2\xd3\x00\x00\x00VIDATX\xc3\xed\xccA\x11\x800\x10\x04\xc1\xb5\x10\x0b\xb1\x80\x05,`!\x16\xb0\x80\x05,`!\x16\x10\xc5\xe3$\xcc'EM\x0b\xe8\x1cP\x0c\x0c\x0c*\xb8\xa04\xc8\xc0`\x91\xe0\x85rC\xd9 \x03\x83\xbf\x04\x0f\x94\x13J\x87\x0c\x0c\x16\t&\x14Ie@\xd9!\x03\x03\x83\xf2\x01\xb1\xdb\"}Y/;:\x00\x00\x00\x00IEND\xaeB`\x82"
+# 5x7 bitmaps of the letters this test renders, one string per glyph row.
+FONT = {
+	'C': ('01110', '10001', '10000', '10000', '10000', '10001', '01110'),
+	'E': ('11111', '10000', '10000', '11110', '10000', '10000', '11111'),
+	'K': ('10001', '10010', '10100', '11000', '10100', '10010', '10001'),
+	'O': ('01110', '10001', '10001', '10001', '10001', '10001', '01110'),
+	'R': ('11110', '10001', '10001', '11110', '10100', '10010', '10001'),
+	'T': ('11111', '00100', '00100', '00100', '00100', '00100', '00100'),
+}
+
+GLYPH_W, GLYPH_H = 5, 7
+SCALE = 12  # font pixel -> image pixel
+MARGIN = 12
+GAP = 2  # blank font columns between glyphs
+
+
+def render(word: str) -> bytes:
+	"""
+	Render `word` as a black-on-white PNG.
+	"""
+	glyphs = [FONT[c] for c in word]
+	width = (len(glyphs) * GLYPH_W + (len(glyphs) - 1) * GAP) * SCALE + 2 * MARGIN
+	height = GLYPH_H * SCALE + 2 * MARGIN
+
+	pixels = bytearray(b'\xff' * (width * height))
+	for i, glyph in enumerate(glyphs):
+		for gy, line in enumerate(glyph):
+			for gx, bit in enumerate(line):
+				if bit != '1':
+					continue
+				x0 = MARGIN + (i * (GLYPH_W + GAP) + gx) * SCALE
+				y0 = MARGIN + gy * SCALE
+				for y in range(y0, y0 + SCALE):
+					pixels[y * width + x0 : y * width + x0 + SCALE] = b'\x00' * SCALE
+
+	buf = io.BytesIO()
+	Image.frombytes('L', (width, height), bytes(pixels)).save(buf, format='PNG')
+	return buf.getvalue()
+
+
+im_data = render('ROCKET')
 
 
 class Contract(gl.contract.Contract):
 	def __init__(self):
 		def run():
 			return gl.nondet.exec_prompt(
-				'how many colors are in the image? Respond only with amount of colors, without any context',
+				'what word is written in the image? Respond only with that word, without any context',
 				images=[im_data],
 			)
 
-		res = gl.eq_principle.strict_eq(run).lower()
+		res = gl.eq_principle.strict_eq(run)
 		print(res, file=sys.stderr)
-		if '6' in res or 'six' in res:
-			print('yes, it is six')
+		# Lenient about surrounding prose, strict about the word boundary, so a
+		# misread such as `rocketship` does not count as a read.
+		if 'rocket' in re.findall(r'[a-z]+', res.lower()):
+			print('yes, it is rocket')
 		else:
 			print('WRONG res')

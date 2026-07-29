@@ -23,17 +23,25 @@ debug = true
 incremental = false
 panic = "abort"
 
+[features]
+# The fuzz examples link against the AFL runtime, which only `cargo-afl`
+# supplies. Gate them so a plain `cargo test` skips them instead of failing.
+fuzzing = []
+
 [[example]]
 name = "fuzz-genvm-storage"
 path = "fuzz/genvm-storage.rs"
+required-features = ["fuzzing"]
 
 [[example]]
 name = "fuzz-leader-result"
 path = "fuzz/leader-result.rs"
+required-features = ["fuzzing"]
 
 [[example]]
 name = "fuzz-entry-data"
 path = "fuzz/entry-data.rs"
+required-features = ["fuzzing"]
 
 [dependencies.wasmtime]
 default-features = false

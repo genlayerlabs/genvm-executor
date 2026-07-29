@@ -14,6 +14,7 @@ exclude = ["/tests/**", "/fuzz/**"]
 [[example]]
 name = "fuzz-genvm-common-decode"
 path = "fuzz/genvm-common-decode.rs"
+required-features = ["arbitrary"]
 
 [[example]]
 name = "fuzz-genvm-common-encode"
