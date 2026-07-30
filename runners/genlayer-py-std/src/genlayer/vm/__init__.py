@@ -141,6 +141,13 @@ def unpack_result[T: calldata.Decoded](res: Result[T], /) -> T:
 	:raises UserError: If the result represents a user error
 	:raises UserError: If the result represents a ``VMError`` (rewrapped as user error)
 
+	.. note::
+		Use this on a :py:data:`Result` value, e.g. what :py:func:`spawn_sandbox` returns,
+		or the ``validator_fn`` argument in :py:func:`run_nondet`/:py:func:`run_nondet_default`.
+		Do **not** call this on the return value of :py:func:`run_nondet` or
+		:py:func:`run_nondet_default` themselves — those already return the unwrapped
+		value directly, and re-unpacking raises ``AttributeError``.
+
 	Example:
 		>>> result = gl.vm.spawn_sandbox(lambda: 42)
 		>>> value = unpack_result(result)  # Returns 42 or raises on error
@@ -215,7 +222,10 @@ def run_nondet[T: calldata.Decoded](
 
 	:param leader_fn: Function executed by the leader node (must be serializable)
 	:param validator_fn: Function that validates the leader's result and returns bool
-	:return: The result from the leader (iff validation passes, otherwise VM will be terminated)
+	:return: The result from the leader (iff validation passes, otherwise VM will be terminated).
+		This is already the plain decoded value, **not** a :py:data:`Result`/:py:class:`Return`
+		wrapper — do not pass it to :py:func:`unpack_result` again, that raises
+		``AttributeError`` because the return value has no ``.calldata`` attribute.
 
 	.. warning::
 		This function does not use extra sandbox for catching validator errors.
@@ -226,12 +236,16 @@ def run_nondet[T: calldata.Decoded](
 	.. note::
 		All sub-vm returns go through :py:mod:`genlayer.calldata` encoding.
 
+		``validator_fn`` *does* receive a proper :py:data:`Result` (with ``.calldata``,
+		and ``isinstance(x, Return)`` checks work) — only the final return value of
+		``run_nondet`` itself is already unwrapped. This asymmetry is easy to miss.
+
 	Example:
 		>>> def leader():
 		...   return os.urandom(1)[0] % 3
 		>>> def validator(result):
 		...   return unpack_result(result) == 1  # agree in 33% of cases
-		>>> value = gl.vm.run_nondet(leader, validator)
+		>>> value = gl.vm.run_nondet(leader, validator)  # value is already unwrapped
 	"""
 	import cloudpickle
 
@@ -276,7 +290,9 @@ def run_nondet_default[T: calldata.Decoded](
 	:param validator_fn: Function that validates the leader's result, is ran in a sandbox
 	:param compare_user_errors: Function to compare UserError instances for equality
 	:param compare_vm_errors: Function to compare VMError instances for equality
-	:return: The result from the leader if validation passes
+	:return: The result from the leader if validation passes. Like :py:func:`run_nondet`,
+		this is already the plain decoded value, **not** a :py:data:`Result`/:py:class:`Return`
+		wrapper — do not pass it to :py:func:`unpack_result` again.
 
 	Error handling:
 	- If leader and validator both succeed: returns leader result
