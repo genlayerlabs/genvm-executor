@@ -1607,6 +1607,26 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn register_rejects_malformed_runner_actions() {
+        let registry = runners::cache::WeakCache::new();
+        let code = bytes::Bytes::from_static(b"# { \"UnknownAction\": true }\n");
+        let limiter = rt::memlimiter::Limiter::new();
+        let mut loaded = runners::cache::LoadedSet::default();
+
+        let result =
+            register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone()).await;
+
+        assert!(
+            result.is_err(),
+            "RegisterRunner must not return an ID for a runner whose runner.json cannot be deserialized; got {result:?}"
+        );
+        assert!(
+            !loaded.contains(custom_id_of(&code)),
+            "a runner with malformed actions must not become resolvable"
+        );
+    }
+
     /// Grant transport: the pins handed to a child at `RunNondet`/
     /// `Sandbox` call time keep the content alive even after the granting parent
     /// dies -- a queued nondet validator task must still find it and load it into
