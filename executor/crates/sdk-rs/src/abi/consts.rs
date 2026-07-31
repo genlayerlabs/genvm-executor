@@ -224,6 +224,9 @@ pub mod __VmError {
 
     impl OomRam {
         pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "OOM RAM"
+        }
         pub const fn table(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM table")) }
         pub const fn memory(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM memory")) }
         pub const fn limit(&self) -> VmError { VmError(Cow::Borrowed("OOM RAM limit")) }
@@ -232,6 +235,9 @@ pub mod __VmError {
     pub struct OomReceiptMessage;
 
     impl OomReceiptMessage {
+        pub const fn prefix_(&self) -> &'static str {
+            "OOM receipt message"
+        }
         pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("OOM receipt message internal")) }
         pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("OOM receipt message external")) }
     }
@@ -239,6 +245,9 @@ pub mod __VmError {
     pub struct OomReceipt;
 
     impl OomReceipt {
+        pub const fn prefix_(&self) -> &'static str {
+            "OOM receipt"
+        }
         pub const fn nondet_output(&self) -> VmError { VmError(Cow::Borrowed("OOM receipt nondet_output")) }
         pub const fn message(&self) -> OomReceiptMessage { OomReceiptMessage }
     }
@@ -246,6 +255,9 @@ pub mod __VmError {
     pub struct OomFees;
 
     impl OomFees {
+        pub const fn prefix_(&self) -> &'static str {
+            "OOM fees"
+        }
         pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("OOM fees internal")) }
         pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("OOM fees external")) }
     }
@@ -254,6 +266,9 @@ pub mod __VmError {
 
     impl Oom {
         pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("OOM")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "OOM"
+        }
         pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("OOM storage")) }
         pub const fn ram(&self) -> OomRam { OomRam }
         pub const fn receipt(&self) -> OomReceipt { OomReceipt }
@@ -263,6 +278,9 @@ pub mod __VmError {
     pub struct InvalidContractWasm;
 
     impl InvalidContractWasm {
+        pub const fn prefix_(&self) -> &'static str {
+            "invalid_contract wasm"
+        }
         pub const fn validating(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract wasm validating")) }
         pub const fn linking(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract wasm linking")) }
         pub const fn entrypoint(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract wasm entrypoint")) }
@@ -272,6 +290,9 @@ pub mod __VmError {
 
     impl InvalidContract {
         pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "invalid_contract"
+        }
         pub const fn absent_runner_comment(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract absent_runner_comment")) }
         pub const fn not_utf8_text(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract not_utf8_text")) }
         pub const fn malformed_runner(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract malformed_runner")) }
@@ -291,6 +312,7 @@ pub mod __VmError {
 
     impl WasmTrap {
         pub fn val_str(&self, v: &str) -> VmError {
+            debug_assert!(!v.is_empty(), "wasm_trap needs a non-empty description");
             VmError(Cow::Owned(format!("wasm_trap {v}")))
         }
     }
@@ -299,6 +321,7 @@ pub mod __VmError {
 
     impl Host {
         pub fn val_str(&self, v: &str) -> VmError {
+            debug_assert!(!v.is_empty(), "host needs a non-empty description");
             VmError(Cow::Owned(format!("host {v}")))
         }
     }
@@ -322,6 +345,54 @@ impl VmError {
     pub const fn oom() -> __VmError::Oom { __VmError::Oom }
     pub const fn invalid_contract() -> __VmError::InvalidContract { __VmError::InvalidContract }
     pub const fn host() -> __VmError::Host { __VmError::Host }
+}
+
+#[rustfmt::skip]
+impl VmError {
+    /// Whether `s` is a well-formed `vm_error` path.
+    pub fn is_valid_(s: &str) -> bool {
+        if matches!(s,
+            "timeout" |
+            "absent" |
+            "OOM" |
+            "OOM RAM" |
+            "OOM RAM table" |
+            "OOM RAM memory" |
+            "OOM RAM limit" |
+            "OOM storage" |
+            "OOM receipt nondet_output" |
+            "OOM receipt message internal" |
+            "OOM receipt message external" |
+            "OOM fees internal" |
+            "OOM fees external" |
+            "invalid_contract" |
+            "invalid_contract absent_runner_comment" |
+            "invalid_contract not_utf8_text" |
+            "invalid_contract malformed_runner" |
+            "invalid_contract major_mismatch" |
+            "invalid_contract wasm validating" |
+            "invalid_contract wasm linking" |
+            "invalid_contract wasm entrypoint"
+        ) {
+            return true;
+        }
+        if let Some(rest) = s.strip_prefix("exit_code ") {
+            if rest.parse::<i32>().is_ok_and(|v| v.to_string() == rest) {
+                return true;
+            }
+        }
+        if let Some(rest) = s.strip_prefix("wasm_trap ") {
+            if !rest.is_empty() {
+                return true;
+            }
+        }
+        if let Some(rest) = s.strip_prefix("host ") {
+            if !rest.is_empty() {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub const EVENT_MAX_TOPICS: u32 = 4;

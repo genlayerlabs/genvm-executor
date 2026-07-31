@@ -15,6 +15,48 @@ pub struct Args {
     info: bool,
 }
 
+/// Writes `data` to a uniquely named sibling of `path`, then renames it onto
+/// `path`.
+///
+/// The reader `deserialize_file`s whatever sits at the final path without
+/// validating it, so a crash mid-write must not leave a truncated module there.
+/// The temp name mixes pid, an in-process counter and the wall clock, so
+/// concurrent writers never pick the same one; the fsync keeps the rename from
+/// exposing a name whose contents are still only in page cache.
+fn write_atomically(path: &std::path::Path, data: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_epoch| since_epoch.as_nanos());
+    let mut tmp_name = path
+        .file_name()
+        .expect("precompiled wasm path has no file name")
+        .to_owned();
+    tmp_name.push(format!(
+        ".tmp-{}-{}-{stamp}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ));
+    let tmp_path = path.with_file_name(tmp_name);
+
+    let write_tmp = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp_path, path)
+    };
+
+    if let Err(e) = write_tmp() {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e).with_context(|| format!("writing {tmp_path:?} and renaming it to {path:?}"));
+    }
+
+    Ok(())
+}
+
 fn compile_single_file_single_mode(
     result_path: &std::path::Path,
     engine: &wasmtime::Engine,
@@ -40,8 +82,7 @@ fn compile_single_file_single_mode(
 
     let sz = precompiled.len();
 
-    std::fs::write(result_path, precompiled)
-        .with_context(|| format!("writing to {result_path:?}"))?;
+    write_atomically(result_path, &precompiled)?;
 
     log_info!("size" = sz, result:? = result_path, engine = engine_type, runner:? = runner_path, runner_path:? = path_in_runner, duration:? = time_start.elapsed(); "wasm writing done");
 
