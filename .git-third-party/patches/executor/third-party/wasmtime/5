@@ -10,10 +10,10 @@ Subject: [PATCH] feat(genvm): configure wasm stack limits
  3 files changed, 26 insertions(+), 1 deletion(-)
 
 diff --git a/crates/wasmtime/src/config.rs b/crates/wasmtime/src/config.rs
-index 1cbbd4b2..746ae852 100644
+index 0b00c8395..06bbd731a 100644
 --- a/crates/wasmtime/src/config.rs
 +++ b/crates/wasmtime/src/config.rs
-@@ -160,6 +160,8 @@ pub struct Config {
+@@ -163,6 +163,8 @@ pub struct Config {
      pub(crate) custom_code_memory: Option<Arc<dyn CustomCodeMemory>>,
      pub(crate) allocation_strategy: InstanceAllocationStrategy,
      pub(crate) max_wasm_stack: usize,
@@ -22,16 +22,16 @@ index 1cbbd4b2..746ae852 100644
      /// Explicitly enabled features via `Config::wasm_*` methods. This is a
      /// signal that the embedder specifically wants something turned on
      /// regardless of the defaults that Wasmtime might otherwise have enabled.
-@@ -274,6 +276,8 @@ impl Config {
+@@ -277,6 +279,8 @@ impl Config {
              // 1` forces this), or at least it passed when this change was
              // committed.
              max_wasm_stack: 512 * 1024,
 +            wasm_call_stack_limit: 1024,
 +            wasm_value_stack_limit: 65535,
-             wasm_backtrace: true,
              wasm_backtrace_details_env_used: false,
+             wasm_backtrace_max_frames: Some(DEFAULT_WASM_BACKTRACE_MAX_FRAMES),
              native_unwind_info: None,
-@@ -741,6 +745,16 @@ impl Config {
+@@ -779,6 +783,16 @@ impl Config {
          self
      }
  
@@ -49,10 +49,10 @@ index 1cbbd4b2..746ae852 100644
      ///
      /// This setting configures the size of the stacks that are allocated for
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index 3656a449..ce31edb4 100644
+index 789a8bb71..e80dd5142 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
-@@ -753,7 +753,10 @@ impl<T> Store<T> {
+@@ -751,7 +751,10 @@ impl<T> Store<T> {
          let inner = StoreOpaque {
              _marker: marker::PhantomPinned,
              engine: engine.clone(),
@@ -65,10 +65,10 @@ index 3656a449..ce31edb4 100644
              continuations: Vec::new(),
              instances: wasmtime_environ::collections::PrimaryMap::new(),
 diff --git a/crates/wasmtime/src/runtime/vm/vmcontext.rs b/crates/wasmtime/src/runtime/vm/vmcontext.rs
-index 01e3373a..cc0421c3 100644
+index a80eed44a..b6a441901 100644
 --- a/crates/wasmtime/src/runtime/vm/vmcontext.rs
 +++ b/crates/wasmtime/src/runtime/vm/vmcontext.rs
-@@ -1196,6 +1196,14 @@ pub struct VMStoreContext {
+@@ -1229,6 +1229,14 @@ pub struct VMStoreContext {
  }
  
  impl VMStoreContext {

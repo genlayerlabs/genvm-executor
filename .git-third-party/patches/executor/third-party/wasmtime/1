@@ -8,17 +8,17 @@ Subject: [PATCH] feat: rebase genvm
  cranelift/frontend/src/frontend.rs            |   4 +
  crates/cache/src/config.rs                    |   8 +-
  crates/cranelift/src/compiler.rs              |  12 ++
- crates/cranelift/src/func_environ.rs          |  74 ++++++++++++
+ crates/cranelift/src/func_environ.rs          |  69 +++++++++++
  crates/cranelift/src/lib.rs                   |   2 +
  .../src/translate/code_translator.rs          | 109 +++++++++++++++++-
  .../src/translate/func_translator.rs          |  20 +++-
  crates/cranelift/src/translate/stack.rs       |  10 ++
  crates/environ/Cargo.toml                     |   2 +-
- crates/environ/src/trap_encoding.rs           |   5 +
+ crates/environ/src/trap_encoding.rs           |   3 +
  crates/environ/src/tunables.rs                |   4 +
  crates/environ/src/vmoffsets.rs               |  10 ++
  crates/wasmtime/Cargo.toml                    |   2 +
- crates/wasmtime/src/config.rs                 |  22 +++-
+ crates/wasmtime/src/config.rs                 |  20 ++++
  crates/wasmtime/src/engine/serialization.rs   |   6 +
  crates/wasmtime/src/lib.rs                    |   3 +
  crates/wasmtime/src/runtime/func.rs           |  71 ++++++++++++
@@ -30,29 +30,29 @@ Subject: [PATCH] feat: rebase genvm
  crates/wiggle/generate/src/wasmtime.rs        |  60 ++++++++--
  crates/wiggle/src/guest_error.rs              |   2 +
  crates/wiggle/src/lib.rs                      |   5 +
- 26 files changed, 453 insertions(+), 53 deletions(-)
+ 26 files changed, 445 insertions(+), 52 deletions(-)
 
 diff --git a/Cargo.toml b/Cargo.toml
-index dc159f65..1a0bcd80 100644
+index 3d002f0cf..38fa4be22 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -343,18 +343,18 @@ wit-bindgen = { version = "0.51.0", default-features = false }
- wit-bindgen-rust-macro = { version = "0.51.0", default-features = false }
+@@ -344,18 +344,18 @@ wit-bindgen = { version = "0.53.0", default-features = false }
+ wit-bindgen-rust-macro = { version = "0.53.0", default-features = false }
  
  # wasm-tools family:
--wasmparser = { version = "0.244.0", default-features = false, features = ['simd'] }
--wat = "1.244.0"
--wast = "244.0.0"
--wasmprinter = "0.244.0"
--wasm-encoder = "0.244.0"
--wasm-smith = "0.244.0"
--wasm-mutate = "0.244.0"
--wit-parser = "0.244.0"
--wit-component = "0.244.0"
--wasm-wave = "0.244.0"
--wasm-compose = "0.244.0"
--json-from-wast = "0.244.0"
-+wasmparser = { path = "../wasm-tools/crates/wasmparser", default-features = false, features = ['simd']}
+-wasmparser = { version = "0.245.0", default-features = false, features = ['simd'] }
+-wat = "1.245.0"
+-wast = "245.0.0"
+-wasmprinter = "0.245.0"
+-wasm-encoder = "0.245.0"
+-wasm-smith = "0.245.0"
+-wasm-mutate = "0.245.0"
+-wit-parser = "0.245.0"
+-wit-component = "0.245.0"
+-wasm-wave = "0.245.0"
+-wasm-compose = "0.245.0"
+-json-from-wast = "0.245.0"
++wasmparser = { path = "../wasm-tools/crates/wasmparser", default-features = false, features = ['simd'] }
 +wat = { path = "../wasm-tools/crates/wat" }
 +wast = { path = "../wasm-tools/crates/wast" }
 +wasmprinter = { path = "../wasm-tools/crates/wasmprinter" }
@@ -68,7 +68,7 @@ index dc159f65..1a0bcd80 100644
  # Non-Bytecode Alliance maintained dependencies:
  # --------------------------
 diff --git a/cranelift/frontend/src/frontend.rs b/cranelift/frontend/src/frontend.rs
-index d51dbbbb..5ceb7b48 100644
+index d51dbbbbd..5ceb7b48c 100644
 --- a/cranelift/frontend/src/frontend.rs
 +++ b/cranelift/frontend/src/frontend.rs
 @@ -47,6 +47,9 @@ pub struct FunctionBuilder<'a> {
@@ -90,7 +90,7 @@ index d51dbbbb..5ceb7b48 100644
      }
  
 diff --git a/crates/cache/src/config.rs b/crates/cache/src/config.rs
-index 90de0060..2451a73e 100644
+index beef58d28..3cd366b7e 100644
 --- a/crates/cache/src/config.rs
 +++ b/crates/cache/src/config.rs
 @@ -339,10 +339,16 @@ impl CacheConfig {
@@ -112,7 +112,7 @@ index 90de0060..2451a73e 100644
          // get config file path
          let (config_file, user_custom_file) = match config_file {
 diff --git a/crates/cranelift/src/compiler.rs b/crates/cranelift/src/compiler.rs
-index 3b75e282..0529e5fa 100644
+index cb0b22526..fb4fb01d3 100644
 --- a/crates/cranelift/src/compiler.rs
 +++ b/crates/cranelift/src/compiler.rs
 @@ -314,6 +314,18 @@ impl wasmtime_environ::Compiler for Compiler {
@@ -135,10 +135,10 @@ index 3b75e282..0529e5fa 100644
          let FunctionBodyData { validator, body } = input;
          let mut validator =
 diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
-index 5bb16980..8f549ff5 100644
+index 22849dbb1..ec49b7acf 100644
 --- a/crates/cranelift/src/func_environ.rs
 +++ b/crates/cranelift/src/func_environ.rs
-@@ -203,6 +203,9 @@ pub struct FuncEnvironment<'module_environment> {
+@@ -210,6 +210,9 @@ pub struct FuncEnvironment<'module_environment> {
      /// into the host to trap when signal handlers are disabled.
      pub(crate) stack_limit_at_function_entry: Option<ir::GlobalValue>,
  
@@ -148,7 +148,7 @@ index 5bb16980..8f549ff5 100644
      /// Used by the stack switching feature. If set, we have a allocated a
      /// slot on this function's stack to be used for the
      /// current stack's `handler_list` field.
-@@ -273,6 +276,9 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
+@@ -280,6 +283,9 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
  
              stack_limit_at_function_entry: None,
  
@@ -158,7 +158,7 @@ index 5bb16980..8f549ff5 100644
              stack_switching_handler_list_buffer: None,
              stack_switching_values_buffer: None,
  
-@@ -3296,6 +3302,7 @@ impl FuncEnvironment<'_> {
+@@ -3324,6 +3330,7 @@ impl FuncEnvironment<'_> {
          sig_ref: ir::SigRef,
          call_args: &[ir::Value],
      ) -> WasmResult<()> {
@@ -166,7 +166,7 @@ index 5bb16980..8f549ff5 100644
          Call::new_tail(builder, self, srcloc).direct_call(callee_index, sig_ref, call_args)?;
          Ok(())
      }
-@@ -3311,6 +3318,7 @@ impl FuncEnvironment<'_> {
+@@ -3339,6 +3346,7 @@ impl FuncEnvironment<'_> {
          callee: ir::Value,
          call_args: &[ir::Value],
      ) -> WasmResult<()> {
@@ -174,7 +174,7 @@ index 5bb16980..8f549ff5 100644
          Call::new_tail(builder, self, srcloc).indirect_call(
              features,
              table_index,
-@@ -3330,6 +3338,7 @@ impl FuncEnvironment<'_> {
+@@ -3358,6 +3366,7 @@ impl FuncEnvironment<'_> {
          callee: ir::Value,
          call_args: &[ir::Value],
      ) -> WasmResult<()> {
@@ -182,7 +182,7 @@ index 5bb16980..8f549ff5 100644
          Call::new_tail(builder, self, srcloc).call_ref(sig_ref, callee, call_args)?;
          Ok(())
      }
-@@ -3837,6 +3846,32 @@ impl FuncEnvironment<'_> {
+@@ -3865,7 +3874,28 @@ impl FuncEnvironment<'_> {
              self.conditionally_trap(builder, overflow, ir::TrapCode::STACK_OVERFLOW);
          }
  
@@ -206,16 +206,12 @@ index 5bb16980..8f549ff5 100644
 +            }
 +        }
 +
-+        // If the `vm_store_context` variable will get used then we initialize
-+        // it here.
-+        if true || self.tunables.consume_fuel || self.tunables.epoch_interruption {
-+            self.get_vmstore_context_ptr(builder);
-+        }
-+
+         self.update_state_slot_vmctx(builder);
++        self.get_vmstore_context_ptr(builder);
+ 
          // Additionally we initialize `fuel_var` if it will get used.
          if self.tunables.consume_fuel {
-             self.fuel_function_entry(builder);
-@@ -3882,6 +3917,44 @@ impl FuncEnvironment<'_> {
+@@ -3910,6 +3940,44 @@ impl FuncEnvironment<'_> {
          self.isa.triple().architecture == target_lexicon::Architecture::X86_64
      }
  
@@ -260,7 +256,7 @@ index 5bb16980..8f549ff5 100644
      pub fn translate_cont_bind(
          &mut self,
          builder: &mut FunctionBuilder<'_>,
-@@ -4001,6 +4074,7 @@ impl FuncEnvironment<'_> {
+@@ -4029,6 +4097,7 @@ impl FuncEnvironment<'_> {
      }
  
      pub fn handle_before_return(&mut self, retvals: &[ir::Value], builder: &mut FunctionBuilder) {
@@ -269,10 +265,10 @@ index 5bb16980..8f549ff5 100644
          if self.compiler.wmemcheck {
              let func_name = self.current_func_name(builder);
 diff --git a/crates/cranelift/src/lib.rs b/crates/cranelift/src/lib.rs
-index 1d1ac61c..4db70f6a 100644
+index 8c0a2da90..66c56b849 100644
 --- a/crates/cranelift/src/lib.rs
 +++ b/crates/cranelift/src/lib.rs
-@@ -72,6 +72,8 @@ pub const TRAP_CONTINUATION_ALREADY_CONSUMED: TrapCode =
+@@ -73,6 +73,8 @@ pub const TRAP_CONTINUATION_ALREADY_CONSUMED: TrapCode =
      TrapCode::unwrap_user(Trap::ContinuationAlreadyConsumed as u8 + TRAP_OFFSET);
  pub const TRAP_CAST_FAILURE: TrapCode =
      TrapCode::unwrap_user(Trap::CastFailure as u8 + TRAP_OFFSET);
@@ -282,10 +278,10 @@ index 1d1ac61c..4db70f6a 100644
  /// Creates a new cranelift `Signature` with no wasm params/results for the
  /// given calling convention.
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index b7565bd2..9dde783c 100644
+index 79d8edf56..ad613df54 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -264,6 +264,7 @@ pub fn translate_operator(
+@@ -265,6 +265,7 @@ pub fn translate_operator(
                  .stacks
                  .stack
                  .extend_from_slice(builder.block_params(loop_body));
@@ -293,7 +289,7 @@ index b7565bd2..9dde783c 100644
  
              builder.switch_to_block(loop_body);
              environ.translate_loop_header(builder)?;
-@@ -1016,120 +1017,145 @@ pub fn translate_operator(
+@@ -1017,120 +1018,145 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().ireduce(I32, val));
          }
          Operator::F32Sqrt | Operator::F64Sqrt => {
@@ -439,7 +435,7 @@ index b7565bd2..9dde783c 100644
              let val = environ.stacks.pop1();
              environ
                  .stacks
-@@ -1227,6 +1253,7 @@ pub fn translate_operator(
+@@ -1228,6 +1254,7 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().rotr(arg1, arg2));
          }
          Operator::F32Add | Operator::F64Add => {
@@ -447,7 +443,7 @@ index b7565bd2..9dde783c 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fadd(arg1, arg2));
          }
-@@ -1235,6 +1262,7 @@ pub fn translate_operator(
+@@ -1236,6 +1263,7 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().isub(arg1, arg2));
          }
          Operator::F32Sub | Operator::F64Sub => {
@@ -455,7 +451,7 @@ index b7565bd2..9dde783c 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fsub(arg1, arg2));
          }
-@@ -1243,10 +1271,12 @@ pub fn translate_operator(
+@@ -1244,10 +1272,12 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().imul(arg1, arg2));
          }
          Operator::F32Mul | Operator::F64Mul => {
@@ -468,7 +464,7 @@ index b7565bd2..9dde783c 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fdiv(arg1, arg2));
          }
-@@ -1271,14 +1301,17 @@ pub fn translate_operator(
+@@ -1272,14 +1302,17 @@ pub fn translate_operator(
              environ.stacks.push1(result);
          }
          Operator::F32Min | Operator::F64Min => {
@@ -486,7 +482,7 @@ index b7565bd2..9dde783c 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fcopysign(arg1, arg2));
          }
-@@ -1711,9 +1744,13 @@ pub fn translate_operator(
+@@ -1712,9 +1745,13 @@ pub fn translate_operator(
              environ.stacks.push1(splatted)
          }
          Operator::I32x4Splat
@@ -502,7 +498,7 @@ index b7565bd2..9dde783c 100644
              let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
              environ.stacks.push1(splatted)
          }
-@@ -1794,9 +1831,15 @@ pub fn translate_operator(
+@@ -1795,9 +1832,15 @@ pub fn translate_operator(
              // work.
          }
          Operator::I32x4ExtractLane { lane }
@@ -520,7 +516,7 @@ index b7565bd2..9dde783c 100644
              let vector = pop1_with_bitcast(environ, type_of(op), builder);
              environ
                  .stacks
-@@ -1812,9 +1855,16 @@ pub fn translate_operator(
+@@ -1813,9 +1856,16 @@ pub fn translate_operator(
                  .push1(builder.ins().insertlane(vector, reduced, *lane))
          }
          Operator::I32x4ReplaceLane { lane }
@@ -539,7 +535,7 @@ index b7565bd2..9dde783c 100644
              let (vector, replacement) = environ.stacks.pop2();
              let vector = optionally_bitcast_vector(vector, type_of(op), builder);
              environ
-@@ -2022,30 +2072,37 @@ pub fn translate_operator(
+@@ -2023,30 +2073,37 @@ pub fn translate_operator(
              translate_vector_fcmp(FloatCC::GreaterThanOrEqual, type_of(op), builder, environ)
          }
          Operator::F32x4Add | Operator::F64x2Add => {
@@ -577,7 +573,7 @@ index b7565bd2..9dde783c 100644
              // Note the careful ordering here with respect to `fcmp` and
              // `bitselect`. This matches the spec definition of:
              //
-@@ -2059,6 +2116,7 @@ pub fn translate_operator(
+@@ -2060,6 +2117,7 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().bitselect(cmp, b, a))
          }
          Operator::F32x4PMin | Operator::F64x2PMin => {
@@ -585,7 +581,7 @@ index b7565bd2..9dde783c 100644
              // Note the careful ordering here which is similar to `pmax` above:
              //
              //  fpmin(z1, z2) =
-@@ -2071,26 +2129,32 @@ pub fn translate_operator(
+@@ -2072,26 +2130,32 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().bitselect(cmp, b, a))
          }
          Operator::F32x4Sqrt | Operator::F64x2Sqrt => {
@@ -618,7 +614,7 @@ index b7565bd2..9dde783c 100644
              let a = pop1_with_bitcast(environ, I32X4, builder);
              let widened_a = builder.ins().swiden_low(a);
              environ
-@@ -2098,6 +2162,7 @@ pub fn translate_operator(
+@@ -2099,6 +2163,7 @@ pub fn translate_operator(
                  .push1(builder.ins().fcvt_from_sint(F64X2, widened_a));
          }
          Operator::F64x2ConvertLowI32x4U => {
@@ -626,7 +622,7 @@ index b7565bd2..9dde783c 100644
              let a = pop1_with_bitcast(environ, I32X4, builder);
              let widened_a = builder.ins().uwiden_low(a);
              environ
-@@ -2105,20 +2170,24 @@ pub fn translate_operator(
+@@ -2106,20 +2171,24 @@ pub fn translate_operator(
                  .push1(builder.ins().fcvt_from_uint(F64X2, widened_a));
          }
          Operator::F64x2PromoteLowF32x4 => {
@@ -651,7 +647,7 @@ index b7565bd2..9dde783c 100644
              let a = pop1_with_bitcast(environ, F64X2, builder);
              let converted_a = builder.ins().fcvt_to_sint_sat(I64X2, a);
              let handle = builder.func.dfg.constants.insert(vec![0u8; 16].into());
-@@ -2141,12 +2210,14 @@ pub fn translate_operator(
+@@ -2142,12 +2211,14 @@ pub fn translate_operator(
          // perhaps for other backends too) should be added and the codegen for
          // the relaxed instruction should conditionally be different.
          Operator::I32x4RelaxedTruncF32x4U | Operator::I32x4TruncSatF32x4U => {
@@ -666,7 +662,7 @@ index b7565bd2..9dde783c 100644
              let a = pop1_with_bitcast(environ, F64X2, builder);
              let zero_constant = builder.func.dfg.constants.insert(vec![0u8; 16].into());
              let result = if environ.is_x86() && !environ.isa().has_round() {
-@@ -2267,41 +2338,49 @@ pub fn translate_operator(
+@@ -2268,41 +2339,49 @@ pub fn translate_operator(
                  .push1(builder.ins().iadd_pairwise(widen_low, widen_high));
          }
          Operator::F32x4Ceil => {
@@ -716,7 +712,7 @@ index b7565bd2..9dde783c 100644
              let arg = pop1_with_bitcast(environ, F64X2, builder);
              let result = environ.nearest_f64x2(builder, arg);
              environ.stacks.push1(result);
-@@ -2404,6 +2483,7 @@ pub fn translate_operator(
+@@ -2405,6 +2484,7 @@ pub fn translate_operator(
          }
  
          Operator::F32x4RelaxedMax | Operator::F64x2RelaxedMax => {
@@ -724,7 +720,7 @@ index b7565bd2..9dde783c 100644
              let ty = type_of(op);
              let (a, b) = pop2_with_bitcast(environ, ty, builder);
              environ.stacks.push1(
-@@ -2423,6 +2503,7 @@ pub fn translate_operator(
+@@ -2424,6 +2504,7 @@ pub fn translate_operator(
          }
  
          Operator::F32x4RelaxedMin | Operator::F64x2RelaxedMin => {
@@ -732,7 +728,7 @@ index b7565bd2..9dde783c 100644
              let ty = type_of(op);
              let (a, b) = pop2_with_bitcast(environ, ty, builder);
              environ.stacks.push1(
-@@ -2448,22 +2529,26 @@ pub fn translate_operator(
+@@ -2449,22 +2530,26 @@ pub fn translate_operator(
          }
  
          Operator::F32x4RelaxedMadd => {
@@ -759,7 +755,7 @@ index b7565bd2..9dde783c 100644
              let (a, b, c) = pop3_with_bitcast(environ, type_of(op), builder);
              let a = builder.ins().fneg(a);
              let result = environ.fma_f64x2(builder, a, b, c);
-@@ -2493,6 +2578,7 @@ pub fn translate_operator(
+@@ -2494,6 +2579,7 @@ pub fn translate_operator(
          }
  
          Operator::I32x4RelaxedTruncF32x4S => {
@@ -767,7 +763,7 @@ index b7565bd2..9dde783c 100644
              let a = pop1_with_bitcast(environ, F32X4, builder);
              environ.stacks.push1(
                  if environ.relaxed_simd_deterministic() || !environ.is_x86() {
-@@ -2505,6 +2591,7 @@ pub fn translate_operator(
+@@ -2506,6 +2592,7 @@ pub fn translate_operator(
              )
          }
          Operator::I32x4RelaxedTruncF64x2SZero => {
@@ -775,7 +771,7 @@ index b7565bd2..9dde783c 100644
              let a = pop1_with_bitcast(environ, F64X2, builder);
              let converted_a = if environ.relaxed_simd_deterministic() || !environ.is_x86() {
                  // Deterministic semantics are to match the
-@@ -3942,6 +4029,7 @@ fn translate_vector_icmp(
+@@ -3943,6 +4030,7 @@ fn translate_vector_icmp(
  }
  
  fn translate_fcmp(cc: FloatCC, builder: &mut FunctionBuilder, env: &mut FuncEnvironment<'_>) {
@@ -783,7 +779,7 @@ index b7565bd2..9dde783c 100644
      let (arg0, arg1) = env.stacks.pop2();
      let val = builder.ins().fcmp(cc, arg0, arg1);
      env.stacks.push1(builder.ins().uextend(I32, val));
-@@ -3953,6 +4041,7 @@ fn translate_vector_fcmp(
+@@ -3954,6 +4042,7 @@ fn translate_vector_fcmp(
      builder: &mut FunctionBuilder,
      env: &mut FuncEnvironment<'_>,
  ) {
@@ -791,7 +787,7 @@ index b7565bd2..9dde783c 100644
      let (a, b) = env.stacks.pop2();
      let bitcast_a = optionally_bitcast_vector(a, needed_type, builder);
      let bitcast_b = optionally_bitcast_vector(b, needed_type, builder);
-@@ -4479,3 +4568,11 @@ fn create_catch_block(
+@@ -4480,3 +4569,11 @@ fn create_catch_block(
  
      Ok(block)
  }
@@ -804,7 +800,7 @@ index b7565bd2..9dde783c 100644
 +    return true;
 +}
 diff --git a/crates/cranelift/src/translate/func_translator.rs b/crates/cranelift/src/translate/func_translator.rs
-index bda7dd4d..08478285 100644
+index bda7dd4de..084782859 100644
 --- a/crates/cranelift/src/translate/func_translator.rs
 +++ b/crates/cranelift/src/translate/func_translator.rs
 @@ -73,6 +73,9 @@ impl FuncTranslator {
@@ -863,7 +859,7 @@ index bda7dd4d..08478285 100644
  
  /// Declare `count` local variables of the same type, starting from `next_local`.
 diff --git a/crates/cranelift/src/translate/stack.rs b/crates/cranelift/src/translate/stack.rs
-index f338fe3f..8b4716a9 100644
+index f338fe3f0..8b4716a9d 100644
 --- a/crates/cranelift/src/translate/stack.rs
 +++ b/crates/cranelift/src/translate/stack.rs
 @@ -255,6 +255,7 @@ pub struct FuncTranslationStacks {
@@ -916,12 +912,12 @@ index f338fe3f..8b4716a9 100644
  
      /// Pop one value.
 diff --git a/crates/environ/Cargo.toml b/crates/environ/Cargo.toml
-index 07d8ef57..83e95f6d 100644
+index fe0310c6c..6ce3e57ea 100644
 --- a/crates/environ/Cargo.toml
 +++ b/crates/environ/Cargo.toml
-@@ -24,7 +24,7 @@ cpp_demangle = { version = "0.4.3", optional = true }
- cranelift-entity = { workspace = true, features = ['enable-serde'] }
+@@ -25,7 +25,7 @@ cranelift-entity = { workspace = true, features = ['enable-serde'] }
  cranelift-bitset = { workspace = true, features = ['enable-serde'] }
+ cranelift-bforest = { workspace = true }
  hashbrown = { workspace = true, features = ["default-hasher"] }
 -wasmparser = { workspace = true, features = ['validate', 'serde', 'features'] }
 +wasmparser = { workspace = true, features = ['validate', 'serde', 'features', "simd"] }
@@ -929,62 +925,46 @@ index 07d8ef57..83e95f6d 100644
  serde = { workspace = true }
  serde_derive = { workspace = true }
 diff --git a/crates/environ/src/trap_encoding.rs b/crates/environ/src/trap_encoding.rs
-index f9d22368..2d49707b 100644
+index cf011fe59..f2c969e1e 100644
 --- a/crates/environ/src/trap_encoding.rs
 +++ b/crates/environ/src/trap_encoding.rs
-@@ -141,6 +141,9 @@ pub enum Trap {
-     /// A component passed an unaligned pointer when lifting or lowering a
-     /// value.
-     UnalignedPointer,
-+
-+    /// Deterministic mode violation
-+    DeterministicMode,
-     // if adding a variant here be sure to update the `check!` macro below, and
-     // remember to update `trap.rs` and `trap.h` as mentioned above
- }
-@@ -193,6 +196,7 @@ impl Trap {
-             ListOutOfBounds
-             InvalidDiscriminant
-             UnalignedPointer
-+            DeterministicMode
-         }
+@@ -216,6 +216,9 @@ generate_trap_type! {
+         /// Cannot resume a thread which is not suspended.
+         CannotResumeThread = "cannot resume thread which is not suspended",
  
-         None
-@@ -238,6 +242,7 @@ impl fmt::Display for Trap {
-             ListOutOfBounds => "list content out-of-bounds",
-             InvalidDiscriminant => "invalid variant discriminant",
-             UnalignedPointer => "unaligned pointer",
-+            DeterministicMode => "deterministic mode violation (cpu)",
-         };
-         write!(f, "wasm trap: {desc}")
++        /// Deterministic mode violation.
++        DeterministicMode = "deterministic mode violation (cpu)",
++
+         // if adding a variant here be sure to update `trap.rs` and `trap.h` as
+         // mentioned above
      }
 diff --git a/crates/environ/src/tunables.rs b/crates/environ/src/tunables.rs
-index fc9b4c3c..7f0ebd5b 100644
+index a3ea67ff7..375c45cef 100644
 --- a/crates/environ/src/tunables.rs
 +++ b/crates/environ/src/tunables.rs
-@@ -144,6 +144,9 @@ define_tunables! {
-         /// Whether any component model feature related to concurrency is
-         /// enabled.
-         pub concurrency_support: bool,
+@@ -152,6 +152,9 @@ define_tunables! {
+         /// Whether recording in RR is enabled or not. This is used primarily
+         /// to signal checksum computation for compiled artifacts.
+         pub recording: bool,
 +
 +        /// Whether floats enabled
 +        pub floats_enabled: bool,
      }
  
      pub struct ConfigTunables {
-@@ -220,6 +223,7 @@ impl Tunables {
-             inlining_sum_size_threshold: 2000,
+@@ -230,6 +233,7 @@ impl Tunables {
              debug_guest: false,
              concurrency_support: true,
+             recording: false,
 +            floats_enabled: true,
          }
      }
  
 diff --git a/crates/environ/src/vmoffsets.rs b/crates/environ/src/vmoffsets.rs
-index 60c88a2c..25ae8261 100644
+index 5f1d41e1c..a32e68642 100644
 --- a/crates/environ/src/vmoffsets.rs
 +++ b/crates/environ/src/vmoffsets.rs
-@@ -243,6 +243,16 @@ pub trait PtrSize {
+@@ -250,6 +250,16 @@ pub trait PtrSize {
          self.vmstore_context_stack_chain() + self.size_of_vmstack_chain()
      }
  
@@ -1002,7 +982,7 @@ index 60c88a2c..25ae8261 100644
  
      /// The offset of the `base` field.
 diff --git a/crates/wasmtime/Cargo.toml b/crates/wasmtime/Cargo.toml
-index 7ff85259..71e2e6ee 100644
+index 05b2f10d7..429ffd4fe 100644
 --- a/crates/wasmtime/Cargo.toml
 +++ b/crates/wasmtime/Cargo.toml
 @@ -17,6 +17,8 @@ workspace = true
@@ -1015,10 +995,10 @@ index 7ff85259..71e2e6ee 100644
  wasmtime-jit-debug = { workspace = true, optional = true }
  wasmtime-jit-icache-coherence = { workspace = true, optional = true }
 diff --git a/crates/wasmtime/src/config.rs b/crates/wasmtime/src/config.rs
-index 6c611d54..1cbbd4b2 100644
+index 5dd0da610..0b00c8395 100644
 --- a/crates/wasmtime/src/config.rs
 +++ b/crates/wasmtime/src/config.rs
-@@ -1037,6 +1037,17 @@ impl Config {
+@@ -1075,6 +1075,17 @@ impl Config {
          self
      }
  
@@ -1036,7 +1016,7 @@ index 6c611d54..1cbbd4b2 100644
      /// Configures whether the [WebAssembly bulk memory operations
      /// proposal][proposal] will be enabled for compilation.
      ///
-@@ -1521,6 +1532,15 @@ impl Config {
+@@ -1559,6 +1570,15 @@ impl Config {
          self
      }
  
@@ -1052,20 +1032,11 @@ index 6c611d54..1cbbd4b2 100644
      /// Sets a custom memory creator.
      ///
      /// Custom memory creators are used when creating host `Memory` objects or when
-@@ -2210,7 +2230,7 @@ impl Config {
-             | WasmFeatures::CM_THREADING
-             | WasmFeatures::CM_ERROR_CONTEXT
-             | WasmFeatures::CM_GC
--            | WasmFeatures::CM_FIXED_SIZE_LIST;
-+            | WasmFeatures::CM_FIXED_LENGTH_LISTS;
- 
-         #[allow(unused_mut, reason = "easier to avoid #[cfg]")]
-         let mut unsupported = !features_known_to_wasmtime;
 diff --git a/crates/wasmtime/src/engine/serialization.rs b/crates/wasmtime/src/engine/serialization.rs
-index 9b17cbb8..a01c1e66 100644
+index eab3c8e61..9d62dcb0c 100644
 --- a/crates/wasmtime/src/engine/serialization.rs
 +++ b/crates/wasmtime/src/engine/serialization.rs
-@@ -270,6 +270,7 @@ impl Metadata<'_> {
+@@ -308,6 +308,7 @@ impl Metadata<'_> {
              relaxed_simd_deterministic,
              winch_callable,
              signals_based_traps,
@@ -1073,7 +1044,7 @@ index 9b17cbb8..a01c1e66 100644
              memory_init_cow,
              inlining,
              inlining_intra_module,
-@@ -340,6 +341,11 @@ impl Metadata<'_> {
+@@ -380,6 +381,11 @@ impl Metadata<'_> {
              other.signals_based_traps,
              "Signals-based traps",
          )?;
@@ -1086,10 +1057,10 @@ index 9b17cbb8..a01c1e66 100644
              memory_init_cow,
              other.memory_init_cow,
 diff --git a/crates/wasmtime/src/lib.rs b/crates/wasmtime/src/lib.rs
-index 4915240b..e509feba 100644
+index 51dc8e253..b105a7c06 100644
 --- a/crates/wasmtime/src/lib.rs
 +++ b/crates/wasmtime/src/lib.rs
-@@ -544,6 +544,9 @@ pub use self::error::{Error, Result, bail, ensure, format_err};
+@@ -539,6 +539,9 @@ pub use self::error::{Error, Result, bail, ensure, format_err};
  #[cfg(feature = "reexport-wasmparser")]
  pub use wasmparser;
  
@@ -1100,10 +1071,10 @@ index 4915240b..e509feba 100644
  
  fn _assertions_lib() {
 diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
-index d8ce5016..c19cf62f 100644
+index 66044e2de..7315339ef 100644
 --- a/crates/wasmtime/src/runtime/func.rs
 +++ b/crates/wasmtime/src/runtime/func.rs
-@@ -1392,6 +1392,32 @@ impl Func {
+@@ -1393,6 +1393,32 @@ impl Func {
      }
  }
  
@@ -1136,7 +1107,7 @@ index d8ce5016..c19cf62f 100644
  /// Prepares for entrance into WebAssembly.
  ///
  /// This function will set up context such that `closure` is allowed to call a
-@@ -1426,6 +1452,51 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
+@@ -1427,6 +1453,51 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
      core::mem::drop(previous_runtime_state);
      store.0.call_hook(CallHook::ReturningFromWasm)?;
      result
@@ -1189,10 +1160,10 @@ index d8ce5016..c19cf62f 100644
  
  /// This type helps managing the state of the runtime when entering and exiting
 diff --git a/crates/wasmtime/src/runtime/instance.rs b/crates/wasmtime/src/runtime/instance.rs
-index 2a55d962..0c882e74 100644
+index 104d1d65d..f2619dc56 100644
 --- a/crates/wasmtime/src/runtime/instance.rs
 +++ b/crates/wasmtime/src/runtime/instance.rs
-@@ -630,7 +630,6 @@ impl Instance {
+@@ -646,7 +646,6 @@ impl Instance {
      /// Returns both exported and non-exported memories.
      ///
      /// Gives access to the full memories space.
@@ -1201,10 +1172,10 @@ index 2a55d962..0c882e74 100644
          &'a self,
          store: &'a StoreOpaque,
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index f214fff5..16e617d2 100644
+index 97e2fd5ba..78a8e4567 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
-@@ -108,6 +108,7 @@ use crate::{Engine, Module, Val, ValRaw, module::ModuleRegistry};
+@@ -104,6 +104,7 @@ use crate::{Engine, Module, Val, ValRaw, module::ModuleRegistry};
  #[cfg(feature = "gc")]
  use crate::{ExnRef, Rooted};
  use crate::{Global, Instance, Table};
@@ -1212,17 +1183,17 @@ index f214fff5..16e617d2 100644
  use core::convert::Infallible;
  use core::fmt;
  use core::marker;
-@@ -571,6 +572,9 @@ pub struct StoreOpaque {
-     /// logic before returning to allow execution to resume.
+@@ -569,6 +570,9 @@ pub struct StoreOpaque {
+     /// enabled, so the key-space is unique for each store.)
      #[cfg(feature = "debug")]
-     breakpoints: BreakpointState,
+     frame_data_cache: FrameDataCache,
 +
 +    /// Context for the GenVM.
 +    pub genvm_ctx: GenVMCtx,
  }
  
  /// Self-pointer to `StoreInner<T>` from within a `StoreOpaque` which is chiefly
-@@ -717,6 +721,14 @@ enum StoreInstanceKind {
+@@ -715,6 +719,14 @@ enum StoreInstanceKind {
      Dummy,
  }
  
@@ -1237,7 +1208,7 @@ index f214fff5..16e617d2 100644
  impl<T> Store<T> {
      /// Creates a new [`Store`] to be associated with the given [`Engine`] and
      /// `data` provided.
-@@ -727,14 +739,14 @@ impl<T> Store<T> {
+@@ -725,14 +737,14 @@ impl<T> Store<T> {
      /// The store will limit the number of instances, linear memories, and
      /// tables created to 10,000. This can be overridden with the
      /// [`Store::limiter`] configuration method.
@@ -1252,18 +1223,18 @@ index f214fff5..16e617d2 100644
      /// Like `Store::new` but returns an error on allocation failure.
 -    pub fn try_new(engine: &Engine, data: T) -> Result<Self> {
 +    pub fn try_new(engine: &Engine, data: T, genvm_ctx: GenVMCtx) -> Result<Self> {
-         let store_data = StoreData::new();
+         let store_data = StoreData::new(engine);
          log::trace!("creating new store {:?}", store_data.id());
  
-@@ -799,6 +811,7 @@ impl<T> Store<T> {
-             },
-             #[cfg(feature = "debug")]
+@@ -778,6 +790,7 @@ impl<T> Store<T> {
              breakpoints: Default::default(),
+             #[cfg(feature = "debug")]
+             frame_data_cache: FrameDataCache::new(),
 +            genvm_ctx,
          };
          let mut inner = try_new::<Box<_>>(StoreInner {
              inner,
-@@ -2948,11 +2961,11 @@ impl<T> StoreInner<T> {
+@@ -2827,11 +2840,11 @@ impl<T> StoreInner<T> {
      }
  }
  
@@ -1281,10 +1252,10 @@ index f214fff5..16e617d2 100644
  impl<T: fmt::Debug> fmt::Debug for Store<T> {
      fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 diff --git a/crates/wasmtime/src/runtime/vm/vmcontext.rs b/crates/wasmtime/src/runtime/vm/vmcontext.rs
-index c3287979..01e3373a 100644
+index aac495af2..a80eed44a 100644
 --- a/crates/wasmtime/src/runtime/vm/vmcontext.rs
 +++ b/crates/wasmtime/src/runtime/vm/vmcontext.rs
-@@ -1179,6 +1179,9 @@ pub struct VMStoreContext {
+@@ -1212,6 +1212,9 @@ pub struct VMStoreContext {
      /// `store-data-address` unsafe intrinsic.
      pub store_data: VmPtr<()>,
  
@@ -1294,7 +1265,7 @@ index c3287979..01e3373a 100644
      /// The range, in addresses, of the guard page that is currently in use.
      ///
      /// This field is used when signal handlers are run to determine whether a
-@@ -1271,8 +1274,10 @@ impl Default for VMStoreContext {
+@@ -1305,8 +1308,10 @@ impl Default for VMStoreContext {
              last_wasm_entry_sp: UnsafeCell::new(0),
              last_wasm_entry_trap_handler: UnsafeCell::new(0),
              stack_chain: UnsafeCell::new(VMStackChain::Absent),
@@ -1307,7 +1278,7 @@ index c3287979..01e3373a 100644
      }
  }
 diff --git a/crates/wiggle/generate/src/config.rs b/crates/wiggle/generate/src/config.rs
-index 43dd2bff..77a0528a 100644
+index 43dd2bffa..77a0528a4 100644
 --- a/crates/wiggle/generate/src/config.rs
 +++ b/crates/wiggle/generate/src/config.rs
 @@ -251,7 +251,12 @@ impl Parse for Paths {
@@ -1325,7 +1296,7 @@ index 43dd2bff..77a0528a 100644
              .collect::<Vec<PathBuf>>();
  
 diff --git a/crates/wiggle/generate/src/module_trait.rs b/crates/wiggle/generate/src/module_trait.rs
-index 598e3ff4..73b18731 100644
+index 598e3ff46..73b18731b 100644
 --- a/crates/wiggle/generate/src/module_trait.rs
 +++ b/crates/wiggle/generate/src/module_trait.rs
 @@ -81,13 +81,6 @@ pub fn define_module_trait(m: &Module, settings: &CodegenSettings) -> TokenStrea
@@ -1343,7 +1314,7 @@ index 598e3ff4..73b18731 100644
      }
  }
 diff --git a/crates/wiggle/generate/src/wasmtime.rs b/crates/wiggle/generate/src/wasmtime.rs
-index bea34fb3..ad861408 100644
+index bea34fb3a..ad8614086 100644
 --- a/crates/wiggle/generate/src/wasmtime.rs
 +++ b/crates/wiggle/generate/src/wasmtime.rs
 @@ -2,6 +2,7 @@ use crate::CodegenSettings;
@@ -1458,7 +1429,7 @@ index bea34fb3..ad861408 100644
                      #field_str,
                      move |mut caller: wiggle::wasmtime_crate::Caller<'_, T> #(, #arg_decls)*| -> wiggle::error::Result<#ret_ty> {
 diff --git a/crates/wiggle/src/guest_error.rs b/crates/wiggle/src/guest_error.rs
-index 590ee16e..03b79823 100644
+index 590ee16e8..03b798232 100644
 --- a/crates/wiggle/src/guest_error.rs
 +++ b/crates/wiggle/src/guest_error.rs
 @@ -27,4 +27,6 @@ pub enum GuestError {
@@ -1469,7 +1440,7 @@ index 590ee16e..03b79823 100644
 +    MemoryNotExported,
  }
 diff --git a/crates/wiggle/src/lib.rs b/crates/wiggle/src/lib.rs
-index 1888a1ff..c8953ab9 100644
+index 1888a1ff2..c8953ab92 100644
 --- a/crates/wiggle/src/lib.rs
 +++ b/crates/wiggle/src/lib.rs
 @@ -271,6 +271,11 @@ impl<'a> GuestMemory<'a> {

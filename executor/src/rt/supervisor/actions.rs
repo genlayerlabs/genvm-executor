@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
-use crate::{caching, public_abi, rt, runners};
+use crate::{public_abi, rt, runners};
 
 use anyhow::Context as _;
 use genlayer_sdk::abi;
@@ -773,57 +773,6 @@ impl Ctx<'_, '_> {
         Ok((id, pin))
     }
 
-    fn load_modules(
-        &mut self,
-        current: symbol_table::GlobalSymbol,
-        path: &std::sync::Arc<str>,
-    ) -> anyhow::Result<Option<rt::DetNondet<wasmtime::Module>>> {
-        let Some((id, hash)) = runners::verify_runner(current.as_str()) else {
-            return Ok(None);
-        };
-
-        let special_name = caching::path_in_zip_to_hash(path);
-        let Some(cache_dir) = &self.supervisor.wasm_mod_cache.cache_dir else {
-            return Ok(None);
-        };
-
-        let mut cache_dir = cache_dir.to_owned();
-        cache_dir.push(caching::PRECOMPILE_DIR_NAME);
-        runners::append_runner_subpath(id, hash, &mut cache_dir);
-        cache_dir.push(special_name);
-
-        let det_mod = cache_dir.with_extension(caching::DET_NON_DET_PRECOMPILED_SUFFIX.det);
-
-        if !det_mod.exists() {
-            return Ok(None);
-        }
-
-        cache_dir.set_extension(caching::DET_NON_DET_PRECOMPILED_SUFFIX.non_det);
-        let non_det_mod = cache_dir;
-
-        if !det_mod.exists() {
-            return Ok(None);
-        }
-
-        self.supervisor
-            .shared_data
-            .metrics
-            .supervisor
-            .precompile_hits
-            .increment();
-
-        Ok(Some(rt::DetNondet {
-            det: unsafe {
-                wasmtime::Module::deserialize_file(&self.supervisor.engines.det, &det_mod)
-            }
-            .with_context(|| format!("deserializing det module {path:?} of {current}"))?,
-            non_det: unsafe {
-                wasmtime::Module::deserialize_file(&self.supervisor.engines.non_det, &non_det_mod)
-            }
-            .with_context(|| format!("deserializing non-det module {path:?} of {current}"))?,
-        }))
-    }
-
     async fn link_wasm(
         &mut self,
         contents: bytes::Bytes,
@@ -841,14 +790,6 @@ impl Ctx<'_, '_> {
             .wasm_mod_cache
             .wasm_modules_cache
             .get_or_create(wasm_key, || async {
-                match self.load_modules(current, path) {
-                    Ok(Some(loaded)) => return Ok(loaded),
-                    Ok(None) => {}
-                    Err(e) => {
-                        log_error!(path:? = path, error:ah = e; "failed to load precompiled wasm module, recompiling");
-                    }
-                }
-
                 self.supervisor
                     .compile_wasm(contents.as_ref(), wasm_key.as_str())
                     .await

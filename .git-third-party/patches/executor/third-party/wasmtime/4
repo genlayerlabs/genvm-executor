@@ -11,14 +11,14 @@ Content-Transfer-Encoding: 8bit
  crates/cranelift/src/func_environ.rs              | 4 ++--
  crates/cranelift/src/lib.rs                       | 4 ++--
  crates/cranelift/src/translate/code_translator.rs | 2 +-
- crates/environ/src/trap_encoding.rs               | 8 ++++----
- 4 files changed, 9 insertions(+), 9 deletions(-)
+ crates/environ/src/trap_encoding.rs               | 4 ++--
+ 4 files changed, 7 insertions(+), 7 deletions(-)
 
 diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
-index 8f549ff5..0c5821fa 100644
+index ec49b7acf..c2ed7b2ba 100644
 --- a/crates/cranelift/src/func_environ.rs
 +++ b/crates/cranelift/src/func_environ.rs
-@@ -3929,9 +3929,9 @@ impl FuncEnvironment<'_> {
+@@ -3952,9 +3952,9 @@ impl FuncEnvironment<'_> {
          self.fuel_save_from_var(builder);
      }
  
@@ -31,10 +31,10 @@ index 8f549ff5..0c5821fa 100644
      }
  
 diff --git a/crates/cranelift/src/lib.rs b/crates/cranelift/src/lib.rs
-index 4db70f6a..8119e7da 100644
+index 66c56b849..6a3a89af7 100644
 --- a/crates/cranelift/src/lib.rs
 +++ b/crates/cranelift/src/lib.rs
-@@ -72,8 +72,8 @@ pub const TRAP_CONTINUATION_ALREADY_CONSUMED: TrapCode =
+@@ -73,8 +73,8 @@ pub const TRAP_CONTINUATION_ALREADY_CONSUMED: TrapCode =
      TrapCode::unwrap_user(Trap::ContinuationAlreadyConsumed as u8 + TRAP_OFFSET);
  pub const TRAP_CAST_FAILURE: TrapCode =
      TrapCode::unwrap_user(Trap::CastFailure as u8 + TRAP_OFFSET);
@@ -46,10 +46,10 @@ index 4db70f6a..8119e7da 100644
  /// Creates a new cranelift `Signature` with no wasm params/results for the
  /// given calling convention.
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 927df0f8..b5cf3d17 100644
+index 7517b54d1..a5f477580 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -4574,6 +4574,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
+@@ -4575,6 +4575,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
      if environ.are_floats_enabled() {
          return false;
      }
@@ -58,35 +58,17 @@ index 927df0f8..b5cf3d17 100644
      return true;
  }
 diff --git a/crates/environ/src/trap_encoding.rs b/crates/environ/src/trap_encoding.rs
-index 2d49707b..fe4f0dea 100644
+index f2c969e1e..1c18d90ea 100644
 --- a/crates/environ/src/trap_encoding.rs
 +++ b/crates/environ/src/trap_encoding.rs
-@@ -142,8 +142,8 @@ pub enum Trap {
-     /// value.
-     UnalignedPointer,
+@@ -216,8 +216,8 @@ generate_trap_type! {
+         /// Cannot resume a thread which is not suspended.
+         CannotResumeThread = "cannot resume thread which is not suspended",
  
--    /// Deterministic mode violation
--    DeterministicMode,
-+    /// Nondeterministic instruction executed in deterministic mode
-+    NondetInstruction,
-     // if adding a variant here be sure to update the `check!` macro below, and
-     // remember to update `trap.rs` and `trap.h` as mentioned above
- }
-@@ -196,7 +196,7 @@ impl Trap {
-             ListOutOfBounds
-             InvalidDiscriminant
-             UnalignedPointer
--            DeterministicMode
-+            NondetInstruction
-         }
+-        /// Deterministic mode violation.
+-        DeterministicMode = "deterministic mode violation (cpu)",
++        /// Nondeterministic instruction executed in deterministic mode.
++        NondetInstruction = "nondeterministic instruction (cpu)",
  
-         None
-@@ -242,7 +242,7 @@ impl fmt::Display for Trap {
-             ListOutOfBounds => "list content out-of-bounds",
-             InvalidDiscriminant => "invalid variant discriminant",
-             UnalignedPointer => "unaligned pointer",
--            DeterministicMode => "deterministic mode violation (cpu)",
-+            NondetInstruction => "nondeterministic instruction (cpu)",
-         };
-         write!(f, "wasm trap: {desc}")
-     }
+         // if adding a variant here be sure to update `trap.rs` and `trap.h` as
+         // mentioned above

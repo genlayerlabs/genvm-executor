@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Edgars <edgars@genlayerlabs.com>
+Date: Fri, 31 Jul 2026 09:52:19 +0100
+Subject: [PATCH] fix(genvm): preserve Store API and fingerprint all instances
+
+---
+ crates/wasmtime/src/config.rs              |  4 +--
+ crates/wasmtime/src/runtime/func.rs        | 19 ++++++-----
+ crates/wasmtime/src/runtime/store.rs       | 38 +++++++++++++++++-----
+ crates/wasmtime/tests/genvm_fingerprint.rs | 29 +++++++++++++++++
+ 4 files changed, 72 insertions(+), 18 deletions(-)
+ create mode 100644 crates/wasmtime/tests/genvm_fingerprint.rs
+
+diff --git a/crates/wasmtime/src/config.rs b/crates/wasmtime/src/config.rs
+index 06bbd731a..583319e2b 100644
+--- a/crates/wasmtime/src/config.rs
++++ b/crates/wasmtime/src/config.rs
+@@ -279,8 +279,8 @@ impl Config {
+             // 1` forces this), or at least it passed when this change was
+             // committed.
+             max_wasm_stack: 512 * 1024,
+-            wasm_call_stack_limit: 1024,
+-            wasm_value_stack_limit: 65535,
++            wasm_call_stack_limit: u32::MAX,
++            wasm_value_stack_limit: u32::MAX,
+             wasm_backtrace_details_env_used: false,
+             wasm_backtrace_max_frames: Some(DEFAULT_WASM_BACKTRACE_MAX_FRAMES),
+             native_unwind_info: None,
+diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
+index 358ae2f61..6e20d5afa 100644
+--- a/crates/wasmtime/src/runtime/func.rs
++++ b/crates/wasmtime/src/runtime/func.rs
+@@ -1442,13 +1442,18 @@ impl<'a, T: 'static> StoreContextMut<'a, T> {
+         };
+ 
+         for inst in store.0.all_instances().collect::<Vec<_>>() {
+-            let mut mod_fp = ModuleFingerprint {
+-                memories: Vec::new(),
+-            };
+-
+             let inst_mod_name = inst.module(&mut store.0).name().unwrap_or("").to_owned();
+-
+-            for mem in inst.all_memories(store.0.store_opaque_mut()).collect::<Vec<_>>() {
++            let mod_fp =
++                fp.module_instances
++                    .entry(inst_mod_name)
++                    .or_insert_with(|| ModuleFingerprint {
++                        memories: Vec::new(),
++                    });
++
++            for mem in inst
++                .all_memories(store.0.store_opaque_mut())
++                .collect::<Vec<_>>()
++            {
+                 let data = match &mem.1 {
+                     crate::runtime::vm::ExportMemory::Unshared(m) => m.data(&store),
+                     crate::runtime::vm::ExportMemory::Shared(_sm, _) => &[],
+@@ -1458,8 +1463,6 @@ impl<'a, T: 'static> StoreContextMut<'a, T> {
+                     .memories
+                     .push(MemoryFingerprint(blake3::hash(data).into()));
+             }
+-
+-            fp.module_instances.insert(inst_mod_name, mod_fp);
+         }
+ 
+         fp
+diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
+index e80dd5142..6910ae6e2 100644
+--- a/crates/wasmtime/src/runtime/store.rs
++++ b/crates/wasmtime/src/runtime/store.rs
+@@ -725,6 +725,14 @@ pub struct GenVMCtx {
+     pub should_quit: Arc<std::sync::atomic::AtomicU32>,
+ }
+ 
++impl Default for GenVMCtx {
++    fn default() -> Self {
++        Self {
++            should_quit: Arc::new(std::sync::atomic::AtomicU32::new(0)),
++        }
++    }
++}
++
+ impl<T> Store<T> {
+     /// Creates a new [`Store`] to be associated with the given [`Engine`] and
+     /// `data` provided.
+@@ -735,14 +743,28 @@ impl<T> Store<T> {
+     /// The store will limit the number of instances, linear memories, and
+     /// tables created to 10,000. This can be overridden with the
+     /// [`Store::limiter`] configuration method.
+-    pub fn new(engine: &Engine, data: T, genvm_ctx: GenVMCtx) -> Self {
+-        Self::try_new(engine, data, genvm_ctx).expect(
++    pub fn new(engine: &Engine, data: T) -> Self {
++        Self::try_new(engine, data).expect(
+             "allocation failure during `Store::new` (use `Store::try_new` to handle such errors)",
+         )
+     }
+ 
+     /// Like `Store::new` but returns an error on allocation failure.
+-    pub fn try_new(engine: &Engine, data: T, genvm_ctx: GenVMCtx) -> Result<Self> {
++    pub fn try_new(engine: &Engine, data: T) -> Result<Self> {
++        Self::try_new_with_genvm_ctx(engine, data, GenVMCtx::default())
++    }
++
++    /// Creates a new [`Store`] with GenVM-specific runtime context.
++    pub fn new_with_genvm_ctx(engine: &Engine, data: T, genvm_ctx: GenVMCtx) -> Self {
++        Self::try_new_with_genvm_ctx(engine, data, genvm_ctx).expect(
++            "allocation failure during `Store::new_with_genvm_ctx` \
++             (use `Store::try_new_with_genvm_ctx` to handle such errors)",
++        )
++    }
++
++    /// Like [`Store::new_with_genvm_ctx`] but returns an error on allocation
++    /// failure.
++    pub fn try_new_with_genvm_ctx(engine: &Engine, data: T, genvm_ctx: GenVMCtx) -> Result<Self> {
+         let store_data = StoreData::new(engine);
+         log::trace!("creating new store {:?}", store_data.id());
+ 
+@@ -2841,11 +2863,11 @@ impl<T> StoreInner<T> {
+     }
+ }
+ 
+-// impl<T: Default> Default for Store<T> {
+-//     fn default() -> Store<T> {
+-//         Store::new(&Engine::default(), T::default())
+-//     }
+-// }
++impl<T: Default> Default for Store<T> {
++    fn default() -> Store<T> {
++        Store::new(&Engine::default(), T::default())
++    }
++}
+ 
+ impl<T: fmt::Debug> fmt::Debug for Store<T> {
+     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+diff --git a/crates/wasmtime/tests/genvm_fingerprint.rs b/crates/wasmtime/tests/genvm_fingerprint.rs
+new file mode 100644
+index 000000000..b78054e6d
+--- /dev/null
++++ b/crates/wasmtime/tests/genvm_fingerprint.rs
+@@ -0,0 +1,29 @@
++use wasmtime::{Engine, Instance, Module, Store};
++
++#[test]
++fn fingerprint_includes_every_instance_with_the_same_module_name() {
++    let engine = Engine::default();
++    let module = Module::new(
++        &engine,
++        r#"
++            (module $same
++                (memory (export "memory") 1)
++            )
++        "#,
++    )
++    .unwrap();
++    let mut store = Store::new(&engine, ());
++    let first = Instance::new(&mut store, &module, &[]).unwrap();
++    let _second = Instance::new(&mut store, &module, &[]).unwrap();
++
++    first
++        .get_memory(&mut store, "memory")
++        .unwrap()
++        .write(&mut store, 0, &[1])
++        .unwrap();
++
++    let fingerprint = store.fingerprint();
++    let memories = &fingerprint.module_instances["same"].memories;
++    assert_eq!(memories.len(), 2);
++    assert_ne!(memories[0], memories[1]);
++}
