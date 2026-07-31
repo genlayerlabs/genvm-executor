@@ -1,0 +1,64 @@
+name: maintenance / Wasmtime
+
+# This workflow is deliberately a coordinator, not a branch-writing bot.
+# GitHub runs schedules from the default branch (currently the latest release
+# line), so the script reads every configured vX-dev and vX.x ref through the
+# API. Remediation still follows the manager-linked pr/vX/<feature> flow.
+
+on:
+  schedule:
+    # Daily, off the hour. Monthly review issues are deduplicated by line/month.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report findings without creating or updating issues"
+        type: boolean
+        required: false
+        default: false
+  pull_request:
+    branches: ["v*-dev"]
+    paths:
+      - ".git-third-party/config.json"
+      - ".git-third-party/patches/executor/third-party/wasmtime/**"
+      - "executor/Cargo.lock"
+      - ".github/wasmtime-maintenance.json"
+      - ".github/workflows/wasmtime-maintenance.yml"
+      - "support/scripts/wasmtime_maintenance.py"
+
+concurrency:
+  group: wasmtime-maintenance-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'scheduled' }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  audit-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the proposed Wasmtime pin
+        run: python3 support/scripts/wasmtime_maintenance.py audit-local
+
+  reconcile:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconcile advisories and scheduled reviews
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WASMTIME_REBASE_OWNER: ${{ vars.WASMTIME_REBASE_OWNER }}
+        run: >-
+          python3 support/scripts/wasmtime_maintenance.py reconcile
+          ${{ inputs.dry_run && '--dry-run' || '' }}
