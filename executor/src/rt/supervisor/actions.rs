@@ -1210,6 +1210,16 @@ mod tests {
     }
 
     #[test]
+    fn mapping_target_must_be_absolute() {
+        for target in ["relative/file", ""] {
+            assert!(
+                check_mapping_target(target).is_err(),
+                "MapFile destination {target:?} must be rejected because the runner schema requires an absolute path"
+            );
+        }
+    }
+
+    #[test]
     fn bounded_contexts_collapse_middle_at_limit() {
         let mut got = VecDeque::new();
         for idx in 0..16 {

@@ -1396,6 +1396,41 @@ mod tests {
     }
 
     #[test]
+    fn set_args_rejects_embedded_nul() {
+        let mut context = test_context();
+        let args = vec!["visible\0hidden".to_owned()];
+
+        assert!(
+            context.set_args(&args).is_err(),
+            "an embedded NUL must not create an argument whose WASI buffer terminates early"
+        );
+    }
+
+    #[test]
+    fn set_env_rejects_invalid_entries() {
+        let invalid = [
+            ("BAD=NAME", "value"),
+            ("BAD\0NAME", "value"),
+            ("GOOD", "visible\0hidden"),
+        ];
+        let accepted = invalid
+            .iter()
+            .filter_map(|(name, value)| {
+                let mut context = test_context();
+                context
+                    .set_env(&[(name.to_string(), value.to_string())])
+                    .is_ok()
+                    .then_some(format!("{name:?}={value:?}"))
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            accepted.is_empty(),
+            "environment entries that break WASI name/value framing must be rejected; accepted: {accepted:?}"
+        );
+    }
+
+    #[test]
     fn regression_parent_component_traverses_to_parent_directory() {
         let mut context = test_context();
         context
