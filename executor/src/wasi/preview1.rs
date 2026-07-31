@@ -1366,8 +1366,86 @@ fn write_bytes_capacity(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rand_core::RngCore as _;
     use sha3::Digest as _;
+
+    fn test_context() -> Context {
+        Context::new(
+            chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            base::Config {
+                needs_error_fingerprint: false,
+                permissions: base::Permissions {
+                    deterministic: true,
+                    write_storage: false,
+                    send_messages: false,
+                    call_others: false,
+                    spawn_nondet: false,
+                    register_runners: false,
+                    can_use_balance_for_message_fees: false,
+                },
+                execution: base::Execution {
+                    state_mode: crate::public_abi::StorageType::Default,
+                    topmost_runner_id: crate::runners::Id::Custom {
+                        hash: Bytes32Hash::ZERO,
+                    },
+                },
+            },
+            [0; 32],
+        )
+    }
+
+    #[test]
+    fn regression_parent_component_traverses_to_parent_directory() {
+        let mut context = test_context();
+        context
+            .map_file("/parent/child/file", bytes::Bytes::from_static(b"value"))
+            .unwrap();
+        let mut vfs = vfs::VFS::new(Vec::new(), rt::memlimiter::Limiter::new()).unwrap();
+        let context_vfs = ContextVFS {
+            vfs: &mut vfs,
+            context: &mut context,
+        };
+
+        let FilesTrie::Dir { children } = context_vfs.context.fs.as_ref() else {
+            panic!("root must be a directory");
+        };
+        let parent = children.get("parent").unwrap();
+        let FilesTrie::Dir { children } = parent.as_ref() else {
+            panic!("parent must be a directory");
+        };
+        let child = children.get("child").unwrap();
+        let mut path = vec!["parent".to_owned(), "child".to_owned()];
+
+        let resolved = context_vfs
+            .dir_fd_get_trie("..", child, &mut Some(&mut path))
+            .expect("`..` inside the preopened filesystem must resolve its parent");
+
+        assert!(std::ptr::eq(resolved, parent.as_ref()));
+        assert_eq!(path, ["parent"]);
+    }
+
+    #[test]
+    fn regression_mapped_dot_component_is_reachable() {
+        let mut context = test_context();
+        context
+            .map_file("/parent/./file", bytes::Bytes::from_static(b"value"))
+            .unwrap();
+
+        let FilesTrie::Dir { children } = context.fs.as_ref() else {
+            panic!("root must be a directory");
+        };
+        let parent = children.get("parent").unwrap();
+        let FilesTrie::Dir { children } = parent.as_ref() else {
+            panic!("parent must be a directory");
+        };
+
+        assert!(
+            children.contains_key("file"),
+            "mapped paths must normalize `.` like the WASI path resolver; got {:?}",
+            children.keys().collect::<Vec<_>>()
+        );
+    }
 
     /// Known-answer test for the deterministic `random_get` byte layout. The seed is a
     /// fixed 32-byte value consumed as 8 little-endian `u32` words (matching

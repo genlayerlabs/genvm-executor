@@ -100,6 +100,10 @@ mod tests {
     const BLOCK_SIZE: usize = 512;
 
     fn ustar(name: &[u8], prefix: &[u8], contents: &[u8]) -> bytes::Bytes {
+        ustar_with_type(name, prefix, contents, b'0')
+    }
+
+    fn ustar_with_type(name: &[u8], prefix: &[u8], contents: &[u8], type_flag: u8) -> bytes::Bytes {
         assert!(name.len() <= 100);
         assert!(prefix.len() <= 155);
 
@@ -112,7 +116,7 @@ mod tests {
         header[124..136].copy_from_slice(size.as_bytes());
         header[136..148].copy_from_slice(b"00000000000\0");
         header[148..156].fill(b' ');
-        header[156] = b'0';
+        header[156] = type_flag;
         header[257..265].copy_from_slice(b"ustar\x0000".as_slice());
         header[345..345 + prefix.len()].copy_from_slice(prefix);
         let checksum: u32 = header.iter().map(|byte| *byte as u32).sum();
@@ -155,6 +159,17 @@ mod tests {
             archive.data.keys().next().unwrap().len(),
             name.len(),
             "a full-width USTAR name field must retain its final byte"
+        );
+    }
+
+    #[test]
+    fn ustar_directory_type_is_not_exposed_as_a_file() {
+        let archive =
+            super::super::Archive::from_ustar(ustar_with_type(b"nested", b"", b"", b'5')).unwrap();
+        assert!(
+            archive.data.is_empty(),
+            "USTAR type flag `5` denotes a directory; got entries {:?}",
+            archive.data.keys().collect::<Vec<_>>()
         );
     }
 }
