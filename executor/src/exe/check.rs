@@ -72,3 +72,120 @@ pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bucket() -> config::FeesBucketConfig {
+        config::FeesBucketConfig {
+            bucket_no: vec![0],
+            subtract_on_start_expr: "0".to_owned(),
+            delta_expr: "0".to_owned(),
+        }
+    }
+
+    fn test_root(label: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "genvm-check-{label}-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    fn test_config(root: &std::path::Path) -> config::Config {
+        config::Config {
+            modules: config::Modules {
+                llm: config::Module {
+                    address: String::new(),
+                },
+                web: config::Module {
+                    address: String::new(),
+                },
+            },
+            fees: config::FeesConfig {
+                expr_prelude: String::new(),
+                storage: bucket(),
+                message_receipt: bucket(),
+                nondet_output: bucket(),
+                message_fee: bucket(),
+                event: bucket(),
+            },
+            cache_dir: root.join("cache").to_string_lossy().into_owned(),
+            runners_dir: root.join("runners").to_string_lossy().into_owned(),
+            registry_dir: root.join("registry").to_string_lossy().into_owned(),
+            base: genvm_common::BaseConfig {
+                threads: 1,
+                blocking_threads: 1,
+                log_level: genvm_common::logger::Level::Info,
+                log_disable: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn check_rejects_short_registry_hash_without_panicking() {
+        let root = test_root("short-runner-hash");
+        let registry = root.join("registry");
+        let runners = root.join("runners");
+        std::fs::create_dir_all(&registry).unwrap();
+        std::fs::create_dir_all(&runners).unwrap();
+        std::fs::write(registry.join("all.json"), r#"{"runner":["x"]}"#).unwrap();
+        std::fs::write(registry.join("latest.json"), "{}").unwrap();
+
+        let config = test_config(&root);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle(Args { precompile: false }, config)
+        }));
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "genvm check must return an installation error instead of panicking on a short registry hash"
+        );
+        assert!(
+            result.unwrap().is_err(),
+            "genvm check must reject a malformed registry hash"
+        );
+    }
+
+    #[test]
+    fn check_rejects_runner_name_that_escapes_runners_directory() {
+        let root = test_root("runner-name-traversal");
+        let registry = root.join("registry");
+        let runners = root.join("runners");
+        std::fs::create_dir_all(&registry).unwrap();
+        std::fs::create_dir_all(&runners).unwrap();
+
+        let contents = b"outside runner artifact";
+        use sha2::Digest as _;
+        let digest: [u8; 32] = sha2::Sha256::digest(contents).into();
+        let hash = genvm_common::Bytes32Hash::from_bytes(digest).to_gvm32();
+        let mut escaped_path = root.join("outside");
+        escaped_path.push(&hash[..2]);
+        escaped_path.push(&hash[2..]);
+        escaped_path.set_extension("tar");
+        std::fs::create_dir_all(escaped_path.parent().unwrap()).unwrap();
+        std::fs::write(&escaped_path, contents).unwrap();
+
+        let all = serde_json::to_vec(&std::collections::BTreeMap::from([(
+            "../outside",
+            vec![hash],
+        )]))
+        .unwrap();
+        std::fs::write(registry.join("all.json"), all).unwrap();
+        std::fs::write(registry.join("latest.json"), "{}").unwrap();
+
+        let result = handle(Args { precompile: false }, test_config(&root));
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert!(
+            result.is_err(),
+            "genvm check must reject a registry runner name that traverses outside runners_dir"
+        );
+    }
+}

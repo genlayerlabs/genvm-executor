@@ -1210,6 +1210,26 @@ mod tests {
     }
 
     #[test]
+    fn mapping_target_rejects_empty_destination() {
+        let target = "";
+
+        assert!(
+            check_mapping_target(target).is_err(),
+            "MapFile must reject an empty destination instead of creating an unreachable empty-name entry"
+        );
+    }
+
+    #[test]
+    fn mapping_target_cannot_hide_vm_behind_dot_component() {
+        let target = "/./vm/secret";
+
+        assert!(
+            check_mapping_target(target).is_err(),
+            "MapFile destination {target:?} normalizes into the protected /vm tree and must be rejected"
+        );
+    }
+
+    #[test]
     fn bounded_contexts_collapse_middle_at_limit() {
         let mut got = VecDeque::new();
         for idx in 0..16 {
@@ -1604,6 +1624,49 @@ mod tests {
         assert!(
             !registry.cell(custom_id_of(&code)).initialized(),
             "malformed code must not enter the registry"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_rejects_malformed_runner_actions() {
+        let registry = runners::cache::WeakCache::new();
+        let code = bytes::Bytes::from_static(b"# { \"UnknownAction\": true }\n");
+        let limiter = rt::memlimiter::Limiter::new();
+        let mut loaded = runners::cache::LoadedSet::default();
+
+        let result =
+            register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone()).await;
+
+        assert!(
+            result.is_err(),
+            "RegisterRunner must not return an ID for a runner whose runner.json cannot be deserialized; got {result:?}"
+        );
+        assert!(
+            !loaded.contains(custom_id_of(&code)),
+            "a runner with malformed actions must not become resolvable"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_rejects_runner_from_incompatible_major() {
+        let registry = runners::cache::WeakCache::new();
+        let incompatible_major = genvm_common::version::CURRENT.major.checked_add(1).unwrap();
+        let code = bytes::Bytes::from(format!(
+            "# v{incompatible_major}.0.0\n# {{ \"StartWasm\": \"file\" }}\n"
+        ));
+        let limiter = rt::memlimiter::Limiter::new();
+        let mut loaded = runners::cache::LoadedSet::default();
+
+        let result =
+            register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone()).await;
+
+        assert!(
+            result.is_err(),
+            "RegisterRunner must reject a runner declaring incompatible major {incompatible_major}; got {result:?}"
+        );
+        assert!(
+            !loaded.contains(custom_id_of(&code)),
+            "an incompatible runner must not become resolvable"
         );
     }
 

@@ -164,6 +164,18 @@ mod tests {
     }
 
     #[test]
+    fn ustar_name_stops_at_nul_terminator() {
+        let archive =
+            super::super::Archive::from_ustar(ustar(b"file\0ignored", b"", b"value")).unwrap();
+
+        assert_eq!(
+            archive.data.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["file"],
+            "USTAR names must stop at the first NUL in the fixed-width name field"
+        );
+    }
+
+    #[test]
     fn ustar_directory_type_is_not_exposed_as_a_file() {
         let archive =
             super::super::Archive::from_ustar(ustar_with_type(b"nested", b"", b"", b'5')).unwrap();
@@ -182,6 +194,17 @@ mod tests {
         assert!(
             super::super::Archive::from_ustar(archive.into()).is_err(),
             "a USTAR header modified without updating its checksum must be rejected"
+        );
+    }
+
+    #[test]
+    fn ustar_rejects_missing_end_markers() {
+        let mut archive = ustar(b"runner.json", b"", br#"{"StartWasm":"file"}"#).to_vec();
+        archive.truncate(archive.len() - 2 * BLOCK_SIZE);
+
+        assert!(
+            super::super::Archive::from_ustar(archive.into()).is_err(),
+            "a truncated USTAR archive without its two zero end markers must be rejected"
         );
     }
 
@@ -212,6 +235,69 @@ mod tests {
         assert!(
             parse(archive.into()).is_err(),
             "stored ZIP contents modified without updating their CRC must be rejected"
+        );
+    }
+
+    #[test]
+    fn zip_rejects_stored_entry_with_mismatched_sizes() {
+        let contents = b"stored payload";
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            writer
+                .start_file(
+                    "payload",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(contents).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut archive = cursor.into_inner();
+        let central_header = archive
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .unwrap();
+        let uncompressed_size = central_header + 24;
+        archive[uncompressed_size..uncompressed_size + 4]
+            .copy_from_slice(&((contents.len() as u32) + 1).to_le_bytes());
+
+        assert!(
+            parse(archive.into()).is_err(),
+            "a stored ZIP entry must not claim different compressed and uncompressed sizes"
+        );
+    }
+
+    #[test]
+    fn zip_rejects_local_and_central_compression_mismatch() {
+        let contents = b"payload that is compressed in the local entry";
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            writer
+                .start_file(
+                    "payload",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated),
+                )
+                .unwrap();
+            writer.write_all(contents).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut archive = cursor.into_inner();
+        let central_header = archive
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .unwrap();
+        let central_compression = central_header + 10;
+        archive[central_compression..central_compression + 2].copy_from_slice(&0_u16.to_le_bytes());
+
+        assert!(
+            parse(archive.into()).is_err(),
+            "a Deflated local entry must not bypass the Stored-only policy through conflicting central metadata"
         );
     }
 }
