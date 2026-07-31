@@ -1516,6 +1516,33 @@ mod tests {
     }
 
     #[test]
+    fn mapping_missing_archive_directory_is_rejected() {
+        let archive = crate::runners::ArchiveCache::new(
+            symbol_table::GlobalSymbol::from("custom:missing-directory"),
+            crate::runners::Archive {
+                data: BTreeMap::from([(
+                    "present/file".to_owned(),
+                    bytes::Bytes::from_static(b"contents"),
+                )]),
+                total_size: 8,
+            },
+        );
+        let limiter = rt::memlimiter::Limiter::new();
+        let mut context = test_context();
+
+        crate::rt::supervisor::actions::map_archive_file(
+            &mut context,
+            &limiter,
+            &archive,
+            "missing/",
+            "/mapped/",
+        )
+        .expect_err(
+            "mapping a nonexistent directory must fail like mapping a nonexistent single file",
+        );
+    }
+
+    #[test]
     fn mapping_a_file_over_a_directory_does_not_delete_the_subtree() {
         let mut context = test_context();
         context

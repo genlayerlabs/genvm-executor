@@ -186,6 +186,17 @@ mod tests {
     }
 
     #[test]
+    fn ustar_rejects_missing_end_markers() {
+        let mut archive = ustar(b"runner.json", b"", br#"{"StartWasm":"file"}"#).to_vec();
+        archive.truncate(archive.len() - 2 * BLOCK_SIZE);
+
+        assert!(
+            super::super::Archive::from_ustar(archive.into()).is_err(),
+            "a truncated USTAR archive without its two zero end markers must be rejected"
+        );
+    }
+
+    #[test]
     fn zip_rejects_stored_contents_with_a_bad_crc() {
         let contents = b"payload whose CRC must be checked";
         let mut cursor = std::io::Cursor::new(Vec::new());
