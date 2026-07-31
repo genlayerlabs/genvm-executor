@@ -16,7 +16,6 @@ pub(crate) mod actions;
 mod compilation;
 
 struct WasmModuleCache {
-    cache_dir: Option<std::path::PathBuf>,
     wasm_modules_cache: sync::CacheMap<DetNondet<wasmtime::Module>>,
 }
 
@@ -164,34 +163,24 @@ pub fn create_engines(
             public_abi::top_limits::WASM_STACK_VALUE_SLOTS,
         );
 
-    base_conf
-        .wasm_tail_call(true)
-        .wasm_bulk_memory(true)
-        .wasm_simd(true)
-        .relaxed_simd_deterministic(true)
-        .wasm_relaxed_simd(false);
-
     use wasmparser::WasmFeatures;
 
     base_conf
-        .wasm_features(WasmFeatures::BULK_MEMORY, true)
-        .wasm_features(WasmFeatures::SIGN_EXTENSION, true)
-        .wasm_features(WasmFeatures::MUTABLE_GLOBAL, true)
-        .wasm_features(WasmFeatures::MULTI_VALUE, true)
-        .wasm_features(WasmFeatures::SATURATING_FLOAT_TO_INT, false)
-        //.wasm_features(WasmFeatures::REFERENCE_TYPES, false)
-        .wasm_features(WasmFeatures::SATURATING_FLOAT_TO_INT, true);
+        .wasm_features(WasmFeatures::all(), false)
+        .wasm_features(compilation::CONTRACT_WASM_FEATURES, true)
+        .relaxed_simd_deterministic(true);
 
     config_base(&mut base_conf)?;
 
     let mut det_conf = base_conf.clone();
     det_conf
         .wasm_floats_enabled(false)
-        .cranelift_nan_canonicalization(true)
-        .wasm_backtrace(true);
+        .cranelift_nan_canonicalization(true);
 
     let mut non_det_conf = base_conf.clone();
-    non_det_conf.wasm_floats_enabled(true).wasm_backtrace(false);
+    non_det_conf
+        .wasm_floats_enabled(true)
+        .wasm_backtrace_max_frames(None);
 
     let det_engine = wasmtime::Engine::new(&det_conf)
         .map_err(crate::wasmtime_to_anyhow)
@@ -368,7 +357,6 @@ impl Supervisor {
             )
             .context("creating runner cache reader")?,
             wasm_mod_cache: WasmModuleCache {
-                cache_dir: my_cache_dir,
                 wasm_modules_cache: sync::CacheMap::new(),
             },
             custom_runners: runners::cache::WeakCache::new(),
@@ -430,7 +418,7 @@ pub async fn spawn(
     let engine = zelf.engines.get(vm.conf.permissions.deterministic);
 
     let limiter = vm.limiter.clone();
-    let mut store = wasmtime::Store::new(
+    let mut store = wasmtime::Store::new_with_genvm_ctx(
         engine,
         rt::vm::WasmtimeStoreData {
             limits: vm.limiter.clone(),

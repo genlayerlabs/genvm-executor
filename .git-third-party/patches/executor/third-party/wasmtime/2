@@ -19,10 +19,10 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
  2 files changed, 50 insertions(+), 47 deletions(-)
 
 diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
-index c19cf62f..c09f17b5 100644
+index 7315339ef..358ae2f61 100644
 --- a/crates/wasmtime/src/runtime/func.rs
 +++ b/crates/wasmtime/src/runtime/func.rs
-@@ -1418,6 +1418,53 @@ impl std::fmt::Display for Fingerprint {
+@@ -1419,6 +1419,53 @@ impl std::fmt::Display for Fingerprint {
      }
  }
  
@@ -76,7 +76,7 @@ index c19cf62f..c09f17b5 100644
  /// Prepares for entrance into WebAssembly.
  ///
  /// This function will set up context such that `closure` is allowed to call a
-@@ -1451,52 +1498,10 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
+@@ -1452,52 +1499,10 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
      }
      core::mem::drop(previous_runtime_state);
      store.0.call_hook(CallHook::ReturningFromWasm)?;
@@ -133,10 +133,10 @@ index c19cf62f..c09f17b5 100644
  
  /// This type helps managing the state of the runtime when entering and exiting
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index 16e617d2..3656a449 100644
+index 78a8e4567..789a8bb71 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
-@@ -725,8 +725,6 @@ enum StoreInstanceKind {
+@@ -723,8 +723,6 @@ enum StoreInstanceKind {
  pub struct GenVMCtx {
      /// non-zero if should quit
      pub should_quit: Arc<std::sync::atomic::AtomicU32>,

@@ -18,10 +18,10 @@ Claude-Session: https://claude.ai/code/session_013QtkVNJFxWsNwCLhTp5idV
  1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 9dde783c..927df0f8 100644
+index ad613df54..7517b54d1 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -1750,7 +1750,8 @@ pub fn translate_operator(
+@@ -1751,7 +1751,8 @@ pub fn translate_operator(
          }
          Operator::F32x4Splat
          | Operator::F64x2Splat => {
@@ -31,7 +31,7 @@ index 9dde783c..927df0f8 100644
              let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
              environ.stacks.push1(splatted)
          }
-@@ -1839,7 +1840,7 @@ pub fn translate_operator(
+@@ -1840,7 +1841,7 @@ pub fn translate_operator(
          }
          Operator::F32x4ExtractLane { lane }
          | Operator::F64x2ExtractLane { lane } => {
@@ -40,7 +40,7 @@ index 9dde783c..927df0f8 100644
              let vector = pop1_with_bitcast(environ, type_of(op), builder);
              environ
                  .stacks
-@@ -1864,7 +1865,7 @@ pub fn translate_operator(
+@@ -1865,7 +1866,7 @@ pub fn translate_operator(
          }
          Operator::F32x4ReplaceLane { lane }
          | Operator::F64x2ReplaceLane { lane } => {

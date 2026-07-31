@@ -10,7 +10,7 @@ pub struct Args {
     #[arg(
         long,
         default_value_t = false,
-        help = "after verification, precompile all runners into the on-disk cache"
+        help = "after verification, precompile all runners (currently disabled)"
     )]
     precompile: bool,
 }
