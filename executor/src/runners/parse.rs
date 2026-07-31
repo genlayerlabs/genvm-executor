@@ -237,4 +237,67 @@ mod tests {
             "stored ZIP contents modified without updating their CRC must be rejected"
         );
     }
+
+    #[test]
+    fn zip_rejects_stored_entry_with_mismatched_sizes() {
+        let contents = b"stored payload";
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            writer
+                .start_file(
+                    "payload",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(contents).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut archive = cursor.into_inner();
+        let central_header = archive
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .unwrap();
+        let uncompressed_size = central_header + 24;
+        archive[uncompressed_size..uncompressed_size + 4]
+            .copy_from_slice(&((contents.len() as u32) + 1).to_le_bytes());
+
+        assert!(
+            parse(archive.into()).is_err(),
+            "a stored ZIP entry must not claim different compressed and uncompressed sizes"
+        );
+    }
+
+    #[test]
+    fn zip_rejects_local_and_central_compression_mismatch() {
+        let contents = b"payload that is compressed in the local entry";
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            writer
+                .start_file(
+                    "payload",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated),
+                )
+                .unwrap();
+            writer.write_all(contents).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut archive = cursor.into_inner();
+        let central_header = archive
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .unwrap();
+        let central_compression = central_header + 10;
+        archive[central_compression..central_compression + 2].copy_from_slice(&0_u16.to_le_bytes());
+
+        assert!(
+            parse(archive.into()).is_err(),
+            "a Deflated local entry must not bypass the Stored-only policy through conflicting central metadata"
+        );
+    }
 }
