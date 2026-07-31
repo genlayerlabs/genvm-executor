@@ -42,3 +42,33 @@ pub fn path_in_zip_to_hash(path: &str) -> String {
 
     base32::encode(base32::Alphabet::Rfc4648 { padding: false }, digits)
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn native_module_cache_rejects_group_or_world_writable_directory() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "genvm-untrusted-cache-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let path = root.to_string_lossy();
+
+        let precompile_cache_accepted = get_cache_dir(&path).is_ok();
+        let runtime_cache_accepted = crate::runners::cache::get_cache_dir(&path).is_ok();
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert!(
+            !precompile_cache_accepted && !runtime_cache_accepted,
+            "the precompile and runtime cache entry points must reject group/world-writable directories before files from them reach unsafe Wasmtime deserialization (precompile accepted: {precompile_cache_accepted}, runtime accepted: {runtime_cache_accepted})"
+        );
+    }
+}
