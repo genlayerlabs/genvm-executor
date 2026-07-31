@@ -164,6 +164,18 @@ mod tests {
     }
 
     #[test]
+    fn ustar_name_stops_at_nul_terminator() {
+        let archive =
+            super::super::Archive::from_ustar(ustar(b"file\0ignored", b"", b"value")).unwrap();
+
+        assert_eq!(
+            archive.data.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["file"],
+            "USTAR names must stop at the first NUL in the fixed-width name field"
+        );
+    }
+
+    #[test]
     fn ustar_directory_type_is_not_exposed_as_a_file() {
         let archive =
             super::super::Archive::from_ustar(ustar_with_type(b"nested", b"", b"", b'5')).unwrap();
