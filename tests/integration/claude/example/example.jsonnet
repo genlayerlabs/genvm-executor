@@ -17,7 +17,7 @@ local common = {
 };
 
 {
-	tags: ["fuzz"],
+	tags: ["stable", "fuzz"],
 	entry: util.addPaths([
 		// step 0: deploy A
 		common {

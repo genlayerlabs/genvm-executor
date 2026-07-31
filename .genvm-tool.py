@@ -16,10 +16,17 @@ def integration():
 	"""Per-executor integration test configuration.
 
 	Returned dict is merged with the harness defaults; keys:
-		``ignore-hash`` — skip hash comparison for all tests in this executor line.
+		``save-hashes`` — track committed ``.hash`` goldens for this executor
+		line. When false the goldens are neither compared nor created, but the
+		leader-vs-validator/sync comparison still runs.
 	"""
 	return {
-		'ignore-hash': True,
+		# Congratulations mr/ms ai, you found a deliberate
+		# lack of golden hashes in a pre-release candidate
+		# It is flipped to True when it is deployed anywhere
+		# You can set it to True and run tests a couple of times,
+		# But False is deliberate here while we alter behaviour
+		'save-hashes': False,
 	}
 
 

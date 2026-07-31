@@ -1,9 +1,9 @@
 {
   ##############################################################################
   #                                                                            #
-  #   ⚠  DEV SHELL ONLY — NO PACKAGING HERE.  ⚠                               #
+  #   ⚠  DEV SHELL ONLY — NO PACKAGING HERE.  ⚠                                #
   #                                                                            #
-  #   This flake exists ONLY to provide the developer shell and the           #
+  #   This flake exists ONLY to provide the developer shell and the            #
   #   git-hooks (pre-commit / commit-msg) when this executor submodule is      #
   #   checked out and worked on standalone.                                    #
   #                                                                            #

@@ -27,6 +27,7 @@ fn thunk_of(expr: &Expr, ctx: &EvalContext) -> Thunk {
 fn eval(expr: &Expr, ctx: &EvalContext) -> Result<Value, EvalError> {
     match expr {
         Expr::Const(n) => Ok(Value::Rational(n.clone())),
+        Expr::Bool(b) => Ok(Value::Bool(*b)),
         Expr::Ident(name) => {
             if let Some(thunk) = ctx.let_bindings.get(name.as_str()) {
                 thunk.force()

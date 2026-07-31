@@ -62,6 +62,7 @@ pub enum EvalError {
 pub enum Expr {
     Ident(String),
     Const(BigRational),
+    Bool(bool),
     BinOp {
         op: BinOp,
         lhs: Box<Expr>,

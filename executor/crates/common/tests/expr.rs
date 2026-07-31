@@ -438,3 +438,53 @@ fn lazy_unused_argument_is_not_evaluated() {
     // The argument `1 / 0` is passed as a thunk and never demanded.
     assert_rational(eval(r"(\x = 7) (1 / 0)"), 7, 1);
 }
+
+#[test]
+fn bool_literals() {
+    assert_bool(eval("true"), true);
+    assert_bool(eval("false"), false);
+}
+
+#[test]
+fn bool_literals_in_conditions() {
+    assert_rational(eval("if true then 10 else 20"), 10, 1);
+    assert_rational(eval("if false then 10 else 20"), 20, 1);
+    // the shape that motivated literals: a guard whose other arm is a constant
+    // `false`, previously spellable only as a comparison that never holds
+    assert_rational(
+        eval("let guard = if 0 > 0 then 1 > 0 else false in if guard then 1 else 2"),
+        2,
+        1,
+    );
+}
+
+#[test]
+fn bool_literals_compare_and_bind() {
+    assert_bool(eval("true == true"), true);
+    assert_bool(eval("true == false"), false);
+    assert_bool(eval("true != false"), true);
+    assert_bool(eval("let t = true in t"), true);
+    assert_bool(eval(r"(\x = x) false"), false);
+    assert_bool(eval("arrayGetElem [true, false] 1"), false);
+}
+
+#[test]
+fn bool_literals_are_reserved_words() {
+    // like `if`/`let`, they cannot be rebound or used as a bare attribute name
+    assert!(Expr::parse("let true = 1 in true").is_err());
+    assert!(Expr::parse("{ true = 1; }").is_err());
+    // the quoted form stays available for both the key and the selection
+    assert_rational(eval(r#"{ "true" = 1; }."true""#), 1, 1);
+}
+
+#[test]
+fn bool_literal_is_not_a_number() {
+    assert!(matches!(
+        Expr::parse("true + 1").unwrap().evaluate(),
+        Err(EvalError::TypeError { .. })
+    ));
+    assert!(matches!(
+        Expr::parse("if 1 then 2 else 3").unwrap().evaluate(),
+        Err(EvalError::TypeError { .. })
+    ));
+}

@@ -782,6 +782,17 @@ impl Ctx<'_, '_> {
             return Ok(None);
         };
 
+        // `deserialize_file` below trusts the file as native code without looking
+        // at the wasm it was built from, so only ids the precompiler can actually
+        // have written may derive a path here. `precompile` only ever emits
+        // artifacts for runners listed in `all.json`. Every other id must fall
+        // through to a normal compile instead of picking up whatever happens to
+        // sit at that path, notably `custom:<hash>`, which an attacker chooses
+        // via RegisterRunner and which parses as a plain `name:hash` pair.
+        if !self.supervisor.runner_cache.has_in_all(id, hash) {
+            return Ok(None);
+        }
+
         let special_name = caching::path_in_zip_to_hash(path);
         let Some(cache_dir) = &self.supervisor.wasm_mod_cache.cache_dir else {
             return Ok(None);
@@ -801,7 +812,7 @@ impl Ctx<'_, '_> {
         cache_dir.set_extension(caching::DET_NON_DET_PRECOMPILED_SUFFIX.non_det);
         let non_det_mod = cache_dir;
 
-        if !det_mod.exists() {
+        if !non_det_mod.exists() {
             return Ok(None);
         }
 

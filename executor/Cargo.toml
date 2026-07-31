@@ -3,10 +3,28 @@ name = "genvm"
 version = "0.3.0"
 edition = "2021"
 
-[profile.dev.package.wasmtime]
-opt-level = 2
-[profile.dev.package.wasmparser]
-opt-level = 2
+# Wasm compilation (`genvm precompile`, and the first run of any contract) is
+# unusable when cranelift is built unoptimized: a profile of `precompile`
+# attributes ~80% of its samples to the crates below, so they are optimized even
+# in dev while genvm's own code stays at opt-level 0. Generic code (hashbrown,
+# smallvec, core) is monomorphized into whichever crate instantiates it, so
+# optimizing these covers it too.
+[profile.dev.package]
+cranelift-assembler-x64.opt-level = 2
+cranelift-bforest.opt-level = 2
+cranelift-bitset.opt-level = 2
+cranelift-codegen.opt-level = 2
+cranelift-control.opt-level = 2
+cranelift-entity.opt-level = 2
+cranelift-frontend.opt-level = 2
+gimli.opt-level = 2
+log.opt-level = 2
+object.opt-level = 2
+regalloc2.opt-level = 2
+wasmparser.opt-level = 2
+wasmtime.opt-level = 2
+wasmtime-environ.opt-level = 2
+wasmtime-internal-cranelift.opt-level = 2
 
 [profile.dev]
 incremental = false

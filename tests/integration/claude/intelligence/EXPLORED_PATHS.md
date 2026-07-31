@@ -32,7 +32,13 @@
 - `sys.platform`: "wasi"
 - Only 3 env vars: PYTHONHOME, PYTHONPATH, pwd
 
-### Tests Created (all pass, no divergence found)
+### Probes run (all pass, no divergence found)
+
+The probes themselves are gone — they are throwaway now, and only this record
+survives. `float_math` was the exception: it was promoted to
+`tests/integration/nasty-determinism/floats`, reporting raw `struct.pack('<d')`
+bits rather than `repr()`.
+
 - `agent/wasi_random/` - os.urandom, random module
 - `agent/wasi_clock/` - time.time, monotonic, perf_counter, clock_gettime
 - `agent/hash_random/` - Python hash() function, PYTHONHASHSEED
@@ -57,3 +63,30 @@ Three mismatches found and fixed (committed):
 2. `fd_prestat_get`: spec said "Notsup otherwise"; impl returns `Prestat` for dirs,
    `Badf` for everything else.
 3. `path_rename` was missing from the WASI Rofs always-erroring list.
+
+## Recursion depth (2026-07-28)
+
+Two throwaway probes, both ruled out; neither is a finding.
+
+- `_scratch/calldata_deep/` — a list nested 20 000 deep handed to
+  `gl.vm.UserError.immediate`, aiming at a recursive calldata decoder on the
+  Rust side. Unreachable from a contract: `genlayer/calldata/__init__.py:204`
+  recurses per level in Python, so CPython's own limit (~990 here) raises
+  `RecursionError` long before the encoded value leaves the guest. Any depth a
+  contract can express is far below what would trouble a native decoder. The
+  Rust decoder would have to be probed from a malicious *host*, not a contract.
+- `_scratch/deep_self_call/` — 256 levels of `gl.contract.get_at(self).view()`
+  self-recursion, each level a nested VM instance on the host. Terminates in the
+  canonical `out_of memory` (space-joined, from `rt/memlimiter.rs` — it is the
+  RAM budget that runs out, not the native stack), identical across
+  leader/validator/sync. Correct behaviour, not an internal error.
+
+  Note for a follow-up: the contract cannot observe this. Wrapping the nested
+  call in `try/except Exception` and returning the depth reached produced a
+  byte-identical execution hash to the uncaught version — the limiter aborts the
+  whole outer transaction, so the guest's handler never runs. How deep it got
+  before dying was therefore not measured.
+
+Both were run with `ignore-hash` flipped to `False` in
+`executors/v0.3.x/.genvm-tool.py`, so the l/v/s hash comparison was live and
+did agree.

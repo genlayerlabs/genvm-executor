@@ -10,6 +10,10 @@ zig-build
 /executor/third-party/*
 !/executor/third-party/.gitkeep
 
+# throwaway probes written by an agentic fuzzing session; a probe that finds
+# something is promoted by hand into the feature directory it belongs to
+/tests/integration/claude/_scratch
+
 # editors
 **/.vscode/*
 !**/.vscode/extensions.json

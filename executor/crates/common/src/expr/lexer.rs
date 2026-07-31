@@ -197,6 +197,8 @@ impl Parser {
             self.peek(),
             Token::Num(_)
                 | Token::Ident(_)
+                | Token::True
+                | Token::False
                 | Token::LParen
                 | Token::LBracket
                 | Token::LBrace
@@ -244,6 +246,8 @@ impl Parser {
         match self.advance() {
             Token::Num(n) => Ok(Expr::Const(n)),
             Token::Ident(s) => Ok(Expr::Ident(s)),
+            Token::True => Ok(Expr::Bool(true)),
+            Token::False => Ok(Expr::Bool(false)),
             Token::LParen => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;

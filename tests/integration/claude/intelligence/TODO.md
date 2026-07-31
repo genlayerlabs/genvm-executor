@@ -1,19 +1,10 @@
 # TODO
 
-## Harness notes (discovered 2026-06-12)
+## Harness notes
 
-- RUN VIA `nix develop .#full`, not `run_test.py`. The `.direnv/ya-test-runner` is
-  STALE (its `Description` lacks `depends_on`/`hidden`), so `run_test.py` — which
-  hardcodes that binary — fails collection with
-  `TypeError: Description.__new__() got an unexpected keyword argument 'depends_on'`.
-  The nix `full` shell puts a freshly-built `ya-test-runner` on PATH that works.
-  Invoke `ya-test-runner --filter-name <id> run --no-manager --no-webdriver` directly.
-- `--filter-name`/`--filter-tag` do NOT isolate a single test — the suite runs whole
-  (718 pass / 78 fail; the 78 are LLM/web tests that need real modules, run here in
-  user_error mode). Just read the specific test's `✓`/`✗` lines and its artifacts.
-- Manager dies across tool calls; start it and run the test in the SAME shell call.
-  Do NOT `pkill -f genvm-modules` — it matches the shell's own command line and
-  suicides; use `pkill -x genvm-modules`.
+Superseded 2026-07-28. `run_test.py`, `run-manager.sh` and the `ya-test-runner`
+workarounds are gone: `genvm-tool test run --filter-name <regex>` isolates a
+single case and starts the manager itself. See the `agentic-fuzzing` skill.
 
 ## High Priority
 

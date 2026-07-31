@@ -28,6 +28,8 @@ pub(crate) enum Token {
     If,
     Then,
     Else,
+    True,
+    False,
     Backslash,
     LBracket,
     RBracket,
@@ -71,6 +73,8 @@ impl fmt::Display for Token {
             Token::If => write!(f, "`if`"),
             Token::Then => write!(f, "`then`"),
             Token::Else => write!(f, "`else`"),
+            Token::True => write!(f, "`true`"),
+            Token::False => write!(f, "`false`"),
             Token::Backslash => write!(f, r"`\`"),
             Token::LBracket => write!(f, "`[`"),
             Token::RBracket => write!(f, "`]`"),
@@ -298,6 +302,10 @@ impl<'a> Tokenizer<'a> {
                 "if" => Token::If,
                 "then" => Token::Then,
                 "else" => Token::Else,
+                // Reserved like the other keywords, so `true` is not usable as
+                // a bare attribute name; quote it (`{ "true" = ...; }`) instead.
+                "true" => Token::True,
+                "false" => Token::False,
                 _ => Token::Ident(s.to_owned()),
             });
         }

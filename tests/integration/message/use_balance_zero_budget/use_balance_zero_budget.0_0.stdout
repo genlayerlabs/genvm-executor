@@ -1,0 +1,2 @@
+executed with `Return(null)`
+{"address":addr#3030303030303030303030303030303030303030,"call_key":b#666f6f0000000000000000000000000000000000000000000000000000000000,"calldata":{"":"foo","args":[1,2]},"fee_params":{"execution_budget_per_round":0,"leader_timeunits_allocation":5,"max_price_gen_per_time_unit":2,"receipt_fee_max_gas_price":20,"rotations":[4,4,4,4,4],"storage_fee_max_gas_price":20,"validator_timeunits_allocation":5},"message_fee":10280,"on":"finalized","receipt_fee":161,"subtree":b#,"type":"PostMessage","use_balance":true,"value":0}
