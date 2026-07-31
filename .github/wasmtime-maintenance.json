@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "lines": {
+    "v0.2": {
+      "policy": "security-only"
+    },
+    "v0.3": {
+      "policy": "monthly"
+    }
+  }
+}
