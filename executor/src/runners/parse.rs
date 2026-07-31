@@ -96,6 +96,7 @@ fn code_to_archive_from_text(code: bytes::Bytes) -> rt::errors::Result<super::Ar
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     const BLOCK_SIZE: usize = 512;
 
@@ -170,6 +171,47 @@ mod tests {
             archive.data.is_empty(),
             "USTAR type flag `5` denotes a directory; got entries {:?}",
             archive.data.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn ustar_rejects_a_header_with_a_bad_checksum() {
+        let mut archive = ustar(b"runner.json", b"", br#"{"StartWasm":"file"}"#).to_vec();
+        archive[0] = b'R';
+
+        assert!(
+            super::super::Archive::from_ustar(archive.into()).is_err(),
+            "a USTAR header modified without updating its checksum must be rejected"
+        );
+    }
+
+    #[test]
+    fn zip_rejects_stored_contents_with_a_bad_crc() {
+        let contents = b"payload whose CRC must be checked";
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut cursor);
+            writer
+                .start_file(
+                    "payload",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(contents).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let mut archive = cursor.into_inner();
+        let contents_offset = archive
+            .windows(contents.len())
+            .position(|window| window == contents)
+            .unwrap();
+        archive[contents_offset] ^= 1;
+
+        assert!(
+            parse(archive.into()).is_err(),
+            "stored ZIP contents modified without updating their CRC must be rejected"
         );
     }
 }

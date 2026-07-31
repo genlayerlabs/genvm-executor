@@ -1447,6 +1447,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn directory_mapping_rejects_normalized_path_collisions() {
+        let archive = crate::runners::ArchiveCache::new(
+            symbol_table::GlobalSymbol::from("custom:path-collision"),
+            crate::runners::Archive {
+                data: BTreeMap::from([
+                    (
+                        "tree/a//file".to_owned(),
+                        bytes::Bytes::from_static(b"first"),
+                    ),
+                    (
+                        "tree/a/file".to_owned(),
+                        bytes::Bytes::from_static(b"second"),
+                    ),
+                ]),
+                total_size: 11,
+            },
+        );
+        let limiter = rt::memlimiter::Limiter::new();
+        let mut context = test_context();
+
+        crate::rt::supervisor::actions::map_archive_file(
+            &mut context,
+            &limiter,
+            &archive,
+            "tree/",
+            "/mapped/",
+        )
+        .expect_err(
+            "distinct archive entries that normalize to one VFS path must not silently overwrite",
+        );
+    }
+
+    #[test]
+    fn mapping_a_file_over_a_directory_does_not_delete_the_subtree() {
+        let mut context = test_context();
+        context
+            .map_file(
+                "/mapped/child",
+                bytes::Bytes::from_static(b"child contents"),
+            )
+            .unwrap();
+
+        assert!(
+            context
+                .map_file("/mapped", bytes::Bytes::from_static(b"replacement"))
+                .is_err(),
+            "mapping a file over an existing directory must not silently delete its children"
+        );
+    }
+
     /// Known-answer test for the deterministic `random_get` byte layout. The seed is a
     /// fixed 32-byte value consumed as 8 little-endian `u32` words (matching
     /// `Context::new`), and `fill_bytes` produces the exact stream below. This pins the
