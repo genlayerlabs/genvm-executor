@@ -128,7 +128,7 @@ impl Reader {
             .get_or_create(name, || async {
                 called.store(true, std::sync::atomic::Ordering::SeqCst);
                 let arch = arch_provider().await?;
-                if !limiter.consume(arch.total_size) {
+                if !limiter.consume(arch.total_size as u32) {
                     return Err(errors::Error::vm(abi::consts::VmError::oom().ram().val()));
                 }
                 Ok(ArchiveCache::new(name, arch))
@@ -136,7 +136,7 @@ impl Reader {
             .await?;
 
         if !called.load(std::sync::atomic::Ordering::SeqCst)
-            && !limiter.consume(res.files.total_size)
+            && !limiter.consume(res.files.total_size as u32)
         {
             return Err(errors::Error::vm(abi::consts::VmError::oom().ram().val()));
         }
