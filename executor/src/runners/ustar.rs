@@ -5,7 +5,7 @@ use crate::rt::errors::{self, Error};
 #[derive(Clone)]
 pub struct Archive {
     pub data: BTreeMap<String, bytes::Bytes>,
-    pub total_size: u32,
+    pub total_size: u64,
 }
 
 fn map_try_insert<K, V>(map: &mut BTreeMap<K, V>, key: K, value: V) -> errors::Result<&mut V>
@@ -109,7 +109,7 @@ impl Archive {
 
         Ok(Self {
             data: res,
-            total_size: original_data.len() as u32,
+            total_size: original_data.len().min(u32::MAX as usize) as u64,
         })
     }
 
@@ -159,7 +159,7 @@ impl Archive {
 
         Ok(Self {
             data: res,
-            total_size: bytes.len() as u32,
+            total_size: bytes.len().min(u32::MAX as usize) as u64,
         })
     }
 
@@ -168,7 +168,7 @@ impl Archive {
         version: bytes::Bytes,
         runner_comment: bytes::Bytes,
     ) -> Self {
-        let total_size = file.len() as u32;
+        let total_size = file.len().min(u32::MAX as usize) as u64;
 
         Self {
             data: BTreeMap::from_iter([
