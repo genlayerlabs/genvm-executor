@@ -49,7 +49,18 @@ impl Host {
             let fd: i32 = fd_str
                 .parse()
                 .with_context(|| format!("parsing fd number from '{fd_str}'"))?;
-            let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+            // SAFETY: The caller owns `fd` and expects us to use it, not
+            // consume it.  `from_raw_fd` takes ownership and would close the
+            // original fd on drop, so we must dup() first to get an
+            // independent copy that this Host can safely own and close.
+            let duped = unsafe { libc::dup(fd) };
+            if duped < 0 {
+                anyhow::bail!(
+                    "failed to dup fd {fd}: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(duped) };
             Box::new(bufreaderwriter::seq::BufReaderWriterSeq::new_writer(stream))
         } else {
             Box::new(bufreaderwriter::seq::BufReaderWriterSeq::new_writer(
