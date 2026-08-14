@@ -1,5 +1,7 @@
 //! Core storage primitives: Slot, StorageType trait, and built-in scalar types.
 
+use crate::int_traits::*;
+
 #[cfg(not(all(feature = "wasi", not(feature = "dont_define_wasi_storage"))))]
 mod underlying_abi {
     unsafe extern "Rust" {
@@ -230,7 +232,7 @@ impl StorageStr {
     }
 
     pub fn load(&self) -> String {
-        let len = self.len() as usize;
+        let len = self.len().into_int_comptime();
         if len == 0 {
             return String::new();
         }
@@ -250,7 +252,7 @@ impl StorageStr {
 
     pub fn slice(&self, start: u32, end: u32) -> String {
         assert!(start <= end && end <= self.len());
-        let len = (end - start) as usize;
+        let len = (end - start).into_int_comptime();
         if len == 0 {
             return String::new();
         }
@@ -309,7 +311,7 @@ impl StorageBytes {
     }
 
     pub fn load(&self) -> Vec<u8> {
-        let len = self.len() as usize;
+        let len = self.len().into_int_comptime();
         if len == 0 {
             return Vec::new();
         }
@@ -328,7 +330,7 @@ impl StorageBytes {
 
     pub fn slice(&self, start: u32, end: u32) -> Vec<u8> {
         assert!(start <= end && end <= self.len());
-        let len = (end - start) as usize;
+        let len = (end - start).into_int_comptime();
         if len == 0 {
             return Vec::new();
         }

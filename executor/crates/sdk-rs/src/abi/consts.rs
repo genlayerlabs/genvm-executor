@@ -1,6 +1,6 @@
 // This file is auto-generated. Do not edit!
 
-#![allow(dead_code, clippy::redundant_static_lifetimes)]
+#![allow(dead_code, clippy::all)]
 
 use serde::{Deserialize, Serialize};
 
@@ -21,17 +21,15 @@ pub enum ResultCode {
     Return = 0,
     UserError = 1,
     VmError = 2,
-    InternalError = 3,
 }
 
 impl ResultCode {
-    pub const SIZE: usize = 4;
+    pub const SIZE: usize = 3;
     pub fn value(self) -> u8 {
         match self {
             ResultCode::Return => 0,
             ResultCode::UserError => 1,
             ResultCode::VmError => 2,
-            ResultCode::InternalError => 3,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
@@ -39,7 +37,6 @@ impl ResultCode {
             ResultCode::Return => "return",
             ResultCode::UserError => "user_error",
             ResultCode::VmError => "vm_error",
-            ResultCode::InternalError => "internal_error",
         }
     }
 }
@@ -52,7 +49,6 @@ impl TryFrom<u8> for ResultCode {
             0 => Ok(ResultCode::Return),
             1 => Ok(ResultCode::UserError),
             2 => Ok(ResultCode::VmError),
-            3 => Ok(ResultCode::InternalError),
             _ => Err(()),
         }
     }
@@ -189,14 +185,6 @@ impl TryFrom<u32> for Permissions {
         }
     }
 }
-pub mod memory_limiter_consts {
-    pub const TABLE_ENTRY: u32 = 64;
-    pub const FILE_MAPPING: u32 = 256;
-    pub const FD_ALLOCATION: u32 = 96;
-    pub const RUNNER_LOAD_COST: u32 = 4096;
-    pub const VM_SPAWN_COST: u32 = 134217728;
-}
-
 pub mod root_offsets {
     pub const MAJOR: u32 = 0;
     pub const CONTRACT: u32 = 1;
@@ -205,18 +193,6 @@ pub mod root_offsets {
     pub const UPGRADERS: u32 = 4;
     pub const CODE_SLOT: u32 = 5;
     pub const PERMISSIONS: u32 = 37;
-}
-
-pub mod top_limits {
-    pub const NONDET_BLOCKS: u32 = 4096;
-    pub const LOCKED_SLOTS: u32 = 256;
-    pub const UPGRADERS: u32 = 32;
-    pub const VM_RECURSION: u32 = 512;
-    pub const WEB_REQUEST_MIN_SPACE: u32 = 65536;
-    pub const WEB_RENDER_MIN_SPACE: u32 = 134217728;
-    pub const MAX_FDS: u32 = 1024;
-    pub const WASM_CALL_DEPTH: u32 = 1024;
-    pub const WASM_STACK_VALUE_SLOTS: u32 = 65535;
 }
 
 #[derive(
@@ -265,6 +241,45 @@ impl TryFrom<&str> for SpecialMethod {
 pub mod __VmError {
     use std::borrow::Cow;
     use super::VmError;
+
+    pub struct LeaderFaultNondetOutput;
+
+    impl LeaderFaultNondetOutput {
+        pub const fn prefix_(&self) -> &'static str {
+            "leader_fault nondet_output"
+        }
+        pub const fn absent(&self) -> VmError { VmError(Cow::Borrowed("leader_fault nondet_output absent")) }
+        pub const fn malformed(&self) -> VmError { VmError(Cow::Borrowed("leader_fault nondet_output malformed")) }
+        pub const fn uses_this_error(&self) -> LeaderFaultNondetOutputUsesThisError { LeaderFaultNondetOutputUsesThisError }
+        pub const fn extra(&self) -> LeaderFaultNondetOutputExtra { LeaderFaultNondetOutputExtra }
+    }
+
+    pub struct LeaderFaultNondetOutputUsesThisError;
+
+    impl LeaderFaultNondetOutputUsesThisError {
+        pub fn val_str(&self, v: &str) -> VmError {
+            debug_assert!(!v.is_empty(), "leader_fault nondet_output uses_this_error needs a non-empty description");
+            VmError(Cow::Owned(format!("leader_fault nondet_output uses_this_error {v}")))
+        }
+    }
+
+    pub struct LeaderFaultNondetOutputExtra;
+
+    impl LeaderFaultNondetOutputExtra {
+        pub fn val_str(&self, v: &str) -> VmError {
+            debug_assert!(!v.is_empty(), "leader_fault nondet_output extra needs a non-empty description");
+            VmError(Cow::Owned(format!("leader_fault nondet_output extra {v}")))
+        }
+    }
+
+    pub struct LeaderFault;
+
+    impl LeaderFault {
+        pub const fn prefix_(&self) -> &'static str {
+            "leader_fault"
+        }
+        pub const fn nondet_output(&self) -> LeaderFaultNondetOutput { LeaderFaultNondetOutput }
+    }
 
     pub struct WasmTrap;
 
@@ -359,6 +374,16 @@ pub mod __VmError {
         pub const fn reverted(&self) -> VmError { VmError(Cow::Borrowed("evm reverted")) }
     }
 
+    pub struct InvalidContractRunner;
+
+    impl InvalidContractRunner {
+        pub const fn prefix_(&self) -> &'static str {
+            "invalid_contract runner"
+        }
+        pub const fn absent(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract runner absent")) }
+        pub const fn malformed(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract runner malformed")) }
+    }
+
     pub struct InvalidContractWasm;
 
     impl InvalidContractWasm {
@@ -377,10 +402,9 @@ pub mod __VmError {
         pub const fn prefix_(&self) -> &'static str {
             "invalid_contract"
         }
-        pub const fn absent_runner_comment(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract absent_runner_comment")) }
         pub const fn not_utf8_text(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract not_utf8_text")) }
-        pub const fn malformed_runner(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract malformed_runner")) }
         pub const fn major_mismatch(&self) -> VmError { VmError(Cow::Borrowed("invalid_contract major_mismatch")) }
+        pub const fn runner(&self) -> InvalidContractRunner { InvalidContractRunner }
         pub const fn wasm(&self) -> InvalidContractWasm { InvalidContractWasm }
     }
 
@@ -405,8 +429,9 @@ impl From<VmError> for String {
 #[rustfmt::skip]
 impl VmError {
     pub const fn timeout() -> Self { Self(Cow::Borrowed("timeout")) }
-    pub const fn absent_leader_nondet_output() -> Self { Self(Cow::Borrowed("absent_leader_nondet_output")) }
-    pub const fn host_forbidden() -> Self { Self(Cow::Borrowed("host_forbidden")) }
+    pub const fn malformed_entry() -> Self { Self(Cow::Borrowed("malformed_entry")) }
+    pub const fn forbidden() -> Self { Self(Cow::Borrowed("forbidden")) }
+    pub const fn leader_fault() -> __VmError::LeaderFault { __VmError::LeaderFault }
     pub const fn exit_code() -> __VmError::ExitCode { __VmError::ExitCode }
     pub const fn wasm_trap() -> __VmError::WasmTrap { __VmError::WasmTrap }
     pub const fn out_of() -> __VmError::OutOf { __VmError::OutOf }
@@ -417,11 +442,19 @@ impl VmError {
 
 #[rustfmt::skip]
 impl VmError {
+    pub fn internal(self) -> Self { assert!(!self.0.contains(" # "), "a value carries at most one detail"); Self(Cow::Owned(format!("{} # internal", self.0))) }
+    pub fn external(self) -> Self { assert!(!self.0.contains(" # "), "a value carries at most one detail"); Self(Cow::Owned(format!("{} # external", self.0))) }
+}
+
+#[rustfmt::skip]
+impl VmError {
     /// Whether `s` is a well-formed `vm_error` path.
     pub fn is_valid_(s: &str) -> bool {
         if matches!(s,
             "timeout" |
-            "absent_leader_nondet_output" |
+            "malformed_entry" |
+            "leader_fault nondet_output absent" |
+            "leader_fault nondet_output malformed" |
             "wasm_trap" |
             "wasm_trap unreachable" |
             "wasm_trap stack_overflow" |
@@ -455,18 +488,28 @@ impl VmError {
             "fee no_matching_node" |
             "fee below_minimum" |
             "fee too_many_rounds" |
-            "host_forbidden" |
+            "forbidden" |
             "evm reverted" |
             "invalid_contract" |
-            "invalid_contract absent_runner_comment" |
+            "invalid_contract runner absent" |
+            "invalid_contract runner malformed" |
             "invalid_contract not_utf8_text" |
-            "invalid_contract malformed_runner" |
             "invalid_contract major_mismatch" |
             "invalid_contract wasm validating" |
             "invalid_contract wasm linking" |
             "invalid_contract wasm entrypoint"
         ) {
             return true;
+        }
+        if let Some(rest) = s.strip_prefix("leader_fault nondet_output uses_this_error ") {
+            if !rest.is_empty() {
+                return true;
+            }
+        }
+        if let Some(rest) = s.strip_prefix("leader_fault nondet_output extra ") {
+            if !rest.is_empty() {
+                return true;
+            }
         }
         if let Some(rest) = s.strip_prefix("exit_code ") {
             if rest.parse::<i32>().is_ok_and(|v| v.to_string() == rest) {

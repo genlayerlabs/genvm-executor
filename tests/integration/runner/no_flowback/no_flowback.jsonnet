@@ -4,7 +4,7 @@ local util = import 'templates/util.jsonnet';
 // parent. The child charges the custom exactly once (`charged`); the parent's
 // later attempt to resolve that id fails deterministically (no parent charge
 // record for it) and the run ends as an invalid-contract VM error.
-{tags: util.features([['runner', 'custom'], ['sandbox']], 'stable'),
+{tags: util.features([['runner', 'custom'], ['runner', 'load'], ['runner', 'register'], ['sandbox', 'det']], 'stable') + ['python'],
 	entry: util.addPaths([simple.run('${jsonnetDir}/${fileBaseName}.py') {
 		stable_hash: false,
 		permissions: 'wscn',

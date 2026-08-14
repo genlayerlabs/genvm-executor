@@ -1,7 +1,7 @@
 local msg = import 'templates/message.json';
 local util = import 'templates/util.jsonnet';
 {
-	tags: util.features([['runner', 'slot']], 'stable'),
+	tags: util.features([['runner', 'slot']], 'stable') + ['python'],
 	entry: util.addPaths([{
 		vars: {},
 		code: '${jsonnetDir}/${fileBaseName}.py',

@@ -9,7 +9,7 @@ local extra = {
 	},
 	'message_fee_allocation': [],
 };
-{tags: util.features([['message'], ['fees']], 'stable'),
+{tags: util.features([['message', 'send'], ['balance'], ['fees', 'balance']], 'stable') + ['python'],
 	entry: util.addPaths([util.chain([
 		s + extra,
 		s + extra + {

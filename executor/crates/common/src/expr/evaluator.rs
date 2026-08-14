@@ -4,6 +4,7 @@ use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
 
 use crate::expr::value::HostFnImpl;
+use crate::int_traits::*;
 
 use super::value::{BinOp, EvalError, Expr, StrSeg, Thunk, Value};
 
@@ -11,9 +12,11 @@ use super::value::{BinOp, EvalError, Expr, StrSeg, Thunk, Value};
 // It is only used for trusted, operator-supplied fee config expressions,
 // never for contract-supplied or user-supplied input.
 
+type GetVarFn = dyn Fn(&str) -> Result<Value, EvalError> + Send + Sync;
+
 #[derive(Clone)]
 struct EvalContext {
-    get_var: Arc<dyn Fn(&str) -> Result<Value, EvalError> + Send + Sync>,
+    get_var: Arc<GetVarFn>,
     let_bindings: rpds::RedBlackTreeMap<String, Thunk, archery::ArcK>,
 }
 
@@ -258,7 +261,8 @@ static BUILTINS: std::sync::LazyLock<std::collections::HashMap<&'static str, Arc
                     // truncate. On 64-bit `usize::MAX as u64 == u64::MAX`, so this check is
                     // never taken and behavior is unchanged.
                     const _: () = assert!(usize::BITS >= 64);
-                    if exp > usize::MAX as u64 {
+                    let max_exp: u64 = usize::MAX.into_int_comptime();
+                    if exp > max_exp {
                         return Err(EvalError::ExponentTooLarge);
                     }
                     let result = num_traits::pow::pow(base.clone(), exp as usize);

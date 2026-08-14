@@ -1,0 +1,10 @@
+# v0/1.10
+# {
+#   "Seq": [
+#     {  "SetArgs":		  { "Deppy-geOFILER", "val": "~alse*} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+#contr_ct.Contract):
+	def __init__(self):
+		gl.vm.rvvvvvvvvun_nondev(lambda: None, lambda x: True)
+		print('hello world')

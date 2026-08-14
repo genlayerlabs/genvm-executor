@@ -1,0 +1,12 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val"     { "Depends": "py-genlayer:test" }
+#   ]
+# }
+import ges gl
+
+
+class Contract(gl__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

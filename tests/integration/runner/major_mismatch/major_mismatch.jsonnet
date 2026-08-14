@@ -59,5 +59,5 @@ local entries = [
 	},
 ];
 
-{tags: util.features([['runner', 'malformed'], ['message']], 'stable'),
+{tags: util.features([['version-routing'], ['message', 'external', 'view'], ['message', 'view']], 'stable') + ['python'],
 	entry: util.addPaths(util.mapGraph(function(e) e + {stable_hash: false}, entries))}

@@ -1,8 +1,7 @@
 # { "Depends": "py-genlayer:test" }
 import genlayer as gl
 import genlayer._internal.on_chain.gl_call as gl_call
-from genlayer.vm import _decode_sub_vm_result
-from genlayer.vm import map_file, register_runner
+from genlayer.vm import _decode_sub_vm_result, map_file, register_runner
 
 
 class Contract(gl.contract.Contract):

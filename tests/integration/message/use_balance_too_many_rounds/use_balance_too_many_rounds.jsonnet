@@ -7,5 +7,5 @@ local bal = {
 	},
 };
 local base = deploy_then.run('${jsonnetDir}/${fileBaseName}.py', 'do_emit');
-{tags: util.features([['message'], ['fees']], 'stable'),
+{tags: util.features([['message', 'send'], ['balance'], ['fees', 'balance']], 'stable') + ['python'],
 	entry: util.addPaths([base + bal + {next: [base.next[0] + bal]}])}

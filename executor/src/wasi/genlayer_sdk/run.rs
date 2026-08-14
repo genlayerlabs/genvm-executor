@@ -23,8 +23,9 @@ async fn consume_nondet_output(
 /// Is this leader-proposed `vm_error` code acceptable as-is?
 ///
 /// `Err` carries the code a validator derives instead -- either
-/// `leader_output malformed` or, for a proposal that reaches into the
-/// derived-outcome namespace, `leader_output uses_this_error <h>`.
+/// `leader_fault nondet_output malformed` or, for a proposal that reaches into
+/// the derived-outcome namespace,
+/// `leader_fault nondet_output uses_this_error <h>`.
 fn validate_leader_vm_error(code: &str) -> Result<(), public_abi::VmError> {
     // An honest leader strips its own detail before publishing, so a proposal
     // carrying one is malformed rather than something to strip.
@@ -32,22 +33,26 @@ fn validate_leader_vm_error(code: &str) -> Result<(), public_abi::VmError> {
         return Err(malformed_leader_result());
     }
 
-    // The derived-outcome namespace is checked *before* validity, so proposing
-    // the literal `leader_output malformed` cannot yield an output byte-equal
+    // The leader-fault nondet-output subtree is derived by validators, never
+    // proposable. It is checked *before* validity, so proposing the literal
+    // `leader_fault nondet_output malformed` cannot yield an output byte-equal
     // to the proposal.
-    if rt::errors::vm_error_is_of_kind(code, public_abi_pending::VmError::leader_output().prefix_())
-        || rt::errors::vm_error_is_of_kind(
-            code,
-            &abi::consts::VmError::absent_leader_nondet_output().0,
-        )
-    {
+    if rt::errors::vm_error_is_of_kind(
+        code,
+        public_abi::VmError::leader_fault()
+            .nondet_output()
+            .prefix_(),
+    ) {
         return Err(rt::errors::vm_error_for_leader_use_this_error(code));
     }
 
-    // Only `vm_error` trie paths are proposable. The pending-ABI codes are
-    // deliberately excluded: `malformed_entry` is an outcome the executor
-    // derives, never one a leader may claim.
+    // Only `vm_error` trie paths are proposable. Derived leader-result codes are
+    // rejected above, and `malformed_entry` is an outcome the executor derives.
     if !public_abi::VmError::is_valid_(code) {
+        return Err(malformed_leader_result());
+    }
+
+    if code == public_abi::VmError::malformed_entry().0.as_ref() {
         return Err(malformed_leader_result());
     }
 
@@ -55,9 +60,9 @@ fn validate_leader_vm_error(code: &str) -> Result<(), public_abi::VmError> {
 }
 
 fn malformed_leader_result() -> public_abi::VmError {
-    rt::errors::convert_vm_error_from_pending_abi(
-        public_abi_pending::VmError::leader_output().malformed(),
-    )
+    public_abi::VmError::leader_fault()
+        .nondet_output()
+        .malformed()
 }
 
 /// The leader's own `VMError` code as it is published to the host. The fused
@@ -87,7 +92,7 @@ pub fn strip_vm_error_detail(code: &str) -> public_abi::VmError {
 /// never traps and never bypasses the comparison stage.
 pub fn parse_leader_result(data: &[u8]) -> Result<rt::vm::RunOk, public_abi::VmError> {
     let Some((&code, rest)) = data.split_first() else {
-        return Err(public_abi::VmError::absent_leader_nondet_output());
+        return Err(public_abi::VmError::leader_fault().nondet_output().absent());
     };
 
     let code = public_abi::ResultCode::try_from(code).map_err(|()| malformed_leader_result())?;
@@ -117,13 +122,12 @@ pub fn parse_leader_result(data: &[u8]) -> Result<rt::vm::RunOk, public_abi::VmE
                 None,
             ))
         }
-
-        public_abi::ResultCode::InternalError => Err(malformed_leader_result()),
     }
 }
 
 struct RunNondetGetVMTaskArgs {
     child_topmost_id: runners::Id,
+    child_limiter: rt::memlimiter::Limiter,
     storage_checkpoint: rt::vm::storage::Storage<wasi::genlayer_sdk::StorageHostHolder>,
     child_custom: Vec<runners::cache::ArchivePin>,
     call_no: u32,
@@ -148,7 +152,7 @@ pub(super) fn call_contract_route(
     if rt::vm::storage::Storage::<StorageHostHolder>::check_major(advisory_major).is_err() {
         let payload =
             calldata::encode_obj(&genvm_modules_interfaces::ExecutorSelector::MajorOverride {
-                major: advisory_major as u32,
+                major: advisory_major.into(),
             });
         return CallContractRoute::Nested(payload.into());
     }
@@ -198,6 +202,15 @@ pub(super) fn nested_run_ok(
             };
             rt::vm::RunOk::VMError(public_abi::VmError(std::borrow::Cow::Owned(code)), None)
         }
+        // Fatality crosses the boundary intact: the caller re-raises it instead
+        // of receiving it as a result it could swallow.
+        genvm_modules_interfaces::ResultCode::FatalVmError => {
+            let data = reply.result.data.materialize()?;
+            let calldata::Value::Str(code) = data else {
+                anyhow::bail!("nested CallContract fatal VM error is not a string");
+            };
+            rt::vm::RunOk::FatalVMError(public_abi::VmError(std::borrow::Cow::Owned(code)), None)
+        }
         genvm_modules_interfaces::ResultCode::InternalError => {
             anyhow::bail!("nested executor returned an internal error");
         }
@@ -220,12 +233,22 @@ impl ContextVFS<'_> {
         }
 
         let supervisor = self.context.data.supervisor.clone();
+
+        let pre_limit = self.context.data.limiter.get_remaining_memory();
+
         let data = supervisor
             .host
             .lock_for(host::host_fns::Methods::EthCall)
             .await
-            .eth_call(address, &calldata)
+            .eth_call(address, &calldata, pre_limit)
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+
+        let Some(data) = data else {
+            return Err(generated::types::Error::trap(
+                rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
+            ));
+        };
+
         self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
     }
 
@@ -242,7 +265,7 @@ impl ContextVFS<'_> {
         };
 
         let vm_data = Box::new(SingleVMData {
-            limiter: Default::default(),
+            limiter: args.child_limiter,
             remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
             spawn_kind: "run_nondet".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
@@ -286,6 +309,7 @@ impl ContextVFS<'_> {
         calldata: &abi::entry::MainCallData,
         state: public_abi::StorageType,
         code_slot: SlotID,
+        limiter: rt::memlimiter::Limiter,
         child_storage: rt::vm::storage::Storage<StorageHostHolder>,
     ) -> Box<SingleVMData> {
         let supervisor = self.context.data.supervisor.clone();
@@ -297,7 +321,7 @@ impl ContextVFS<'_> {
         my_data.message.stack.push(my_data.message.contract_address);
 
         Box::new(SingleVMData {
-            limiter: self.context.limiter.derived(),
+            limiter,
             remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
             spawn_kind: "call_contract".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
@@ -454,9 +478,11 @@ impl ContextVFS<'_> {
             state = self.context.data.conf.execution.state_mode;
         }
 
+        let child_limiter = self.context.limiter.derived();
         let mut child_storage = rt::vm::storage::Storage::new(
             address,
             supervisor.get_storage_limiter(),
+            child_limiter.clone(),
             StorageHostHolder(
                 supervisor.host.clone(),
                 ReadToken {
@@ -477,8 +503,14 @@ impl ContextVFS<'_> {
             .resolve_callcontract_executor(address, state, advisory_major)
             .map_err(|e| cross_major_internal("resolving CallContract executor", e))?;
         let route = call_contract_route(routing_payload, advisory_major);
-        let vm_data =
-            self.derive_call_contract_vm_data(address, &calldata, state, code_slot, child_storage);
+        let vm_data = self.derive_call_contract_vm_data(
+            address,
+            &calldata,
+            state,
+            code_slot,
+            child_limiter,
+            child_storage,
+        );
 
         match route {
             CallContractRoute::Nested(routing_payload) => {
@@ -541,11 +573,14 @@ impl ContextVFS<'_> {
         let parent_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
         let child_topmost_id = match &runner {
             None => parent_runner_id.clone(),
-            Some(r) => {
-                rt::supervisor::actions::resolve_runner_id(&supervisor, &parent_runner_id, r)
-                    .await
-                    .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?
-            }
+            Some(r) => rt::supervisor::actions::resolve_runner_id(
+                &supervisor,
+                &self.context.limiter,
+                &parent_runner_id,
+                r,
+            )
+            .await
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?,
         };
         let child_custom = rt::supervisor::actions::resolve_child_custom_runners(
             &self.context.loaded,
@@ -561,22 +596,35 @@ impl ContextVFS<'_> {
             .nondet_call_no
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-        if call_no >= public_abi::top_limits::NONDET_BLOCKS {
+        if call_no >= top_limits::NONDET_BLOCKS {
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().nondet_blocks()).into(),
             )));
         }
 
+        // The child gets its own budget, seeded with what the caller has left at
+        // this point: charges never flow back, and a queued nondet VM keeps a
+        // usable budget after its parent has died.
+        let child_limiter = self.context.limiter.derived();
+
+        let storage_checkpoint = self
+            .context
+            .data
+            .storage
+            .fork(child_limiter.clone())
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+
         let run_nondet_get_vm_task_args = RunNondetGetVMTaskArgs {
             child_topmost_id,
-            storage_checkpoint: self.context.data.storage.clone(),
+            storage_checkpoint,
+            child_limiter,
             child_custom,
             call_no,
         };
 
-        let result_to_return = if self.context.data.supervisor.shared_data.run_mode
-            == rt::RunMode::Leader
-        {
+        let is_leader = self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Leader;
+
+        let result_to_return = if is_leader {
             let vm_ext_msg = self.context.data.message_data.fork_leader(
                 public_abi::EntryKind::ConsensusStage,
                 data_leader,
@@ -590,21 +638,17 @@ impl ContextVFS<'_> {
                 .await
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
-            let computed_result = match computed_result {
+            let computed_result = computed_result
+                .into_nonfatal()
+                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+
+            match computed_result {
                 // Publish the bare code, keep the detail as a local cause.
                 rt::vm::RunOk::VMError(err, cause) => {
                     rt::vm::RunOk::VMError(strip_vm_error_detail(&err.0), cause)
                 }
                 computed_result => computed_result,
-            };
-
-            self.context
-                .data
-                .supervisor
-                .push_nondet_result(call_no, bytes::Bytes::from(computed_result.as_bytes()))
-                .await;
-
-            computed_result
+            }
         } else {
             let leaders_res_bytes = self
                 .context
@@ -615,9 +659,12 @@ impl ContextVFS<'_> {
             // Absent and empty must produce the same outcome (`Supervisor`
             // pads gaps with empty `Bytes`), which is exactly what the empty
             // slice already yields -- so one call covers both.
+            // A leader fault is fatal: it says this node's whole run is built on
+            // a result no honest leader could have produced, so a caller must
+            // not be able to carry on as if the block had merely failed.
             let leaders_res = match parse_leader_result(&leaders_res_bytes.unwrap_or_default()) {
                 Ok(res) => res,
-                Err(vm_error) => rt::vm::RunOk::VMError(vm_error, None),
+                Err(vm_error) => rt::vm::RunOk::FatalVMError(vm_error, None),
             };
 
             if self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Validator {
@@ -635,9 +682,23 @@ impl ContextVFS<'_> {
             leaders_res
         };
 
+        // One encoding feeds the fee, the leader's retained copy and the
+        // caller-visible file.
+        let encoded = bytes::Bytes::from(result_to_return.as_bytes());
+
+        // Retention precedes the charge, so a validator replaying a run that
+        // ran out of fee here sees the same result the leader charged for.
+        if is_leader {
+            self.context
+                .data
+                .supervisor
+                .push_nondet_result(call_no, encoded.clone())
+                .await;
+        }
+
         consume_nondet_output(
             &self.context.data.supervisor.shared_data,
-            result_to_return.as_bytes().len() as u64,
+            encoded.len().into_int_comptime(),
         )
         .await?;
 
@@ -656,10 +717,14 @@ impl ContextVFS<'_> {
         let supervisor = self.context.data.supervisor.clone();
 
         let parent_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
-        let topmost_runner_id =
-            rt::supervisor::actions::resolve_runner_id(&supervisor, &parent_runner_id, &runner)
-                .await
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+        let topmost_runner_id = rt::supervisor::actions::resolve_runner_id(
+            &supervisor,
+            &self.context.limiter,
+            &parent_runner_id,
+            &runner,
+        )
+        .await
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         // Grants are validated against, and drawn from, this VM's loaded set.
         // No flow-back is possible by construction: the child's own loaded set (and
@@ -680,7 +745,13 @@ impl ContextVFS<'_> {
 
         let zelf_conf = &self.context.data.conf;
 
-        let storage_checkpoint = self.context.data.storage.clone();
+        let child_limiter = self.context.limiter.derived();
+        let storage_checkpoint = self
+            .context
+            .data
+            .storage
+            .fork(child_limiter.clone())
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
 
         let mut fake_my_data = VMDataAccumulator {
             data_fees_limit: self.context.data.accumulator.data_fees_limit.clone(),
@@ -694,7 +765,7 @@ impl ContextVFS<'_> {
         let stolen_data = fake_my_data;
 
         let vm_data = Box::new(SingleVMData {
-            limiter: self.context.limiter.derived(),
+            limiter: child_limiter,
             remaining_recursion: self.context.data.remaining_recursion.saturating_sub(1),
             spawn_kind: "sandbox".to_owned(),
             // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
@@ -736,9 +807,16 @@ impl ContextVFS<'_> {
         }
 
         self.context.data.accumulator = my_res.vm_data.accumulator;
-        self.context.data.storage = my_res.vm_data.storage;
+        self.context
+            .data
+            .storage
+            .fold(my_res.vm_data.storage)
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
 
-        let data: Vec<u8> = my_res.run_ok.as_bytes();
+        let data = my_res
+            .run_ok
+            .into_contract_observable_bytes()
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
         self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
     }
 }

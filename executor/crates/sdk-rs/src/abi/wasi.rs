@@ -6,6 +6,8 @@
 
 use core::result::Result;
 
+use crate::int_traits::*;
+
 /// Raw FFI bindings to the GenLayer WASI imports.
 ///
 /// These are unsafe C-style function declarations that map directly to the
@@ -66,7 +68,7 @@ impl WasiError {
     /// Returns the human-readable name of this error code.
     pub fn name(&self) -> &'static str {
         ERROR_NAMES
-            .get(self.0 as usize)
+            .get(self.0.into_int_comptime())
             .copied()
             .unwrap_or("unknown")
     }

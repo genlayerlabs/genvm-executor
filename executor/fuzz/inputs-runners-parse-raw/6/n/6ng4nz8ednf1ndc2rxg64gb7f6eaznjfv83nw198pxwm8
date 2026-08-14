@@ -1,0 +1,11 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv":                               ILER", "val": "false"} },
+#  pends": "py-Yenlayer:test" }
+#EE ]
+# }
+i.contract.Contract):
+	def __init__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

@@ -2,6 +2,7 @@ use std::ptr::NonNull;
 
 use anyhow::Context;
 
+use crate::int_traits::*;
 use crate::log_error;
 
 #[derive(Debug)]
@@ -45,7 +46,7 @@ pub fn mmap_file(
         .len();
     let file_len = u32::try_from(file_len).map_err(|_| anyhow::anyhow!("file too large to map"))?;
 
-    let file_len = file_len as usize;
+    let file_len = file_len.into_int_comptime();
 
     let ptr = unsafe {
         rustix::mm::mmap(

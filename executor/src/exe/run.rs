@@ -205,9 +205,9 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
 
     // A nested CallContract is read-only and receives no fee buckets. Keep the
     // configured bucket shape valid without granting it a spendable balance.
-    fill_nested_fee_buckets(is_nested, max_bucket_no as usize, &mut bucket_totals);
+    fill_nested_fee_buckets(is_nested, max_bucket_no.into(), &mut bucket_totals);
     anyhow::ensure!(
-        (max_bucket_no as usize) < bucket_totals.len(),
+        usize::from(max_bucket_no) < bucket_totals.len(),
         "fees config references bucket {max_bucket_no} but only {} bucket(s) provided",
         bucket_totals.len(),
     );
@@ -248,7 +248,10 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     // Validate every method->host mapping up front, once, so all later host
     // selection (here and inside the VM) can index `hosts` safely instead of
     // panicking on a misconfigured index.
-    if let Some(&bad) = method_hosts.iter().find(|&&h| h as usize >= hosts.len()) {
+    if let Some(&bad) = method_hosts
+        .iter()
+        .find(|&&h| usize::from(h) >= hosts.len())
+    {
         anyhow::bail!(
             "method_hosts references host index {bad} but only {} host(s) are configured",
             hosts.len()
@@ -268,7 +271,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         let host_for = |method: genvm::host::host_fns::Methods| -> usize {
             let m = method as usize;
             if m < method_hosts.len() {
-                method_hosts[m] as usize
+                method_hosts[m].into()
             } else {
                 0
             }

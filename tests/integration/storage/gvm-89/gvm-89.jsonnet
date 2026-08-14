@@ -1,4 +1,4 @@
 local simple = import 'templates/simple_deploy_then_write.jsonnet';
 local util = import 'templates/util.jsonnet';
-{tags: util.features([['storage', 'dynamic']], 'stable'),
+{tags: util.features([['storage', 'dynamic', 'array']], 'stable') + ['python'],
 	entry: util.addPaths([simple.run('${jsonnetDir}/${fileBaseName}.py', 'main')])}

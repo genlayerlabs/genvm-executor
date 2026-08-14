@@ -96,9 +96,11 @@ async fn consume_message_fee_internal(
                     budget: cd = node.budget;
                     "message fee cost exceeds node budget"
                 );
-                return Err(internal_trap(rt::errors::Error::vm_detailed(
-                    abi::consts::VmError::out_of().message_fee().node(),
-                    host_fns::VmErrorDetail::internal(),
+                return Err(internal_trap(rt::errors::Error::vm(
+                    abi::consts::VmError::out_of()
+                        .message_fee()
+                        .node()
+                        .internal(),
                 )));
             }
 
@@ -113,9 +115,11 @@ async fn consume_message_fee_internal(
                     buckets:? = shared_data.data_fees_limit;
                     "not enough remaining fee limit to consume message fee"
                 );
-                return Err(internal_trap(rt::errors::Error::vm_detailed(
-                    abi::consts::VmError::out_of().message_fee().total(),
-                    host_fns::VmErrorDetail::internal(),
+                return Err(internal_trap(rt::errors::Error::vm(
+                    abi::consts::VmError::out_of()
+                        .message_fee()
+                        .total()
+                        .internal(),
                 )));
             }
 
@@ -150,9 +154,11 @@ async fn consume_message_fee_internal(
                     buckets:? = shared_data.data_fees_limit;
                     "not enough remaining receipt limit to consume message receipt"
                 );
-                return Err(internal_trap(rt::errors::Error::vm_detailed(
-                    abi::consts::VmError::out_of().receipt().message(),
-                    host_fns::VmErrorDetail::internal(),
+                return Err(internal_trap(rt::errors::Error::vm(
+                    abi::consts::VmError::out_of()
+                        .receipt()
+                        .message()
+                        .internal(),
                 )));
             }
         }
@@ -186,9 +192,11 @@ async fn consume_message_fee_external(
 
     let fee_total = fee_cost.reported_fee();
     if fee_total > node.budget {
-        return Err(internal_trap(rt::errors::Error::vm_detailed(
-            abi::consts::VmError::out_of().message_fee().node(),
-            host_fns::VmErrorDetail::external(),
+        return Err(internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::out_of()
+                .message_fee()
+                .node()
+                .external(),
         )));
     }
 
@@ -208,9 +216,11 @@ async fn consume_message_fee_external(
         .consume_message_fee(&fee_cost, &receipt_cost)
         .await
     {
-        return Err(internal_trap(rt::errors::Error::vm_detailed(
-            abi::consts::VmError::out_of().message_fee().total(),
-            host_fns::VmErrorDetail::external(),
+        return Err(internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::out_of()
+                .message_fee()
+                .total()
+                .external(),
         )));
     }
 
@@ -304,6 +314,13 @@ pub(super) fn validate_balance_fee(
     }
 }
 
+pub(super) struct GLCallDeployContractArgsArgs {
+    pub code: bytes::Bytes,
+    pub value: primitive_types::U256,
+    pub salt_nonce: primitive_types::U256,
+    pub use_balance: bool,
+}
+
 impl ContextVFS<'_> {
     pub(super) async fn gl_call_eth_send(
         &mut self,
@@ -357,13 +374,12 @@ impl ContextVFS<'_> {
                 "no matching node for message fee allocation"
             );
 
-            return Err(internal_trap(rt::errors::Error::vm_detailed(
-                abi::consts::VmError::fee().no_matching_node(),
-                host_fns::VmErrorDetail::external(),
+            return Err(internal_trap(rt::errors::Error::vm(
+                abi::consts::VmError::fee().no_matching_node().external(),
             )));
         };
 
-        let calldata_length = calldata.len() as u64;
+        let calldata_length = calldata.len().into_int_comptime();
         let matched_params = convert_external_message_params_to_sdk(matched_params);
 
         let fees = consume_message_fee_external(
@@ -419,13 +435,13 @@ impl ContextVFS<'_> {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
-        if topics.len() > public_abi::EVENT_MAX_TOPICS as usize {
+        if topics.len() > public_abi::EVENT_MAX_TOPICS.into_int_comptime() {
             log_warn!(cnt = topics.len(), max = public_abi::EVENT_MAX_TOPICS; "too many topics");
             return Err(generated::types::Errno::Inval.into());
         }
 
         let mut real_topics: Vec<bytes::Bytes> =
-            Vec::with_capacity(public_abi::EVENT_MAX_TOPICS as usize + 1);
+            Vec::with_capacity(public_abi::EVENT_MAX_TOPICS.into_int_comptime() + 1);
 
         for t in topics.iter() {
             if t.len() != 32 {
@@ -449,10 +465,10 @@ impl ContextVFS<'_> {
 
         let mut enc = calldata::Encoder::new(CountingWriter(0));
         blob.encode(&mut enc).unwrap_or_else(|e| match e {});
-        let blob_size = enc.into_inner().0 as u64;
+        let blob_size = enc.into_inner().0.into_int_comptime();
 
         let supervisor = self.context.data.supervisor.clone();
-        let topics_count = topics.len() as u64;
+        let topics_count = topics.len().into_int_comptime();
 
         let storage_fee = supervisor
             .shared_data
@@ -612,9 +628,8 @@ impl ContextVFS<'_> {
                 "no matching node for message fee allocation"
             );
 
-            return Err(internal_trap(rt::errors::Error::vm_detailed(
-                abi::consts::VmError::fee().no_matching_node(),
-                host_fns::VmErrorDetail::internal(),
+            return Err(internal_trap(rt::errors::Error::vm(
+                abi::consts::VmError::fee().no_matching_node().internal(),
             )));
         };
 
@@ -645,7 +660,7 @@ impl ContextVFS<'_> {
                 is_deploy: false,
                 calldata_length,
                 code_length: 0,
-                subtree_length: subtree.len() as u64,
+                subtree_length: subtree.len().into_int_comptime(),
             },
         )
         .await?;
@@ -685,13 +700,17 @@ impl ContextVFS<'_> {
     pub(super) async fn gl_call_deploy_contract(
         &mut self,
         calldata: abi::entry::MainDeployData,
-        code: bytes::Bytes,
-        value: primitive_types::U256,
         on: gl_call::On,
-        salt_nonce: primitive_types::U256,
-        use_balance: bool,
         fee_params: Option<abi::fees::InternalMessageParams>,
+        args: GLCallDeployContractArgsArgs,
     ) -> Result<generated::types::Fd, generated::types::Error> {
+        let GLCallDeployContractArgsArgs {
+            code,
+            value,
+            salt_nonce,
+            use_balance,
+        } = args;
+
         if !self.context.data.conf.permissions.deterministic {
             return Err(generated::types::Errno::Forbidden.into());
         }
@@ -710,7 +729,7 @@ impl ContextVFS<'_> {
         )?;
 
         if let Some(params) = balance_params {
-            let code_length = code.len() as u64;
+            let code_length = code.len().into_int_comptime();
             let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
             calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
             let calldata_length = enc.into_inner().0;
@@ -801,13 +820,12 @@ impl ContextVFS<'_> {
                 "no matching node for message fee allocation"
             );
 
-            return Err(internal_trap(rt::errors::Error::vm_detailed(
-                abi::consts::VmError::fee().no_matching_node(),
-                host_fns::VmErrorDetail::internal(),
+            return Err(internal_trap(rt::errors::Error::vm(
+                abi::consts::VmError::fee().no_matching_node().internal(),
             )));
         };
 
-        let code_length = code.len() as u64;
+        let code_length = code.len().into_int_comptime();
         let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
         calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
         let calldata_length = enc.into_inner().0;
@@ -828,7 +846,7 @@ impl ContextVFS<'_> {
                 is_deploy: true,
                 calldata_length,
                 code_length,
-                subtree_length: subtree.len() as u64,
+                subtree_length: subtree.len().into_int_comptime(),
             },
         )
         .await?;

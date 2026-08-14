@@ -1,4 +1,6 @@
 pub mod metric {
+    use crate::int_traits::*;
+
     #[derive(serde::Serialize, genlayer_calldata::Encode)]
     pub struct Time(std::sync::atomic::AtomicU64);
     #[derive(serde::Serialize, genlayer_calldata::Encode)]
@@ -136,7 +138,7 @@ pub mod metric {
 
         fn encode(&self, enc: &mut calldata::Encoder<W>) -> Result<(), Self::Error> {
             let map = self.0.lock().unwrap();
-            enc.start_map(map.len() as u64)?;
+            enc.start_map(map.len().into_int_comptime())?;
             for (k, v) in map.iter() {
                 enc.push_map_k(k)?;
                 calldata::codec::Encode::encode(v, enc)?;

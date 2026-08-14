@@ -1,6 +1,7 @@
 //! [`BinaryDeserializer`] -- reads the calldata wire format directly.
 
 use crate::consts::*;
+use crate::int_traits::IntoIntComptime;
 use crate::{Address, BinDecodeError};
 
 use super::{Decode, DecodeError, Deserializer, MapAccess, Maybe, Raw, SeqAccess, Visitor};
@@ -94,7 +95,12 @@ impl<'a> BinaryDeserializer<'a> {
         if val.bits() > 32 {
             return Err(BinDecodeError::ContainerSizeTooLarge { bits: val.bits() }.into());
         }
-        Ok(val.to_u32_digits().first().cloned().unwrap_or(0) as usize)
+        Ok(val
+            .to_u32_digits()
+            .first()
+            .cloned()
+            .unwrap_or(0)
+            .into_int_comptime())
     }
 
     fn fetch_map_key(&mut self) -> Result<&'a str, DecodeError> {
@@ -108,13 +114,14 @@ impl<'a> BinaryDeserializer<'a> {
 
     fn deserialize_one<V: Visitor>(&mut self, visitor: V) -> Result<V::Value, DecodeError> {
         let mut val = self.fetch_uleb()?;
-        let least = (val.iter_u32_digits().next().unwrap_or(0) & (u8::MAX as u32)) as u8;
+        let least = (val.iter_u32_digits().next().unwrap_or(0) & u32::from(u8::MAX)) as u8;
         let typ = least & ((1 << BITS_IN_TYPE) - 1);
         val >>= BITS_IN_TYPE;
 
         match typ {
             TYPE_SPECIAL => {
-                if val.bits() > 8 - BITS_IN_TYPE as u64 {
+                let bits_in_type: u64 = BITS_IN_TYPE.into_int_comptime();
+                if val.bits() > 8 - bits_in_type {
                     return Err(BinDecodeError::InvalidTag(least).into());
                 }
                 match least {
@@ -122,8 +129,8 @@ impl<'a> BinaryDeserializer<'a> {
                     SPECIAL_TRUE => visitor.visit_bool(true),
                     SPECIAL_FALSE => visitor.visit_bool(false),
                     SPECIAL_ADDR => {
-                        let slice = self.fetch_slice(Address::SIZE as usize)?;
-                        let mut raw = [0u8; Address::SIZE as usize];
+                        let slice = self.fetch_slice(Address::SIZE.into_int_comptime())?;
+                        let mut raw = [0u8; Address::len()];
                         raw.copy_from_slice(slice);
                         visitor.visit_address(&Address::from(raw))
                     }
@@ -164,10 +171,10 @@ impl<'a> BinaryDeserializer<'a> {
                 }
                 self.depth += 1;
                 let result = visitor.visit_seq(
-                    len as u64,
+                    len.into_int_comptime(),
                     BinarySeqAccess {
                         de: self,
-                        remaining: len as u64,
+                        remaining: len.into_int_comptime(),
                     },
                 );
                 self.depth -= 1;
@@ -188,10 +195,10 @@ impl<'a> BinaryDeserializer<'a> {
                 }
                 self.depth += 1;
                 let result = visitor.visit_map(
-                    len as u64,
+                    len.into_int_comptime(),
                     BinaryMapAccess {
                         de: self,
-                        remaining: len as u64,
+                        remaining: len.into_int_comptime(),
                         prev_key: None,
                     },
                 );

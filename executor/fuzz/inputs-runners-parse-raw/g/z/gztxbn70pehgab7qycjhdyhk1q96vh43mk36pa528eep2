@@ -1,0 +1,7 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "false"}e
+#   ]
+# }
+inW('hello world')

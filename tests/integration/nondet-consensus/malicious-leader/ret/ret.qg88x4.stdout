@@ -1,3 +1,3 @@
 {"fn":"do_return","leader_nondet":[{"kind":"raw","value":[3]}]}
-executed with `VMError("leader_output malformed")`
+executed with `VMError("leader_fault nondet_output malformed")`
 nondet disagreement: 0

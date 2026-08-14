@@ -6,8 +6,7 @@
     "values": {
       "return": 0,
       "user_error": 1,
-      "vm_error": 2,
-      "internal_error": 3
+      "vm_error": 2
     }
   },
   {
@@ -40,18 +39,6 @@
   },
   {
     "type": "consts",
-    "name": "memory_limiter_consts",
-    "repr": "u32",
-    "values": {
-      "table_entry": 64,
-      "file_mapping": 256,
-      "fd_allocation": 96,
-      "runner_load_cost": 4096,
-      "vm_spawn_cost": 134217728
-    }
-  },
-  {
-    "type": "consts",
     "name": "root_offsets",
     "repr": "u32",
     "values": {
@@ -62,22 +49,6 @@
       "upgraders": 4,
       "code_slot": 5,
       "permissions": 37
-    }
-  },
-  {
-    "type": "consts",
-    "name": "top_limits",
-    "repr": "u32",
-    "values": {
-      "nondet_blocks": 4096,
-      "locked_slots": 256,
-      "upgraders": 32,
-      "vm_recursion": 512,
-      "web_request_min_space": 65536,
-      "web_render_min_space": 134217728,
-      "max_fds": 1024,
-      "wasm_call_depth": 1024,
-      "wasm_stack_value_slots": 65535
     }
   },
   {
@@ -97,7 +68,21 @@
     },
     "values": [
       "timeout",
-      "absent_leader_nondet_output",
+      "malformed_entry",
+      {
+        "head": "leader_fault",
+        "tail": [
+          {
+            "head": "nondet_output",
+            "tail": [
+              "absent",
+              "malformed",
+              { "head": "uses_this_error", "tail": "$str" },
+              { "head": "extra", "tail": "$str" }
+            ]
+          }
+        ]
+      },
       {
         "head": "exit_code",
         "tail": "$i32"
@@ -150,7 +135,7 @@
         "head": "fee",
         "tail": ["no_matching_node", "below_minimum", "too_many_rounds"]
       },
-      "host_forbidden",
+      "forbidden",
       {
         "head": "evm",
         "tail": ["reverted"]
@@ -159,15 +144,24 @@
         "head": "invalid_contract",
         "tail": [
           null,
-          "absent_runner_comment",
+          {
+            "head": "runner",
+            "tail": [
+              "absent",
+              "malformed"
+            ]
+          },
           "not_utf8_text",
-          "malformed_runner",
           "major_mismatch",
           {
             "head": "wasm",
             "tail": ["validating", "linking", "entrypoint"]
           }
         ]
+      },
+      {
+        "head": "#",
+        "tail": ["internal", "external"]
       }
     ]
   },

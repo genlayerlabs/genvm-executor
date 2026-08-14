@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
-use crate::{caching, public_abi, rt, runners};
+use crate::int_traits::*;
+use crate::{caching, public_abi, rt, runners, wasi};
 
 use anyhow::Context as _;
 use genlayer_sdk::abi;
+use genvm_common::internal_constants::memory_limiter_consts;
 use genvm_common::*;
 use rt::errors::ResultExt as _;
 use wiggle::error::Context as _;
 
 pub struct Ctx<'a, 'b> {
-    pub env: BTreeMap<String, String>,
+    pub env: runners::actions::Env,
     pub visited: HashSet<symbol_table::GlobalSymbol>,
     pub topmost_runner_id: runners::Id,
     pub supervisor: &'a rt::supervisor::Supervisor,
@@ -18,7 +20,7 @@ pub struct Ctx<'a, 'b> {
 
 fn make_malformed_runner_error(extra_msg: &str) -> anyhow::Error {
     rt::errors::Error::wrap(
-        public_abi::VmError::invalid_contract().malformed_runner(),
+        public_abi::VmError::invalid_contract().runner().malformed(),
         anyhow::anyhow!("{}", extra_msg),
     )
     .into()
@@ -57,14 +59,17 @@ fn next_action_context(
 }
 
 fn maps_into_vm(to: &str) -> bool {
-    to.split('/').find(|component| !component.is_empty()) == Some("vm")
+    wasi::vfs::split_normalize_path(to, true)
+        .first()
+        .map(std::ops::Deref::deref)
+        == Some("vm")
 }
 
 /// Rejects mapping targets that are forbidden or could escape their intended
 /// location. `maps_into_vm` only inspects the first component, so a `..`
 /// component (e.g. from an archive entry name like `../vm/secrets`) would slip
 /// past it and resolve into `/vm/` once the VFS normalizes the path.
-fn check_mapping_target(to: &str) -> anyhow::Result<()> {
+pub fn check_mapping_target(to: &str) -> anyhow::Result<()> {
     if maps_into_vm(to) {
         return Err(make_malformed_runner_error(&format!(
             "mapping into /vm/ is forbidden: {to}"
@@ -110,8 +115,8 @@ impl From<runners::Id> for Resolved {
     fn from(id: runners::Id) -> Self {
         let kind = match &id {
             runners::Id::Builtin { name, hash } => ResolvedKind::Disk {
-                name: name.clone(),
-                hash: hash.clone(),
+                name: *name,
+                hash: *hash,
             },
             runners::Id::Chain { address, on, slot } => ResolvedKind::Chain {
                 address: *address,
@@ -133,6 +138,7 @@ impl From<runners::Id> for Resolved {
 /// ([`Ctx`]) and runtime `gl_call`s ([`load_action`]).
 pub(crate) async fn resolve_runner_id(
     supervisor: &rt::supervisor::Supervisor,
+    limiter: &rt::memlimiter::Limiter,
     topmost_runner_id: &runners::Id,
     id: &str,
 ) -> anyhow::Result<runners::Id> {
@@ -199,6 +205,7 @@ pub(crate) async fn resolve_runner_id(
                     let mut storage = rt::vm::storage::Storage::new(
                         address,
                         supervisor.get_storage_limiter(),
+                        limiter.clone(),
                         crate::wasi::genlayer_sdk::StorageHostHolder(
                             supervisor.host.clone(),
                             crate::wasi::genlayer_sdk::ReadToken {
@@ -232,12 +239,15 @@ pub(crate) async fn resolve_runner_id(
 
 async fn resolve_runner(
     supervisor: &rt::supervisor::Supervisor,
+    limiter: &rt::memlimiter::Limiter,
     topmost_runner_id: &runners::Id,
     id: &str,
 ) -> anyhow::Result<Resolved> {
-    Ok(resolve_runner_id(supervisor, topmost_runner_id, id)
-        .await?
-        .into())
+    Ok(
+        resolve_runner_id(supervisor, limiter, topmost_runner_id, id)
+            .await?
+            .into(),
+    )
 }
 
 /// Validates a `Sandbox`/`RunNondet` `custom_runners` grant list against the
@@ -346,7 +356,7 @@ fn fold_det_fingerprint(
 fn log_runner_load(id: symbol_table::GlobalSymbol, size: u32, status: &'static str) {
     log_info!(
         runner = id.as_str(),
-        runner_load_cost = public_abi::memory_limiter_consts::RUNNER_LOAD_COST,
+        runner_load_cost = memory_limiter_consts::RUNNER_LOAD_COST,
         size = size,
         status = status;
         "runner load"
@@ -382,7 +392,7 @@ fn out_of_memory() -> anyhow::Error {
 fn charge_load(limiter: &rt::memlimiter::Limiter, size: usize) -> anyhow::Result<()> {
     let ok = u32::try_from(size)
         .ok()
-        .and_then(|size| public_abi::memory_limiter_consts::RUNNER_LOAD_COST.checked_add(size))
+        .and_then(|size| memory_limiter_consts::RUNNER_LOAD_COST.checked_add(size))
         .is_some_and(|amount| limiter.consume(amount));
     if !ok {
         return Err(out_of_memory());
@@ -415,7 +425,7 @@ fn attach_load(
     det_fingerprint: Option<&mut sha3::Sha3_256>,
     pin: runners::cache::ArchivePin,
 ) -> anyhow::Result<runners::cache::ArchivePin> {
-    charge_load(limiter, pin.total_size() as usize)?;
+    charge_load(limiter, pin.total_size().into_int_comptime())?;
     let out = pin.clone();
     record_charged_load(loaded, det_fingerprint, pin);
     Ok(out)
@@ -470,13 +480,16 @@ pub(crate) async fn load_action(
             if !path.exists() {
                 return Err(rt::errors::Error::internal(format!("runner {id} not found")).into());
             }
-            let data = util::mmap_file(&path)
-                .with_ctx(|| format!("memory mapping runner archive for {id}"))?;
-            let charged_size = data.as_ref().len();
+            let charged_size = std::fs::metadata(&path)
+                .with_ctx(|| format!("reading size of runner archive for {id}"))?
+                .len()
+                .into_int_downcast_panicking();
             charge_load(limiter, charged_size)?;
             cell.get_or_try_init(|| async {
-                let data = bytes::Bytes::copy_from_slice(data.as_ref());
-                let arch = runners::Archive::from_ustar(data)
+                let data = bytes::Bytes::from(
+                    std::fs::read(&path).with_ctx(|| format!("reading runner archive for {id}"))?,
+                );
+                let arch = runners::Archive::from_ustar_bytes(data)
                     .with_ctx(|| format!("parsing ustar archive for {id}"))?;
                 Ok::<_, rt::errors::Error>(runners::ArchiveCache::new(id, arch))
             })
@@ -484,7 +497,7 @@ pub(crate) async fn load_action(
             let pin = runners::cache::pin_of(cell);
             // Content-determinism: attach and miss charge the same size.
             debug_assert_eq!(
-                pin.total_size() as usize,
+                u32_into_usize(pin.total_size()),
                 charged_size,
                 "materialized disk archive size differs from the charged size"
             );
@@ -510,6 +523,7 @@ pub(crate) async fn load_action(
             let mut storage = rt::vm::storage::Storage::new(
                 address,
                 supervisor.get_storage_limiter(),
+                limiter.clone(),
                 crate::wasi::genlayer_sdk::StorageHostHolder(
                     supervisor.host.clone(),
                     crate::wasi::genlayer_sdk::ReadToken {
@@ -523,7 +537,7 @@ pub(crate) async fn load_action(
                 .await
                 .with_ctx(|| format!("reading major for chain runner {id}"))?;
             let node_major = genvm_common::version::CURRENT.major;
-            if dep_major as u16 != node_major {
+            if u16::from(dep_major) != node_major {
                 return Err(rt::errors::Error::wrap(
                     public_abi::VmError::invalid_contract().major_mismatch(),
                     anyhow::anyhow!(
@@ -539,7 +553,7 @@ pub(crate) async fn load_action(
                 .read_code_len(slot)
                 .await
                 .with_ctx(|| format!("reading chain runner code length for {id}"))?;
-            charge_load(limiter, code_size as usize)?;
+            charge_load(limiter, code_size.into_int_comptime())?;
             cell.get_or_try_init(|| async move {
                 let code = storage
                     .read_code_blob(slot, code_size)
@@ -707,9 +721,8 @@ pub(crate) fn map_archive_file(
 
             check_mapping_target(&name_in_fs)?;
 
-            if !limiter
-                .consume(public_abi::memory_limiter_consts::FILE_MAPPING + name_in_fs.len() as u32)
-            {
+            let name_len: u32 = name_in_fs.len().into_int_downcast_panicking();
+            if !limiter.consume(memory_limiter_consts::FILE_MAPPING + name_len) {
                 return Err(
                     rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
                 );
@@ -720,7 +733,8 @@ pub(crate) fn map_archive_file(
     } else {
         check_mapping_target(to)?;
 
-        if !limiter.consume(public_abi::memory_limiter_consts::FILE_MAPPING + to.len() as u32) {
+        let to_len: u32 = to.len().into_int_downcast_panicking();
+        if !limiter.consume(memory_limiter_consts::FILE_MAPPING + to_len) {
             return Err(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
             );
@@ -756,7 +770,8 @@ pub(crate) async fn map_runner_file(
 
 impl Ctx<'_, '_> {
     async fn resolve_runner(&self, id: &str) -> anyhow::Result<Resolved> {
-        resolve_runner(self.supervisor, &self.topmost_runner_id, id).await
+        let limiter = self.vm.store.data().limits.clone();
+        resolve_runner(self.supervisor, &limiter, &self.topmost_runner_id, id).await
     }
 
     async fn get_arch(
@@ -958,15 +973,7 @@ impl Ctx<'_, '_> {
                     );
                 }
                 InitAction::AddEnv { name, val } => {
-                    let new_val = try_context!(
-                        genvm_common::templater::patch_str(
-                            &self.env,
-                            &val,
-                            &genvm_common::templater::DOLLAR_UNFOLDER_RE,
-                        ),
-                        &contexts
-                    );
-                    self.env.insert(name.clone(), new_val);
+                    try_context!(self.env.set_patching(&name, &val), &contexts);
                 }
                 InitAction::SetArgs(args) => {
                     try_context!(
@@ -975,7 +982,7 @@ impl Ctx<'_, '_> {
                             .data_mut()
                             .genlayer_ctx_mut()
                             .preview1
-                            .set_args(&args[..]),
+                            .set_args(&args),
                         &contexts
                     );
                 }
@@ -1042,18 +1049,13 @@ impl Ctx<'_, '_> {
                     }
                 }
                 InitAction::StartWasm(path) => {
-                    let env: Vec<(String, String)> = self
-                        .env
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
                     try_context!(
                         self.vm
                             .store
                             .data_mut()
                             .genlayer_ctx_mut()
                             .preview1
-                            .set_env(&env),
+                            .set_env(&self.env),
                         &contexts
                     );
                     let contents = try_context!(
@@ -1122,7 +1124,7 @@ impl Ctx<'_, '_> {
                     let resolved = try_context!(self.resolve_runner(&uid).await, &contexts);
 
                     if self.visited.insert(resolved.id) {
-                        let uid = resolved.id.clone();
+                        let uid = resolved.id;
                         log_trace!(uid = uid; "adding dependency");
 
                         let (uid, new_arch) = try_context!(
@@ -1168,525 +1170,5 @@ impl Ctx<'_, '_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    fn hash(n: u8) -> Bytes32Hash {
-        Bytes32Hash::from_bytes([n; 32])
-    }
-
-    fn custom_id(n: u8) -> symbol_table::GlobalSymbol {
-        runners::Id::Custom { hash: hash(n) }.canonical()
-    }
-
-    fn custom_id_str(n: u8) -> String {
-        custom_id(n).as_str().to_owned()
-    }
-
-    fn pin(id: symbol_table::GlobalSymbol) -> runners::cache::ArchivePin {
-        let arch = runners::Archive {
-            data: BTreeMap::new(),
-            total_size: 1,
-        };
-        let cell = std::sync::Arc::new(tokio::sync::OnceCell::new_with(Some(
-            runners::ArchiveCache::new(id, arch),
-        )));
-        runners::cache::pin_of(cell)
-    }
-
-    /// A loaded set holding `custom:` entries for each of `hashes`.
-    fn parent_of(hashes: &[u8]) -> runners::cache::LoadedSet {
-        let mut set = runners::cache::LoadedSet::default();
-        for &n in hashes {
-            set.insert(pin(custom_id(n)));
-        }
-        set
-    }
-
-    fn granted_ids(grants: &[runners::cache::ArchivePin]) -> Vec<String> {
-        let mut ids: Vec<String> = grants
-            .iter()
-            .map(|p| p.runner_id().as_str().to_owned())
-            .collect();
-        ids.sort();
-        ids
-    }
-
-    fn builtin_target() -> runners::Id {
-        runners::Id::Builtin {
-            name: symbol_table::GlobalSymbol::from("py"),
-            hash: hash(200),
-        }
-    }
-
-    fn contexts(items: &[&str]) -> VecDeque<String> {
-        items.iter().map(|item| (*item).to_owned()).collect()
-    }
-
-    #[test]
-    fn bounded_contexts_collapse_middle_at_limit() {
-        let mut got = VecDeque::new();
-        for idx in 0..16 {
-            got = next_action_context(
-                genvm_common::debug_mode::Capture::Bounded,
-                &got,
-                format!("ctx-{idx}"),
-            );
-        }
-
-        assert_eq!(got.len(), 16);
-        assert_eq!(got[0], "ctx-0");
-        assert_eq!(got[1], "...");
-        assert_eq!(got[2], "ctx-2");
-        assert_eq!(got[15], "ctx-15");
-    }
-
-    #[test]
-    fn bounded_contexts_drop_after_existing_ellipsis() {
-        let got = next_action_context(
-            genvm_common::debug_mode::Capture::Bounded,
-            &contexts(&[
-                "ctx-0", "...", "ctx-2", "ctx-3", "ctx-4", "ctx-5", "ctx-6", "ctx-7", "ctx-8",
-                "ctx-9", "ctx-10", "ctx-11", "ctx-12", "ctx-13", "ctx-14", "ctx-15",
-            ]),
-            "ctx-16".to_owned(),
-        );
-
-        assert_eq!(got.len(), 16);
-        assert_eq!(got[0], "ctx-0");
-        assert_eq!(got[1], "...");
-        assert_eq!(got[2], "ctx-3");
-        assert_eq!(got[15], "ctx-16");
-    }
-
-    #[test]
-    fn unbounded_contexts_do_not_collapse() {
-        let mut got = VecDeque::new();
-        for idx in 0..17 {
-            got = next_action_context(
-                genvm_common::debug_mode::Capture::Unbounded,
-                &got,
-                format!("ctx-{idx}"),
-            );
-        }
-
-        assert_eq!(got.len(), 17);
-        assert_eq!(got[1], "ctx-1");
-        assert_eq!(got[16], "ctx-16");
-    }
-
-    #[test]
-    fn none_grants_the_whole_parent_custom_set() {
-        let parent = parent_of(&[1, 2]);
-        let got = resolve_child_custom_runners(&parent, None, &builtin_target()).unwrap();
-        assert_eq!(
-            granted_ids(&got),
-            vec![custom_id_str(1), custom_id_str(2)],
-            "should grant both parent custom entries"
-        );
-    }
-
-    #[test]
-    fn some_list_grants_exactly_that_subset() {
-        let parent = parent_of(&[1, 2]);
-        let got =
-            resolve_child_custom_runners(&parent, Some(vec![custom_id_str(1)]), &builtin_target())
-                .unwrap();
-        assert_eq!(granted_ids(&got), vec![custom_id_str(1)]);
-    }
-
-    #[test]
-    fn duplicate_element_is_rejected() {
-        let parent = parent_of(&[1, 2]);
-        let err = resolve_child_custom_runners(
-            &parent,
-            Some(vec![custom_id_str(1), custom_id_str(1)]),
-            &builtin_target(),
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("duplicated"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn non_custom_element_is_rejected() {
-        let parent = parent_of(&[1]);
-        let err = resolve_child_custom_runners(
-            &parent,
-            Some(vec!["py:abcdef".to_owned()]),
-            &builtin_target(),
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("not a `custom:`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn element_outside_parent_set_is_rejected() {
-        let parent = parent_of(&[1]);
-        let err =
-            resolve_child_custom_runners(&parent, Some(vec![custom_id_str(9)]), &builtin_target())
-                .unwrap_err();
-        assert!(
-            err.to_string().contains("not loaded"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn custom_target_loaded_in_parent_is_auto_included() {
-        let parent = parent_of(&[1, 2]);
-        // Empty explicit list, but the runner to execute is custom:1 (loaded).
-        let target = runners::Id::Custom { hash: hash(1) };
-        let got = resolve_child_custom_runners(&parent, Some(vec![]), &target).unwrap();
-        assert_eq!(
-            granted_ids(&got),
-            vec![custom_id_str(1)],
-            "target must be auto-granted"
-        );
-    }
-
-    #[test]
-    fn custom_target_not_loaded_in_parent_is_rejected() {
-        let parent = parent_of(&[1]);
-        let target = runners::Id::Custom { hash: hash(9) };
-        let err = resolve_child_custom_runners(&parent, None, &target).unwrap_err();
-        assert!(
-            err.to_string().contains("not loaded"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn custom_target_already_granted_is_not_duplicated() {
-        let parent = parent_of(&[1, 2]);
-        let target = runners::Id::Custom { hash: hash(1) };
-        // custom:1 appears both in the explicit grant list and as the target.
-        let got =
-            resolve_child_custom_runners(&parent, Some(vec![custom_id_str(1)]), &target).unwrap();
-        assert_eq!(
-            granted_ids(&got),
-            vec![custom_id_str(1)],
-            "no dup for target"
-        );
-    }
-
-    // -- load-action charging --------------------------------------------
-
-    fn limiter_with_budget(budget: u32) -> rt::memlimiter::Limiter {
-        let limiter = rt::memlimiter::Limiter::new();
-        assert!(limiter.consume(u32::MAX - budget));
-        limiter
-    }
-
-    fn fingerprint_of(fp: &sha3::Sha3_256) -> [u8; 32] {
-        use sha3::Digest as _;
-        fp.clone().finalize().into()
-    }
-
-    #[test]
-    fn charge_load_consumes_runner_load_cost_plus_size() {
-        let limiter =
-            limiter_with_budget(public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 100);
-        charge_load(&limiter, 100).unwrap();
-        assert_eq!(
-            limiter.get_remaining_memory(),
-            0,
-            "charge must be exactly RUNNER_LOAD_COST + size"
-        );
-    }
-
-    #[test]
-    fn charge_load_oom_charges_nothing() {
-        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 99;
-        let limiter = limiter_with_budget(budget);
-        let err = charge_load(&limiter, 100).unwrap_err();
-        assert!(
-            err.to_string().contains("out_of memory"),
-            "unexpected error: {err}"
-        );
-        assert_eq!(
-            limiter.get_remaining_memory(),
-            budget,
-            "a failed charge must leave the budget untouched"
-        );
-    }
-
-    #[test]
-    fn charge_load_size_overflow_is_oom() {
-        // RUNNER_LOAD_COST + u32::MAX overflows; must map to OOM, not wrap.
-        let limiter = rt::memlimiter::Limiter::new();
-        let err = charge_load(&limiter, u32::MAX as usize).unwrap_err();
-        assert!(
-            err.to_string().contains("out_of memory"),
-            "unexpected error: {err}"
-        );
-        assert_eq!(limiter.get_remaining_memory(), u32::MAX);
-    }
-
-    // -- inherit load (grant transport) ----------------------------------
-
-    #[test]
-    fn inherit_load_charges_once_then_is_free() {
-        // Grant pins have total_size 1 (see `pin`).
-        let budget = 2 * (public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 1);
-        let limiter = limiter_with_budget(budget);
-        let mut loaded = runners::cache::LoadedSet::default();
-        let granted = pin(custom_id(1));
-
-        inherit_load(&limiter, &mut loaded, None, granted.clone()).unwrap();
-        let after_first = limiter.get_remaining_memory();
-        assert_eq!(
-            budget - after_first,
-            public_abi::memory_limiter_consts::RUNNER_LOAD_COST + 1
-        );
-        assert!(loaded.contains(custom_id(1)), "grant must be pinned");
-
-        // Same id again (e.g. also the child's custom entry point): free.
-        inherit_load(&limiter, &mut loaded, None, granted).unwrap();
-        assert_eq!(
-            limiter.get_remaining_memory(),
-            after_first,
-            "an already-loaded runner must not be charged again"
-        );
-    }
-
-    #[test]
-    fn inherit_load_oom_leaves_loaded_set_unchanged() {
-        // One short of RUNNER_LOAD_COST + total_size(=1).
-        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST;
-        let limiter = limiter_with_budget(budget);
-        let mut loaded = runners::cache::LoadedSet::default();
-
-        let err = inherit_load(&limiter, &mut loaded, None, pin(custom_id(1))).unwrap_err();
-        assert!(
-            err.to_string().contains("out_of memory"),
-            "unexpected error: {err}"
-        );
-        assert!(!loaded.contains(custom_id(1)));
-        assert_eq!(limiter.get_remaining_memory(), budget);
-    }
-
-    // -- det fingerprint -------------------------------------------------
-
-    #[test]
-    fn det_fingerprint_folds_charged_loads_in_execution_order() {
-        let load = |ids: &[u8]| {
-            let limiter = rt::memlimiter::Limiter::new();
-            let mut loaded = runners::cache::LoadedSet::default();
-            let mut fp = sha3::Sha3_256::default();
-            for &n in ids {
-                inherit_load(&limiter, &mut loaded, Some(&mut fp), pin(custom_id(n))).unwrap();
-            }
-            fingerprint_of(&fp)
-        };
-
-        assert_ne!(load(&[1]), load(&[2]), "different runner sets must diverge");
-        assert_ne!(load(&[1, 2]), load(&[2, 1]), "order is part of the stream");
-        assert_eq!(
-            load(&[1, 2]),
-            load(&[1, 2]),
-            "same history, same fingerprint"
-        );
-    }
-
-    #[test]
-    fn det_fingerprint_ignores_cached_loads() {
-        let limiter = rt::memlimiter::Limiter::new();
-        let mut loaded = runners::cache::LoadedSet::default();
-        let mut fp = sha3::Sha3_256::default();
-
-        inherit_load(&limiter, &mut loaded, Some(&mut fp), pin(custom_id(1))).unwrap();
-        let after_charged = fingerprint_of(&fp);
-
-        // A free (already-loaded) load must not alter the fingerprint.
-        inherit_load(&limiter, &mut loaded, Some(&mut fp), pin(custom_id(1))).unwrap();
-        assert_eq!(fingerprint_of(&fp), after_charged);
-    }
-
-    // -- RegisterRunner error ladder -------------------------------------
-
-    fn valid_code() -> bytes::Bytes {
-        bytes::Bytes::from_static(b"# { \"Depends\": \"py-genlayer:test\" }\n")
-    }
-
-    fn custom_id_of(code: &bytes::Bytes) -> symbol_table::GlobalSymbol {
-        runners::Id::Custom {
-            hash: runners::custom_runner_hash(code),
-        }
-        .canonical()
-    }
-
-    #[tokio::test]
-    async fn register_charges_runner_load_cost_plus_code_len_and_pins() {
-        let registry = runners::cache::WeakCache::new();
-        let code = valid_code();
-        let budget = 2 * (public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32);
-        let limiter = limiter_with_budget(budget);
-        let mut loaded = runners::cache::LoadedSet::default();
-
-        let id = register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
-            .await
-            .unwrap();
-
-        assert_eq!(id, custom_id_of(&code));
-        assert_eq!(
-            budget - limiter.get_remaining_memory(),
-            public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32
-        );
-        assert!(loaded.contains(id), "registered runner must be resolvable");
-    }
-
-    #[tokio::test]
-    async fn register_same_code_in_same_vm_is_free() {
-        let registry = runners::cache::WeakCache::new();
-        let code = valid_code();
-        let limiter = rt::memlimiter::Limiter::new();
-        let mut loaded = runners::cache::LoadedSet::default();
-
-        let id = register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
-            .await
-            .unwrap();
-        let after_first = limiter.get_remaining_memory();
-
-        for _ in 0..3 {
-            let again =
-                register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
-                    .await
-                    .unwrap();
-            assert_eq!(again, id, "re-register must return the same id");
-        }
-        assert_eq!(
-            limiter.get_remaining_memory(),
-            after_first,
-            "same-VM re-register must be free"
-        );
-    }
-
-    #[tokio::test]
-    async fn register_oom_charges_and_registers_nothing() {
-        let registry = runners::cache::WeakCache::new();
-        let code = valid_code();
-        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32 - 1;
-        let limiter = limiter_with_budget(budget);
-        let mut loaded = runners::cache::LoadedSet::default();
-
-        let err = register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("out_of memory"),
-            "unexpected error: {err}"
-        );
-        assert_eq!(limiter.get_remaining_memory(), budget, "nothing charged");
-        assert!(!loaded.contains(custom_id_of(&code)), "nothing pinned");
-        assert!(
-            !registry.cell(custom_id_of(&code)).initialized(),
-            "nothing registered"
-        );
-    }
-
-    #[tokio::test]
-    async fn register_parse_failure_retains_charge_and_is_not_resolvable() {
-        let registry = runners::cache::WeakCache::new();
-        // Not a zip, not wasm, not UTF-8 text: parse fails on the bytes alone.
-        let code = bytes::Bytes::from_static(b"\xff\xfe\xfd");
-        let budget = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32;
-        let limiter = limiter_with_budget(budget);
-        let mut loaded = runners::cache::LoadedSet::default();
-
-        let err = register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("invalid_contract"),
-            "unexpected error: {err}"
-        );
-        assert_eq!(
-            limiter.get_remaining_memory(),
-            0,
-            "the pre-parse charge is retained on parse failure"
-        );
-        assert!(
-            !loaded.contains(custom_id_of(&code)),
-            "a failed registration must not be resolvable"
-        );
-        assert!(
-            !registry.cell(custom_id_of(&code)).initialized(),
-            "malformed code must not enter the registry"
-        );
-    }
-
-    /// Grant transport: the pins handed to a child at `RunNondet`/
-    /// `Sandbox` call time keep the content alive even after the granting parent
-    /// dies -- a queued nondet validator task must still find it and load it into
-    /// its own set, charged to its own limiter.
-    #[tokio::test]
-    async fn granted_pins_keep_content_alive_after_parent_death() {
-        let registry = runners::cache::WeakCache::new();
-        let code = valid_code();
-        let parent_limiter = rt::memlimiter::Limiter::new();
-        let mut parent = runners::cache::LoadedSet::default();
-        let id =
-            register_runner_load_into(&registry, &parent_limiter, &mut parent, None, code.clone())
-                .await
-                .unwrap();
-
-        // gl_call time: the grant is computed and pinned while the parent lives.
-        let grants = resolve_child_custom_runners(&parent, None, &builtin_target()).unwrap();
-
-        // The parent VM dies before the queued child runs.
-        drop(parent);
-        assert!(
-            registry.cell(id).initialized(),
-            "granted pin must keep the content resident past the parent's death"
-        );
-
-        // Child spawn: inherit load actions charge the child's own limiter.
-        let cost = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32;
-        let child_limiter = limiter_with_budget(cost);
-        let mut child = runners::cache::LoadedSet::default();
-        for grant in grants {
-            inherit_load(&child_limiter, &mut child, None, grant).unwrap();
-        }
-        assert_eq!(
-            child_limiter.get_remaining_memory(),
-            0,
-            "child pays for the grant"
-        );
-        assert!(child.contains(id));
-    }
-
-    #[tokio::test]
-    async fn register_dead_content_reparses_and_recharges_identically() {
-        let registry = runners::cache::WeakCache::new();
-        let code = valid_code();
-        let cost = public_abi::memory_limiter_consts::RUNNER_LOAD_COST + code.len() as u32;
-        let limiter = limiter_with_budget(2 * cost);
-
-        let mut loaded = runners::cache::LoadedSet::default();
-        let id = register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
-            .await
-            .unwrap();
-        assert_eq!(limiter.get_remaining_memory(), cost);
-
-        // The registering scope dies: its loaded set (the only pin) drops and the
-        // weak registry entry becomes dead.
-        drop(loaded);
-        assert!(!registry.cell(id).initialized(), "content freed with scope");
-
-        // Re-register in a fresh scope: re-parses and charges the same amount.
-        let mut fresh = runners::cache::LoadedSet::default();
-        let again = register_runner_load_into(&registry, &limiter, &mut fresh, None, code)
-            .await
-            .unwrap();
-        assert_eq!(again, id);
-        assert_eq!(limiter.get_remaining_memory(), 0, "identical re-charge");
-        assert!(fresh.contains(id));
-    }
-}
+#[path = "actions_test.rs"]
+mod tests;

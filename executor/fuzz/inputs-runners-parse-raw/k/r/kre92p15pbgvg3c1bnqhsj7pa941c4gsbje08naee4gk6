@@ -1,0 +1,10 @@
+# v01.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "false"} },
+#  "pyt genlayer at  { (gl.coRtrac    { "Depends": t" }
+#   ]
+#ntract):
+	def __init__(self):
+		gl.vm.run_nondet(lambda: NoTe, lambda x: True)
+		print('hello world')

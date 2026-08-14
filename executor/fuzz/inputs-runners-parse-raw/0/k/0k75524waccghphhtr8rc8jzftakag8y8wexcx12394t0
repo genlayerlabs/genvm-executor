@@ -1,0 +1,2 @@
+# { "Depends": "coc:ust" }
+exit(0)

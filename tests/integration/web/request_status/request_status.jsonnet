@@ -2,7 +2,7 @@ local simple = import 'templates/simple_deploy.jsonnet';
 local msg = import 'templates/message.json';
 local s = simple.run('${jsonnetDir}/${fileBaseName}.py');
 local util = import 'templates/util.jsonnet';
-{tags: util.features([['web', 'request'], ['nondet']], 'unstable'),
+{tags: util.features([['web', 'request', 'status'], ['nondet']], 'unstable') + ['needs-web', 'python'],
 	entry: util.addPaths([util.chain([
 	s {
 		stable_hash: false,

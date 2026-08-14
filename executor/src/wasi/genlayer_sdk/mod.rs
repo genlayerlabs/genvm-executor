@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use genvm_common::internal_constants::top_limits;
 use genvm_common::sync::DArc;
 use genvm_common::*;
 
@@ -8,6 +9,7 @@ use genvm_modules_interfaces::GenericValue;
 use wiggle::GuestError;
 
 use crate::host::{self, SlotID};
+use crate::int_traits::*;
 use crate::{anyhow_to_wasmtime, calldata, domain, public_abi, rt, wasi};
 
 pub use genlayer_sdk::abi::entry::ExtendedMessage;
@@ -163,7 +165,7 @@ impl SingleVMData {
     /// the chain stays on one line; an approximation once it crosses into a
     /// line whose own limit differs.
     pub fn depth(&self) -> u32 {
-        public_abi::top_limits::VM_RECURSION.saturating_sub(self.remaining_recursion)
+        top_limits::VM_RECURSION.saturating_sub(self.remaining_recursion)
     }
 }
 
@@ -249,13 +251,7 @@ fn read_addr_from_mem(
     mem: &mut wiggle::GuestMemory<'_>,
     addr: wiggle::GuestPtr<u8>,
 ) -> Result<calldata::Address, generated::types::Error> {
-    let cow = mem.as_cow(
-        addr.as_array(
-            calldata::ADDRESS_SIZE
-                .try_into()
-                .expect("ADDRESS_SIZE exceeds target type"),
-        ),
-    )?;
+    let cow = mem.as_cow(addr.as_array(calldata::ADDRESS_SIZE.into_int_downcast_panicking()))?;
     let mut ret = calldata::Address::zero();
     ret.ref_mut().copy_from_slice(&cow);
     Ok(ret)
@@ -266,13 +262,7 @@ impl SlotID {
         mem: &mut wiggle::GuestMemory<'_>,
         addr: wiggle::GuestPtr<u8>,
     ) -> Result<Self, generated::types::Error> {
-        let cow = mem.as_cow(
-            addr.as_array(
-                SlotID::len()
-                    .try_into()
-                    .expect("SlotID::len exceeds target type"),
-            ),
-        )?;
+        let cow = mem.as_cow(addr.as_array(SlotID::len().into_int_downcast_panicking()))?;
         let mut ret = SlotID::zero();
         for (x, y) in ret.0.iter_mut().zip(cow.iter()) {
             *x = *y;
@@ -416,7 +406,12 @@ impl ContextVFS<'_> {
             rt::vm::RunOk::VMError(e, cause) => {
                 return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                     rt::errors::Error::vm_cause(e, cause).into(),
-                )))
+                )));
+            }
+            rt::vm::RunOk::FatalVMError(e, cause) => {
+                return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
+                    rt::errors::Error::fatal_vm_cause(e, cause).into(),
+                )));
             }
             data => data,
         };
@@ -436,19 +431,27 @@ where
     T: calldata::codec::Encode<Vec<u8>, Error = std::convert::Infallible> + Send,
 {
     match fut.await? {
-        Ok(r) => {
-            let r = calldata::to_value(&r);
-            let data = calldata::Value::Map(BTreeMap::from([("ok".to_owned(), r)]));
-
-            Ok(Box::from(calldata::encode(&data)))
-        }
-        Err(e) => {
-            let e = calldata::to_value(&e);
-            let data = calldata::Value::Map(BTreeMap::from([("error".to_owned(), e)]));
-
-            Ok(Box::from(calldata::encode(&data)))
-        }
+        Ok(r) => Ok(encode_tagged("ok", &r)),
+        Err(e) => Ok(encode_tagged("error", &e)),
     }
+}
+
+/// `{key: value}` encoded straight to bytes, without an intermediate [`calldata::Value`].
+fn encode_tagged<T>(key: &str, value: &T) -> Box<[u8]>
+where
+    T: calldata::codec::Encode<Vec<u8>, Error = std::convert::Infallible>,
+{
+    let mut enc = calldata::Encoder::new(Vec::new());
+    let res = (|| {
+        enc.start_map(1)?;
+        enc.push_map_k(key)?;
+        value.encode(&mut enc)
+    })();
+    match res {
+        Ok(()) => {}
+        Err(e) => match e {},
+    }
+    Box::from(enc.into_inner())
 }
 
 const NO_FILE: u32 = u32::MAX;
@@ -476,6 +479,8 @@ fn checked_sum_le(
     let c_minus_b = c - b;
     a <= c_minus_b
 }
+
+use message::GLCallDeployContractArgsArgs;
 
 #[allow(unused_variables)]
 impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
@@ -547,12 +552,14 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
             } => {
                 self.gl_call_deploy_contract(
                     calldata,
-                    code,
-                    value,
                     on,
-                    salt_nonce,
-                    use_balance,
                     fee_params,
+                    GLCallDeployContractArgsArgs {
+                        code,
+                        value,
+                        salt_nonce,
+                        use_balance,
+                    },
                 )
                 .await
             }
@@ -633,7 +640,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
         let account = self.context.data.message_data.message.contract_address;
 
         let slot = SlotID::read_from_mem(mem, slot)?;
-        let mem_size = buf_len as usize;
+        let mem_size = buf_len.into_int_comptime();
 
         let mut vec_buf = Vec::new();
         let (should_copy, vec) = if let Some(buf) = mem.as_slice_mut(buf)? {
@@ -813,14 +820,15 @@ impl ContextVFS<'_> {
 
         let space_left = self.context.limiter.get_remaining_memory();
 
-        if space_left < abi::consts::top_limits::WEB_RENDER_MIN_SPACE {
+        if space_left < top_limits::WEB_RENDER_MIN_SPACE {
             log_warn!(space_left = space_left; "not enough memory for web render");
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
             )));
         }
 
-        let space_left_with_overhead = (space_left as u64 * 3 / 4) as u32;
+        let space_left_with_overhead =
+            (u64::from(space_left) * 3 / 4).into_int_downcast_panicking();
 
         let web = self.context.data.supervisor.modules.web.clone();
         let task = taskify(async move {
@@ -848,14 +856,15 @@ impl ContextVFS<'_> {
 
         let space_left = self.context.limiter.get_remaining_memory();
 
-        if space_left < abi::consts::top_limits::WEB_REQUEST_MIN_SPACE {
+        if space_left < top_limits::WEB_REQUEST_MIN_SPACE {
             log_warn!(space_left = space_left; "not enough memory for web request");
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
             )));
         }
 
-        let space_left_with_overhead = (space_left as u64 * 3 / 4) as u32;
+        let space_left_with_overhead =
+            (u64::from(space_left) * 3 / 4).into_int_downcast_panicking();
 
         let web = self.context.data.supervisor.modules.web.clone();
         let task = taskify(async move {
@@ -929,7 +938,7 @@ impl ContextVFS<'_> {
             sup.shared_data.consume_det_fuel(result.consumed_gen).await;
 
             if result.consumed_gen == primitive_types::U256::MAX {
-                return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
+                return Err(rt::errors::Error::fatal_vm(abi::consts::VmError::timeout()).into());
             }
 
             {
@@ -998,7 +1007,7 @@ impl ContextVFS<'_> {
                     .consume_fuel(*consumed_gen)?;
                 sup.shared_data.consume_det_fuel(*consumed_gen).await;
                 if *consumed_gen == primitive_types::U256::MAX {
-                    return Err(rt::errors::Error::vm(abi::consts::VmError::timeout()).into());
+                    return Err(rt::errors::Error::fatal_vm(abi::consts::VmError::timeout()).into());
                 }
 
                 {
@@ -1077,7 +1086,7 @@ impl ContextVFS<'_> {
                     0u64
                 } else {
                     let elapsed = std::time::Instant::now().duration_since(self.context.start_time);
-                    elapsed.as_micros() as u64
+                    elapsed.as_micros().into_int_downcast_panicking()
                 };
 
                 let data = calldata::encode(&calldata::Value::Number(num_bigint::BigInt::from(
@@ -1149,10 +1158,14 @@ impl ContextVFS<'_> {
         let limiter = self.context.limiter.clone();
         let topmost_runner_id = self.context.data.conf.execution.topmost_runner_id.clone();
 
-        let runner =
-            rt::supervisor::actions::resolve_runner_id(&supervisor, &topmost_runner_id, &runner)
-                .await
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
+        let runner = rt::supervisor::actions::resolve_runner_id(
+            &supervisor,
+            &limiter,
+            &topmost_runner_id,
+            &runner,
+        )
+        .await
+        .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         // The load action pins the archive into this VM's loaded set (keeping the
         // mapped files' backing bytes resident) and charges once for it.

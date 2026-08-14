@@ -14,7 +14,11 @@ let
     outputHash = "sha256-0l4NXBmK3jFtE/euKQsaI46zFYpubvww27fjMnU6j5U=";
 
     srcs = [
-      ./deps
+      (lib.cleanSourceWith {
+        name = "deps";
+        src = ./deps;
+        filter = lib.cleanSourceFilter;
+      })
       (builtins.fetchGit {
         url = "https://github.com/numpy/numpy.git";
         rev = "3fcac502eba9523718f8e2e3a4aaf83665165dfe";
@@ -29,7 +33,10 @@ let
     sourceRoot = "genvm-cpython-numpy-src";
 
     patches = [
-      ./patches/1
+      (builtins.path {
+        name = "numpy-wasi.patch";
+        path = ./patches/1;
+      })
     ];
 
     nativeBuildInputs = [

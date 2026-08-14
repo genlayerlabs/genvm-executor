@@ -3,8 +3,9 @@ use std::ops::DerefMut;
 
 use const_lru::ConstLru;
 use genlayer_sdk::abi;
-use genvm_common::{calldata, sync};
+use genvm_common::{calldata, internal_constants::memory_limiter_consts, sync};
 
+use crate::int_traits::*;
 use crate::{public_abi::root_offsets, rt, SlotID};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -39,6 +40,11 @@ pub struct Delta(
 impl Delta {
     pub(crate) fn cloned_parts(&self) -> ([u8; 36], Vec<u8>) {
         (self.0, self.1.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(key: [u8; 36], value: Vec<u8>) -> Self {
+        Self(key, value)
     }
 }
 
@@ -93,38 +99,112 @@ impl Limiter {
     }
 }
 
-#[derive(Debug, Clone)]
-struct StoragePagesOverride(
-    rpds::RedBlackTreeMap<PageID, [u8; 32], archery::ArcTK>,
-    Limiter,
-);
+struct StoragePagesOverride {
+    pages: rpds::RedBlackTreeMap<PageID, [u8; 32], archery::ArcTK>,
+    fee: Limiter,
+    mem: rt::memlimiter::Limiter,
+    new_pages: u32,
+}
 
 impl StoragePagesOverride {
-    fn new(storage_pages_limit: rt::vm::storage::Limiter) -> Self {
-        Self(Default::default(), storage_pages_limit)
+    fn new(storage_pages_limit: Limiter, mem: rt::memlimiter::Limiter) -> Self {
+        Self {
+            pages: Default::default(),
+            fee: storage_pages_limit,
+            mem,
+            new_pages: 0,
+        }
     }
 
     fn read_page_override(&self, key: PageID) -> Option<[u8; 32]> {
-        self.0.get(&key).cloned()
+        self.pages.get(&key).cloned()
     }
 
     fn get(&self, key: PageID) -> Option<[u8; 32]> {
-        self.0.get(&key).cloned()
+        self.pages.get(&key).cloned()
     }
 
     async fn write_page(&mut self, key: PageID, value: [u8; 32]) -> rt::errors::Result<()> {
-        if !self.0.contains_key(&key) {
-            self.1.consume(1).await?;
+        if !self.pages.contains_key(&key) {
+            let new_pages = self.new_pages.checked_add(1).ok_or_else(|| {
+                rt::errors::Error::wrap(
+                    abi::consts::VmError::out_of().memory().val(),
+                    anyhow::anyhow!("incrementing storage page count"),
+                )
+            })?;
+            if !self.mem.consume(memory_limiter_consts::NEW_STORAGE_PAGE) {
+                return Err(rt::errors::Error::wrap(
+                    abi::consts::VmError::out_of().memory().val(),
+                    anyhow::anyhow!("allocating storage page override"),
+                ));
+            }
+            // Memory is charged first so a write refused for want of RAM costs no
+            // fee; a write refused for want of fee must likewise cost no memory.
+            if let Err(e) = self.fee.consume(1).await {
+                self.mem.release(memory_limiter_consts::NEW_STORAGE_PAGE);
+                return Err(e);
+            }
+            self.new_pages = new_pages;
         }
-        self.0 = self.0.insert(key, value);
+        self.pages = self.pages.insert(key, value);
 
+        Ok(())
+    }
+
+    fn fork(&self, mem: rt::memlimiter::Limiter) -> rt::errors::Result<Self> {
+        // While we keep our version alive the child can copy-on-write every page
+        // it inherits, so it pays for them up front and gets it back when it ends.
+        let inherited: u32 = self.pages.size().into_int_downcast().map_err(|_| {
+            rt::errors::Error::wrap(
+                abi::consts::VmError::out_of().memory().val(),
+                anyhow::anyhow!("inheriting {} storage pages", self.pages.size()),
+            )
+        })?;
+        if !mem.consume_mul(inherited, memory_limiter_consts::STORAGE_PAGE_INHERITED) {
+            return Err(rt::errors::Error::wrap(
+                abi::consts::VmError::out_of().memory().val(),
+                anyhow::anyhow!("inheriting {inherited} storage pages"),
+            ));
+        }
+
+        Ok(Self {
+            pages: self.pages.clone(),
+            fee: self.fee.clone(),
+            mem,
+            new_pages: 0,
+        })
+    }
+
+    fn fold(&mut self, child: Self) -> rt::errors::Result<()> {
+        // The parent pays only when it keeps the child's new pages.
+        let new_pages = self.new_pages.checked_add(child.new_pages).ok_or_else(|| {
+            rt::errors::Error::fatal_vm_cause(
+                abi::consts::VmError::out_of().memory().val(),
+                Some(anyhow::anyhow!("folding storage page count")),
+            )
+        })?;
+        let charged = self
+            .mem
+            .consume_mul(child.new_pages, memory_limiter_consts::NEW_STORAGE_PAGE);
+        // Unreachable: the child's budget is a snapshot of ours taken at spawn,
+        // and it paid VM_SPAWN_COST out of it before writing a page, so what it
+        // owes us is strictly less than what we still hold. Getting here means a
+        // security researcher broke that invariant, so it is fatal and uncatchable.
+        debug_assert!(charged, "storage fold charge exceeded the parent budget");
+        if !charged {
+            return Err(rt::errors::Error::fatal_vm_cause(
+                abi::consts::VmError::out_of().memory().val(),
+                Some(anyhow::anyhow!("folding storage page overrides")),
+            ));
+        }
+        self.pages = child.pages;
+        self.new_pages = new_pages;
         Ok(())
     }
 }
 
 const STORAGE_CACHE_SIZE: usize = 128;
 
-#[derive(Clone)]
 pub struct Storage<HS: Send + Sync> {
     pub address: calldata::Address,
     host: HS,
@@ -133,11 +213,16 @@ pub struct Storage<HS: Send + Sync> {
 }
 
 impl<HS: Send + Sync> Storage<HS> {
-    pub fn new(address: calldata::Address, storage_pages_limit: Limiter, host: HS) -> Self {
+    pub fn new(
+        address: calldata::Address,
+        storage_pages_limit: Limiter,
+        mem: rt::memlimiter::Limiter,
+        host: HS,
+    ) -> Self {
         Self {
             address,
             host,
-            pages: StoragePagesOverride::new(storage_pages_limit),
+            pages: StoragePagesOverride::new(storage_pages_limit, mem),
             cache: ConstLru::new(),
         }
     }
@@ -152,13 +237,35 @@ impl<HS: Send + Sync> Storage<HS> {
         self.pages.write_page(key, value).await
     }
 
+    /// `mem` must be the very limiter the child VM runs on, otherwise its pages
+    /// are charged to a budget nobody else draws from.
+    pub fn fork(&self, mem: rt::memlimiter::Limiter) -> rt::errors::Result<Self>
+    where
+        HS: Clone,
+    {
+        Ok(Self {
+            address: self.address,
+            host: self.host.clone(),
+            pages: self.pages.fork(mem)?,
+            cache: self.cache.clone(),
+        })
+    }
+
+    pub fn fold(&mut self, child: Self) -> rt::errors::Result<()> {
+        self.pages.fold(child.pages)
+    }
+
+    pub fn pages_len(&self) -> usize {
+        self.pages.pages.size()
+    }
+
     pub fn make_delta(&self) -> Vec<Delta> {
         let mut res = Vec::<Delta>::new();
 
-        for (k, v) in &self.pages.0 {
+        for (k, v) in &self.pages.pages {
             if k.1 != 0 {
                 let prev_page_id = PageID(k.0, k.1 - 1);
-                if self.pages.0.get(&prev_page_id).is_some() {
+                if self.pages.pages.get(&prev_page_id).is_some() {
                     res.last_mut()
                         .expect("res must be non-empty when prev page exists")
                         .deref_mut()
@@ -189,7 +296,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
             return Ok(());
         }
 
-        let start_index = index as usize;
+        let start_index = u32_into_usize(index);
         let end_index = start_index + buf.len();
 
         // Calculate page range
@@ -207,7 +314,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
 
         // Cut known prefix
         for page_idx in start_page..=end_page {
-            let page_id = PageID(slot_id, page_idx as u32);
+            let page_id = PageID(slot_id, page_idx.into_int_downcast_panicking());
             if page_is_known(self, page_id) {
                 need_host_read_start = (page_idx + 1) * 32;
             } else {
@@ -217,7 +324,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
 
         // Cut known suffix
         for page_idx in (start_page..=end_page).rev() {
-            let page_id = PageID(slot_id, page_idx as u32);
+            let page_id = PageID(slot_id, page_idx.into_int_downcast_panicking());
             if page_is_known(self, page_id) {
                 need_host_read_end = page_idx * 32;
             } else {
@@ -231,7 +338,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
             let host_buf_offset = need_host_read_start - start_index;
             self.host.lock().await.storage_read(
                 slot_id,
-                need_host_read_start as u32,
+                need_host_read_start.into_int_downcast_panicking(),
                 &mut buf[host_buf_offset..host_buf_offset + host_read_len],
             )?;
         }
@@ -242,7 +349,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         let mut put_to_cache_count = 0;
 
         for page_idx in start_page..=end_page {
-            let page_id = PageID(slot_id, page_idx as u32);
+            let page_id = PageID(slot_id, page_idx.into_int_downcast_panicking());
 
             let page_start_byte = page_idx * 32;
             let page_end_byte = page_start_byte + 32;
@@ -307,7 +414,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
                 page_data.copy_from_slice(&existing_page);
             } else {
                 // Read from host
-                let page_start = ((page_id.1 as usize) * 32) as u32;
+                let page_start = (u32_into_usize(page_id.1) * 32).into_int_downcast_panicking();
                 self.host
                     .lock()
                     .await
@@ -332,7 +439,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
             return Ok(());
         }
 
-        let start_index = index as usize;
+        let start_index = u32_into_usize(index);
         let end_index = start_index + buf.len();
 
         // Calculate page range
@@ -341,7 +448,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
 
         // Handle single page case
         if start_page == end_page {
-            let page_id = PageID(slot_id, start_page as u32);
+            let page_id = PageID(slot_id, start_page.into_int_downcast_panicking());
             let offset_in_page = start_index % 32;
             return self.write_single_page(page_id, offset_in_page, buf).await;
         }
@@ -358,13 +465,17 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
             let mut host_lock = self.host.lock().await;
 
             if partial_first {
-                let page_id = PageID(slot_id, start_page as u32);
+                let page_id = PageID(slot_id, start_page.into_int_downcast_panicking());
                 let mut page_data = [0u8; 32];
 
                 if let Some(existing_page) = self.pages.get(page_id) {
                     page_data.copy_from_slice(&existing_page);
                 } else {
-                    host_lock.storage_read(slot_id, first_page_start as u32, &mut page_data)?;
+                    host_lock.storage_read(
+                        slot_id,
+                        first_page_start.into_int_downcast_panicking(),
+                        &mut page_data,
+                    )?;
                 }
 
                 let offset_in_page = start_index % 32;
@@ -375,13 +486,17 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
             }
 
             if partial_last {
-                let page_id = PageID(slot_id, end_page as u32);
+                let page_id = PageID(slot_id, end_page.into_int_downcast_panicking());
                 let mut page_data = [0u8; 32];
 
                 if let Some(existing_page) = self.pages.get(page_id) {
                     page_data.copy_from_slice(&existing_page);
                 } else {
-                    host_lock.storage_read(slot_id, last_page_start as u32, &mut page_data)?;
+                    host_lock.storage_read(
+                        slot_id,
+                        last_page_start.into_int_downcast_panicking(),
+                        &mut page_data,
+                    )?;
                 }
 
                 let end_offset_in_page = end_index % 32;
@@ -404,7 +519,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
                 continue;
             }
 
-            let page_id = PageID(slot_id, page_idx as u32);
+            let page_id = PageID(slot_id, page_idx.into_int_downcast_panicking());
             let src_offset = page_start - start_index;
             let mut page_data = [0u8; 32];
             page_data.copy_from_slice(&buf[src_offset..src_offset + 32]);
@@ -417,13 +532,13 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
     pub async fn write_code(&mut self, code: &[u8]) -> rt::errors::Result<()> {
         let code_slot = default_code_slot();
 
-        if code.len() > (u32::MAX - 4) as usize {
+        if code.len() > u32_into_usize(u32::MAX - 4) {
             return Err(rt::errors::Error::vm(
                 abi::consts::VmError::out_of().storage(),
             ));
         }
 
-        let code_len = code.len() as u32;
+        let code_len: u32 = code.len().into_int_downcast_panicking();
         let mut len_buf = [0; 4];
         len_buf.copy_from_slice(&code_len.to_le_bytes());
         self.write(code_slot, 0, &len_buf).await?;
@@ -484,7 +599,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
 
     pub fn check_major(contract_major: u8) -> rt::errors::Result<()> {
         let node_major = genvm_common::version::CURRENT.major;
-        if contract_major as u16 != node_major {
+        if u16::from(contract_major) != node_major {
             return Err(rt::errors::Error::wrap(
                 abi::consts::VmError::invalid_contract().major_mismatch(),
                 anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
@@ -520,149 +635,11 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         code_slot: SlotID,
         code_size: u32,
     ) -> rt::errors::Result<Box<[u8]>> {
-        let res = Box::new_uninit_slice(code_size as usize);
+        let res = Box::new_uninit_slice(code_size.into_int_comptime());
         let mut res = unsafe { res.assume_init() };
 
         self.read(code_slot, 4, &mut res).await?;
 
         Ok(res)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // -- code slot reads (runner load action support) --------------------
-
-    /// In-memory host: one slot whose content is `code_len_le ++ code`; reads
-    /// beyond the content are zero-filled (like unwritten storage).
-    #[derive(Clone)]
-    struct FakeHost(std::sync::Arc<Vec<u8>>);
-
-    struct FakeLock(std::sync::Arc<Vec<u8>>);
-
-    impl HostStorage for FakeLock {
-        fn storage_read(
-            &mut self,
-            _slot_id: SlotID,
-            index: u32,
-            buf: &mut [u8],
-        ) -> anyhow::Result<()> {
-            let data = &self.0;
-            for (i, out) in buf.iter_mut().enumerate() {
-                *out = data.get(index as usize + i).copied().unwrap_or(0);
-            }
-            Ok(())
-        }
-    }
-
-    impl HostStorageLocking for FakeHost {
-        type ReturnType<'a> = FakeLock;
-
-        async fn lock(&self) -> FakeLock {
-            FakeLock(self.0.clone())
-        }
-    }
-
-    /// A minimal `DataLimit` whose storage bucket charges one unit per page.
-    fn data_fees(total_pages: u64) -> Limiter {
-        use crate::config::{FeesBucketConfig, FeesConfig};
-        let bucket = |delta: &str| FeesBucketConfig {
-            bucket_no: vec![0],
-            subtract_on_start_expr: "0".to_owned(),
-            delta_expr: delta.to_owned(),
-        };
-        let fees = FeesConfig {
-            expr_prelude: String::new(),
-            storage: bucket("\\attrs = attrs.pages"),
-            message_receipt: bucket("\\attrs = 0"),
-            nondet_output: bucket("\\attrs = 0"),
-            message_fee: bucket("\\attrs = 0"),
-            event: bucket("\\attrs = 0"),
-        };
-        let dl = rt::fees::DataLimit::new(
-            vec![primitive_types::U256::from(total_pages)],
-            fees,
-            Default::default(),
-        )
-        .unwrap();
-        Limiter::new(sync::DArc::new(dl))
-    }
-
-    fn code_storage(code: &[u8]) -> Storage<FakeHost> {
-        let mut slot = (code.len() as u32).to_le_bytes().to_vec();
-        slot.extend_from_slice(code);
-        Storage::new(
-            calldata::Address::zero(),
-            data_fees(u64::MAX),
-            FakeHost(std::sync::Arc::new(slot)),
-        )
-    }
-
-    /// The runner load action reads the 4-byte length prefix first (to know
-    /// what to charge), then the blob at offset 4 -- the two reads must
-    /// reassemble exactly the stored code.
-    #[tokio::test]
-    async fn code_len_then_blob_reassembles_the_code() {
-        // A length that is not 32-aligned exercises the page-offset math.
-        let code: Vec<u8> = (0u16..77).map(|i| i as u8).collect();
-        let mut storage = code_storage(&code);
-        let slot = default_code_slot();
-
-        let len = storage.read_code_len(slot).await.unwrap();
-        assert_eq!(len, 77);
-
-        let blob = storage.read_code_blob(slot, len).await.unwrap();
-        assert_eq!(&blob[..], &code[..], "blob must skip the 4-byte prefix");
-    }
-
-    #[tokio::test]
-    async fn code_len_of_empty_code_is_zero() {
-        let mut storage = code_storage(&[]);
-        let slot = default_code_slot();
-        assert_eq!(storage.read_code_len(slot).await.unwrap(), 0);
-        assert!(storage.read_code_blob(slot, 0).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn advisory_major_is_returned_with_resolved_code_slot() {
-        let expected_slot = SlotID::from_bytes([0x5a; 32]);
-        let mut root = vec![0; (root_offsets::CODE_SLOT + SlotID::SIZE) as usize];
-        root[root_offsets::MAJOR as usize] = 2;
-        root[root_offsets::CODE_SLOT as usize..].copy_from_slice(&expected_slot.raw());
-        let mut storage = Storage::new(
-            calldata::Address::zero(),
-            data_fees(u64::MAX),
-            FakeHost(std::sync::Arc::new(root)),
-        );
-
-        let (major, slot) = storage.read_major_and_resolve_code_slot().await.unwrap();
-        assert_eq!(major, 2);
-        assert_eq!(slot, expected_slot);
-    }
-
-    // -- page id ordering ------------------------------------------------
-
-    #[test]
-    fn pages_sorted_correctly_1_byte() {
-        let left = PageID(SlotID::from_bytes([1u8; 32]), 5);
-        let right = PageID(SlotID::from_bytes([1u8; 32]), 10);
-        assert!(left < right);
-        assert!(left.to_bytes() < right.to_bytes());
-
-        assert!(right > left);
-        assert!(right.to_bytes() > left.to_bytes());
-    }
-
-    #[test]
-    fn pages_sorted_correctly_2_byte() {
-        let left = PageID(SlotID::from_bytes([1u8; 32]), 5);
-        let right = PageID(SlotID::from_bytes([1u8; 32]), 1024);
-        assert!(left < right);
-        assert!(left.to_bytes() < right.to_bytes());
-
-        assert!(right > left);
-        assert!(right.to_bytes() > left.to_bytes());
     }
 }

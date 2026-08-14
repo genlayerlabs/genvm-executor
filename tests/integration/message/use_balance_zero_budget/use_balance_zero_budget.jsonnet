@@ -26,5 +26,5 @@ local extra = {
 	gas_data: gasData,
 };
 local base = deploy_then.run('${jsonnetDir}/${fileBaseName}.py', 'do_emit');
-{tags: util.features([['message'], ['fees']], 'stable'),
+{tags: util.features([['message', 'send'], ['balance'], ['fees', 'balance']], 'stable') + ['python'],
 	entry: util.addPaths([base + extra + {next: [base.next[0] + extra]}])}

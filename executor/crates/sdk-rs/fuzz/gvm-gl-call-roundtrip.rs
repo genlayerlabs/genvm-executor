@@ -34,9 +34,30 @@ fn main() {
         let msg_decoded_from_binary: Message =
             codec::Decode::decode(codec::BinaryDeserializer::new(&buf)).unwrap();
 
+        // A byte-backed source defers every `Maybe` field as raw bytes, while
+        // `msg` holds them materialized, and `Maybe` compares the two
+        // representations unequal. Re-encoding must therefore be the first
+        // comparison: it is the one that holds whatever each side deferred.
+        let mut reencoded_from_binary = Vec::new();
+        codec::Encode::encode(
+            &msg_decoded_from_binary,
+            &mut Encoder::new(&mut reencoded_from_binary),
+        )
+        .unwrap();
+
         assert_eq!(
-            msg, msg_decoded_from_binary,
-            "Message roundtrip mismatch: binary"
+            buf, reencoded_from_binary,
+            "Message roundtrip mismatch: binary bytes"
         );
+
+        // Decoding those bytes through a `Value` -- which has nothing to defer --
+        // materializes every deferred field at once, so the messages can be
+        // compared without naming the fields that happen to be deferrable today.
+        let msg_materialized: Message = codec::Decode::decode(codec::ValueDeserializer(
+            genlayer_calldata::decode(&reencoded_from_binary).unwrap(),
+        ))
+        .unwrap();
+
+        assert_eq!(msg, msg_materialized, "Message roundtrip mismatch: binary");
     });
 }

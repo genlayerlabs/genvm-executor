@@ -1,0 +1,12 @@
+# v0.1.10
+# {
+#   "Seq": [
+#   {
+#   "Seq": [
+#     { "AddEnv": {"name": "GENLAYER_ENABLE_PROFILER", "val": "false"} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+# }
+import genlayer as gl
+l.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

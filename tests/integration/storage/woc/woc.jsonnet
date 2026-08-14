@@ -2,7 +2,7 @@ local simple = import 'templates/simple_deploy.jsonnet';
 local msg = import 'templates/message.json';
 local s = simple.run('${jsonnetDir}/${fileBaseName}.py');
 local util = import 'templates/util.jsonnet';
-{tags: util.features([['storage'], ['prompt', 'comparative'], ['message', 'send'], ['nondet']], 'semi-stable'),
+{tags: util.features([['storage', 'persistence'], ['prompt', 'comparative'], ['nondet']], 'semi-stable') + ['needs-llm', 'needs-web', 'python', 'slow'],
 	entry: util.addPaths([util.chain([
 	s {
 		"calldata": |||

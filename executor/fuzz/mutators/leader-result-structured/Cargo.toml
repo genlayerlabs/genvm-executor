@@ -1,0 +1,21 @@
+[package]
+name = "fuzz-mutator-leader-result-structured"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "lib.rs"
+
+[dependencies]
+genlayer_calldata = { path = "../../../crates/calldata", features = [
+    "fuzzing",
+] }
+genvm-fuzzing = { path = "../../../../../../crates/fuzzing" }
+serde = { version = "1.0.219", features = ["derive"] }
+
+[dependencies.mutatis]
+default-features = false
+features = ["derive", "std"]
+version = "0.5.3"

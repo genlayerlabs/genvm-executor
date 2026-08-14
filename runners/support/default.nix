@@ -6,6 +6,11 @@
 }@args:
 let
   dev-mode = import ./versions/dev-mode.nix;
+  runner-scripts = pkgs.lib.cleanSourceWith {
+    name = "scripts";
+    src = ./scripts;
+    filter = pkgs.lib.cleanSourceFilter;
+  };
 in
 rec {
   hashes = import ./versions/current.nix;
@@ -48,7 +53,7 @@ rec {
 
           srcs = [
             baseDerivation
-            ./scripts
+            runner-scripts
           ];
           sourceRoot = ".";
 

@@ -1,12 +1,13 @@
 pub mod actions;
 pub mod cache;
 
+mod archive;
 mod parse;
-mod ustar;
+pub(crate) mod ustar;
 use genvm_common::*;
 use itertools::Itertools;
 
-pub use ustar::Archive;
+pub use archive::Archive;
 
 pub use parse::parse;
 
@@ -16,6 +17,15 @@ use std::{str::FromStr as _, sync::Arc};
 
 use crate::rt;
 use crate::rt::errors::{Error, ResultExt as _};
+
+pub(crate) fn malformed_runner_error(message: impl Into<String>) -> Error {
+    Error::vm(
+        genlayer_sdk::abi::consts::VmError::invalid_contract()
+            .runner()
+            .malformed(),
+    )
+    .context(message)
+}
 
 pub fn append_runner_subpath(id: &str, hash: &str, path: &mut std::path::PathBuf) {
     path.push(id);
@@ -340,15 +350,23 @@ impl ArchiveCache {
             }
         };
 
-        let contents = std::str::from_utf8(contents.as_ref())
-            .with_ctx(|| format!("casting version to string {}", self.id))?;
+        let contents = std::str::from_utf8(contents.as_ref()).map_err(|e| {
+            malformed_runner_error(format!("version is not valid UTF-8 for runner {}", self.id))
+                .with_source(e)
+        })?;
 
-        let version = version::Version::from_str(contents).with_ctx(|| {
-            format!(
+        let version = version::Version::from_str(contents).map_err(|e| {
+            Error::wrap(
+                genlayer_sdk::abi::consts::VmError::invalid_contract()
+                    .runner()
+                    .malformed(),
+                e,
+            )
+            .context(format!(
                 "parsing version '{}' for runner {}",
                 contents.trim(),
                 self.id
-            )
+            ))
         })?;
 
         log_trace!(from = contents, to = version; "version parsed");
@@ -361,12 +379,31 @@ impl ArchiveCache {
             .get_or_try_init(|| async {
                 let contents = self.get_file("runner.json")?;
 
-                let contents_str = std::str::from_utf8(contents.as_ref()).with_ctx(|| {
-                    format!("runner.json is not valid UTF-8 for runner {}", self.id)
+                let contents_str = std::str::from_utf8(contents.as_ref()).map_err(|e| {
+                    malformed_runner_error(format!(
+                        "runner.json is not valid UTF-8 for runner {}",
+                        self.id
+                    ))
+                    .with_source(e)
                 })?;
 
-                let as_init: InitAction = serde_json::from_str(contents_str)
-                    .with_ctx(|| format!("parsing runner.json for runner {}", self.id))?;
+                let as_init = actions::parse_runner_json(contents_str).map_err(|e| {
+                    malformed_runner_error(format!("parsing runner.json for runner {}", self.id))
+                        .with_source(e)
+                })?;
+
+                match as_init.validate() {
+                    Ok(()) => {}
+                    Err(e) => {
+                        log_warn!(error:err = e, runner = self.id; "runner.json failed validation");
+
+                        return Err(rt::errors::Error::vm(
+                            genlayer_sdk::abi::consts::VmError::invalid_contract()
+                                .runner()
+                                .malformed(),
+                        ));
+                    }
+                }
 
                 Ok(Arc::new(as_init))
             })
@@ -379,7 +416,7 @@ impl ArchiveCache {
             .files
             .data
             .get(name)
-            .ok_or_else(|| Error::internal(format!("no file {name}")))
+            .ok_or_else(|| malformed_runner_error(format!("no file {name}")))
             .with_ctx(|| format!("reading runner {}", self.id))?;
         Ok(contents.clone())
     }

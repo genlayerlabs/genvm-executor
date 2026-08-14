@@ -1,9 +1,101 @@
 use std::collections::BTreeMap;
 
 use genlayer_sdk::abi;
+use genvm_common::internal_constants::{memory_limiter_consts, top_limits};
 use genvm_common::log_trace;
 
-use crate::{public_abi, rt};
+use crate::int_traits::*;
+use crate::rt;
+
+pub enum Trie<T> {
+    Dir(BTreeMap<String, Trie<T>>),
+    Leaf(T),
+}
+
+pub enum TrieFollowResult<'a, T> {
+    Found(&'a Trie<T>),
+    NotDir,
+    NotFound,
+}
+
+impl<T> Trie<T> {
+    pub fn follow<'b>(
+        &self,
+        components: impl std::iter::Iterator<Item = &'b str>,
+    ) -> TrieFollowResult<'_, T> {
+        let mut cur_trie = self;
+
+        for component in components {
+            debug_assert!(is_normalized_path_component(component));
+
+            match cur_trie {
+                Trie::Dir(map) => {
+                    cur_trie = match map.get(component) {
+                        Some(next) => next,
+                        None => return TrieFollowResult::NotFound,
+                    };
+                }
+                Trie::Leaf(_) => return TrieFollowResult::NotDir,
+            }
+        }
+        TrieFollowResult::Found(cur_trie)
+    }
+}
+
+pub fn is_normalized_path_component(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.contains('/')
+}
+
+pub fn split_normalize_paths<'a>(
+    path_components: impl std::iter::Iterator<Item = &'a str>,
+    absolute: bool,
+) -> Vec<&'a str> {
+    let mut result: Vec<&str> = Vec::new();
+
+    enum Act {
+        Pop,
+        Push,
+        Skip,
+    }
+
+    for c in path_components {
+        debug_assert!(!c.contains('/'));
+
+        match c {
+            "" => continue,
+            "." => continue,
+            ".." => {
+                let pop_last = match result.last().map(std::ops::Deref::deref) {
+                    None => {
+                        if absolute {
+                            Act::Skip
+                        } else {
+                            Act::Push
+                        }
+                    }
+                    Some("..") => Act::Push,
+                    Some(_) => Act::Pop,
+                };
+                match pop_last {
+                    Act::Pop => {
+                        result.pop();
+                    }
+                    Act::Push => {
+                        result.push("..");
+                    }
+                    Act::Skip => {}
+                }
+            }
+            other => result.push(other),
+        }
+    }
+
+    result
+}
+
+pub fn split_normalize_path(path: &str, absolute: bool) -> Vec<&str> {
+    split_normalize_paths(path.split('/'), absolute)
+}
 
 pub struct FileContents {
     pub contents: bytes::Bytes,
@@ -96,16 +188,13 @@ impl VFS {
 
     /// gives vacant fd
     pub fn alloc_fd(&mut self) -> anyhow::Result<Fd> {
-        if self.fds.len() >= public_abi::top_limits::MAX_FDS as usize {
+        if self.fds.len() >= top_limits::MAX_FDS.into_int_comptime() {
             return Err(rt::errors::Error::vm(abi::consts::VmError::out_of().fds()).into());
         }
         match self.free_descriptors.pop() {
             Some(v) => Ok(v),
             None => {
-                if !self
-                    .limiter
-                    .consume(public_abi::memory_limiter_consts::FD_ALLOCATION)
-                {
+                if !self.limiter.consume(memory_limiter_consts::FD_ALLOCATION) {
                     return Err(rt::errors::Error::vm(
                         abi::consts::VmError::out_of().memory().val(),
                     )
@@ -127,7 +216,8 @@ impl VFS {
             Some(v) => {
                 if let FileDescriptor::File(v) = &v {
                     if v.release_memory {
-                        self.limiter.release(v.contents.len() as u32);
+                        self.limiter
+                            .release(v.contents.len().into_int_downcast_panicking());
                     }
                 }
 
@@ -150,7 +240,8 @@ impl VFS {
             Ok(fd) => fd,
             Err(e) => {
                 if value.release_memory {
-                    self.limiter.release(value.contents.len() as u32);
+                    self.limiter
+                        .release(value.contents.len().into_int_downcast_panicking());
                 }
                 return Err(e);
             }

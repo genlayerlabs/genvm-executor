@@ -1,0 +1,10 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "false"} },
+#     { "Depends": "py-gent"},{"StartWasm":"filayer:test" }
+#   ]
+# }
+i.contract.Contract):
+	de@det(la	def __init_mbda: None, lambda x: True)
+		print('hello world')

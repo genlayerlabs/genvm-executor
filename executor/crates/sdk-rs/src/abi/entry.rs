@@ -71,7 +71,7 @@ fn default_datetime() -> chrono::DateTime<chrono::Utc> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, calldata::Encode, calldata::Decode)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct MainCallData {
     #[calldata(rename = "", option_as_absence)]
     pub name: Option<String>,
@@ -82,7 +82,7 @@ pub struct MainCallData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, calldata::Encode, calldata::Decode)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct MainDeployData {
     #[calldata(option_as_absence)]
     pub args: Option<Vec<calldata::unparsed::Maybe<Value>>>,
@@ -119,13 +119,13 @@ pub struct MessageData {
     pub datetime: chrono::DateTime<chrono::Utc>,
 }
 
-#[cfg(feature = "arbitrary")]
+#[cfg(feature = "fuzzing")]
 impl<'a> arbitrary::Arbitrary<'a> for MessageData {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use arbitrary::Arbitrary;
 
         let ts = u32::arbitrary(u)?;
-        let Some(datetime) = chrono::DateTime::<chrono::Utc>::from_timestamp_secs(ts as i64) else {
+        let Some(datetime) = chrono::DateTime::<chrono::Utc>::from_timestamp_secs(ts.into()) else {
             return Err(arbitrary::Error::NotEnoughData);
         };
 
@@ -394,7 +394,7 @@ pub mod contract_def {
                         .map_err(|e| ConsensusStageParseError::DecodeError(e.to_string()))?;
                     Ok(LeaderResult::UserError(value))
                 }
-                ResultCode::VmError | ResultCode::InternalError => {
+                ResultCode::VmError => {
                     let msg = String::from_utf8(rest.to_vec())
                         .map_err(|e| ConsensusStageParseError::InvalidUtf8(e.to_string()))?;
                     Ok(LeaderResult::VmError(msg))

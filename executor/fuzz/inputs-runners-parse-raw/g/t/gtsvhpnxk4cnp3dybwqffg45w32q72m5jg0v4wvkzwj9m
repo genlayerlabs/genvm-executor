@@ -1,0 +1,2 @@
+-- { "When": { "cond":{
+ "cond": "dft", "ac{ "LinkWasm": "file" } } }

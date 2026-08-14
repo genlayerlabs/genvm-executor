@@ -4,7 +4,7 @@ local util = import 'templates/util.jsonnet';
 // default, so a det-registered runner is usable inside `run_nondet`. Both the
 // parent and the nondet child charge it once each (`charged` >= 2 across the
 // run); each VM loads it at most once (no in-VM double charge).
-{tags: util.features([['runner', 'custom'], ['sandbox'], ['nondet']], 'stable'),
+{tags: util.features([['runner', 'custom'], ['runner', 'load'], ['runner', 'permission'], ['permission', 'runner'], ['sandbox', 'non-det'], ['nondet']], 'stable') + ['python'],
 	entry: util.addPaths([simple.run('${jsonnetDir}/${fileBaseName}.py') {
 		stable_hash: false,
 		permissions: 'wscn',

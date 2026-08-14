@@ -1,0 +1,8 @@
+# {
+#   "Seq": [
+#     { "Depends": "sofat:test" },
+#     { "Depends": "softfloa" "t:
+#   },
+#  
+#   ok')
+exit(0)

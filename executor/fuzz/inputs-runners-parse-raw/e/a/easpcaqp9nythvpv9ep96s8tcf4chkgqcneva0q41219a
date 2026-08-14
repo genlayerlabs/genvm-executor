@@ -1,0 +1,13 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYFR_ENABLE_PROFILTR", "val": ""} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+# }
+import ges gl
+
+
+class Contract(gl__(self):
+		gl.vm.run_nondet(lambda: Nonv, lambda x: True)
+		print('hello world')

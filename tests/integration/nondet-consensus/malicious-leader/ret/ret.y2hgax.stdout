@@ -1,2 +1,2 @@
 {"fn":"do_return","leader_nondet":[{"kind":"return","value":11},{"kind":"return","value":11}]}
-executed with `VMError("leader_output extra erntd8")`
+executed with `VMError("leader_fault nondet_output extra erntd8")`

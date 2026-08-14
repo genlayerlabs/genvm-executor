@@ -1,0 +1,43 @@
+[
+  {
+    "type": "consts",
+    "name": "memory_limiter_consts",
+    "repr": "u32",
+    "values": {
+      "table_entry": 64,
+      "file_mapping": 256,
+      "fd_allocation": 96,
+      "runner_load_cost": 4096,
+      "vm_spawn_cost": 134217728,
+      "new_storage_page": 256,
+      "storage_page_inherited": 128
+    }
+  },
+  {
+    "type": "consts",
+    "name": "top_limits",
+    "repr": "u32",
+    "values": {
+      "nondet_blocks": 4096,
+      "locked_slots": 256,
+      "upgraders": 32,
+      "vm_recursion": 512,
+      "web_request_min_space": 65536,
+      "web_render_min_space": 134217728,
+      "max_fds": 1024,
+      "wasm_call_depth": 1024,
+      "wasm_stack_value_slots": 65535,
+      "vfs_path_components": 128
+    }
+  },
+  {
+    "type": "consts",
+    "name": "runner_limits",
+    "repr": "u32",
+    "values": {
+      "env_name_len": 128,
+      "env_value_len": 1048576,
+      "init_action_depth": 128
+    }
+  }
+]

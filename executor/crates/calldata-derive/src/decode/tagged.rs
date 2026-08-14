@@ -402,7 +402,8 @@ pub fn decode(
                     return ::core::result::Result::Err(
                         genlayer_calldata::codec::DecodeError::LengthMismatch {
                             expected: #min_len,
-                            got: __len as usize,
+                            got: ::core::primitive::usize::try_from(__len)
+                                .unwrap_or(::core::primitive::usize::MAX),
                         },
                     );
                 }
@@ -410,7 +411,8 @@ pub fn decode(
                     return ::core::result::Result::Err(
                         genlayer_calldata::codec::DecodeError::LengthMismatch {
                             expected: #max_len,
-                            got: __len as usize,
+                            got: ::core::primitive::usize::try_from(__len)
+                                .unwrap_or(::core::primitive::usize::MAX),
                         },
                     );
                 }

@@ -1,7 +1,7 @@
-use genlayer_sdk::abi;
 use genvm_common::*;
 use std::sync::{atomic::AtomicU32, Arc};
 
+use crate::int_traits::*;
 use crate::rt;
 
 struct LimiterInner {
@@ -119,15 +119,20 @@ impl wasmtime::ResourceLimiter for Limiter {
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
         let delta = desired - current;
-        if delta > u32::MAX as usize {
+        if delta > u32_into_usize(u32::MAX) {
             return Ok(false);
         }
 
-        let delta = delta as u32;
+        let delta = delta.into_int_downcast_panicking();
         let success = self.consume(delta);
 
         if current == 0 && !success {
-            Err(rt::errors::Error::vm(abi::consts::VmError::out_of().memory().wasm_memory()).into())
+            Err(rt::errors::Error::vm(
+                genlayer_sdk::abi::consts::VmError::out_of()
+                    .memory()
+                    .wasm_memory(),
+            )
+            .into())
         } else {
             Ok(success)
         }
@@ -141,15 +146,23 @@ impl wasmtime::ResourceLimiter for Limiter {
     ) -> wasmtime::Result<bool> {
         let delta = desired - current;
 
-        if delta > u32::MAX as usize {
+        if delta > u32_into_usize(u32::MAX) {
             return Ok(false);
         }
 
-        let delta = delta as u32;
-        let success = self.consume_mul(delta, abi::consts::memory_limiter_consts::TABLE_ENTRY);
+        let delta = delta.into_int_downcast_panicking();
+        let success = self.consume_mul(
+            delta,
+            genvm_common::internal_constants::memory_limiter_consts::TABLE_ENTRY,
+        );
 
         if current == 0 && !success {
-            Err(rt::errors::Error::vm(abi::consts::VmError::out_of().memory().wasm_table()).into())
+            Err(rt::errors::Error::vm(
+                genlayer_sdk::abi::consts::VmError::out_of()
+                    .memory()
+                    .wasm_table(),
+            )
+            .into())
         } else {
             Ok(success)
         }

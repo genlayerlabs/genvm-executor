@@ -8,7 +8,7 @@ local call(method) = {
 	calldata: std.manifestJsonEx({ '': method, args: [] }, '    '),
 };
 {
-	tags: util.features([['message', 'external'], ['schema'], ['user-error']], 'stable'),
+	tags: util.features([['message', 'external'], ['message', 'external', 'view'], ['message', 'view'], ['schema'], ['user-error']], 'stable') + ['python'],
 	// deploy once, then fan out independent calls on top of the deployed contract
 	entry: util.addPaths([simple_deploy.run('${jsonnetDir}/${fileBaseName}.py') {
 		next: [

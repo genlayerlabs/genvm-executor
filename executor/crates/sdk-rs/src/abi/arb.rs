@@ -48,7 +48,7 @@ macro_rules! impl_arbitrary_via_try_from_u8 {
     };
 }
 
-impl_arbitrary_via_try_from_u8!(ResultCode, 3u8);
+impl_arbitrary_via_try_from_u8!(ResultCode, 2u8);
 impl_arbitrary_via_try_from_u8!(StorageType, 2u8);
 impl_arbitrary_via_try_from_u8!(EntryKind, 2u8);
 

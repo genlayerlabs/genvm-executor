@@ -56,7 +56,10 @@ let
     ];
 
     patches = [
-      ./patch
+      (builtins.path {
+        name = "cpython-wasi.patch";
+        path = ./patch;
+      })
     ];
 
     postUnpack = ''

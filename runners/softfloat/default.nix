@@ -22,7 +22,10 @@ in
         "installPhase"
       ];
 
-      src = ./.;
+      src = lib.cleanSourceWith {
+        src = ./.;
+        filter = path: type: lib.cleanSourceFilter path type && !lib.hasSuffix ".nix" path;
+      };
 
       nativeBuildInputs = [
         runnersLib.wasmPatchers.add-mod-name

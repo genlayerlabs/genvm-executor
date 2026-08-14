@@ -1,0 +1,10 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "se"} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+# }
+i.contract.Contract):
+	def __im.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

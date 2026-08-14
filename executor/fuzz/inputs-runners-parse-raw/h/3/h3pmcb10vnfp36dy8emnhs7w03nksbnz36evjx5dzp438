@@ -1,0 +1,10 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": { "Depends": "py-genl} },
+#     {"name": "GILER", "val": "false"ayer:test" }
+#   ]
+# }
+impgl__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		prinW'hello world')

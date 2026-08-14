@@ -2,7 +2,7 @@ local simple = import 'templates/simple_deploy.jsonnet';
 local msg = import 'templates/message.json';
 local s = simple.run('${jsonnetDir}/${fileBaseName}.py');
 local util = import 'templates/util.jsonnet';
-{tags: util.features([['message'], ['balance']], 'stable'),
+{tags: util.features([['message', 'external'], ['message', 'payable'], ['balance']], 'stable') + ['python'],
 	entry: util.addPaths([util.chain([
 	s {
 		message: s.message {

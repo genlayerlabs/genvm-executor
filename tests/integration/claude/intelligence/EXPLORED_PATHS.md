@@ -143,8 +143,8 @@ error (kept, see below); the other two found nothing and are gone.
 - `_scratch/runner_ids/` — **KEPT, it fails.** Sweeps 14 guest-supplied runner
   ids through `gl.vm.spawn_sandbox(runner=…)` and `gl.vm.map_file(runner, …)`,
   i.e. through `rt/supervisor/actions.rs::resolve_runner_id`. Twelve of the
-  fourteen land on a canonical `invalid_contract malformed_runner` /
-  `absent_runner_comment` VMError or run fine (`contract`, `chain:<self>:a:<real
+  fourteen land on a canonical `invalid_contract runner malformed` /
+  `invalid_contract runner absent` VMError or run fine (`contract`, `chain:<self>:a:<real
   slot>`, `chain:<self>:f`, `py-genlayer:test|latest`, `custom:` unregistered,
   `chain:<empty account>`, `chain:<self>:d`, zero slot, `''`, `@@@…`, a
   non-canonical gvm32 hash). The two that do not are any *well formed*
@@ -167,12 +167,12 @@ error (kept, see below); the other two found nothing and are gone.
   hand-built `custom_runners` grant list: `None`, `[]`, the parent's own
   registered id, a duplicate pair, a non-`custom:` id, an unregistered
   `custom:`, `@@@`, and an absent `name:hash`. Every violation is the canonical
-  `invalid_contract malformed_runner` — note the absent `name:hash` is rejected
+  `invalid_contract runner malformed` — note the absent `name:hash` is rejected
   *here* rather than reaching the bail above, because the grant list is checked
   for the `custom:` prefix before any registry lookup. `register_runner` with
   six garbage archives (empty, plain text, `#`, non-json header, a header
   depending on an absent registry runner, one depending on an unregistered
-  `custom:`) returns either a `custom:` id or `absent_runner_comment`. l/v/s
+  `custom:`) returns either a `custom:` id or `invalid_contract runner absent`. l/v/s
   hashes agreed on all 49 runs.
 
 - `_scratch/state_modes/` — deleted, nothing. Aimed at the working-tree
@@ -183,7 +183,7 @@ error (kept, see below); the other two found nothing and are gone.
   three `StorageType` values, plus a top-level step with `is_init: true` and
   `code: null` to force `ChainState::for_vm(true, …) == Deploy`. All 45 runs
   agree l/v/s, and the deploy-state top-level run ends in the canonical
-  `invalid_contract malformed_runner` (the `d` chain state has no
+  `invalid_contract runner malformed` (the `d` chain state has no
   `host_storage_type`, so the cache miss cannot be filled) — correct, not an
   internal error. **The three storage modes are indistinguishable under the
   jsonnet harness**: `gvm_extra/mock_host.py::MockHost.storage_read` ignores its
@@ -215,7 +215,14 @@ after the `execution_hash` key — the pickle needs the harness venv to unpickle
 properly) is a strictly stronger oracle and is what the two folding probes below
 were actually checked against.
 
-### KEPT, it fails: `_scratch/fee_zero_budget/`
+### FIXED: `_scratch/fee_zero_budget/`
+
+Resolved by `9d2db0d`, which gave the fee expression language `true`/`false`
+literals (`expr/{tokenizer,lexer,evaluator,value}.rs`). The `else false` arm now
+parses, so a zero per-round budget evaluates instead of raising `undefined
+variable`. The account below is the original report, kept because the reachability
+notes at its end are still accurate.
+
 
 A balance-funded internal message (`use_balance=True`) whose guest-supplied
 `execution_budget_per_round` is **0** ends the whole transaction in
@@ -372,8 +379,8 @@ silently running as sync. Covered:
   and `run_nondet`, while runner registration and a further deterministic
   contract call remain available when inherited from the parent;
 - forced disabled debug (`py-genlayer:test` resolves under the unsafe top-level
-  control run, but nested execution reports `invalid_contract
-  malformed_runner`);
+  control run, but nested execution reports `invalid_contract runner
+  malformed`);
 - a root run with only `c` permission (therefore no `LockedSlotsSet`) reading
   the same nested stored value as `wscn`;
 - host-routed self-calls with injected recursion budgets 0, 1, 2, 4, 5 and 6
@@ -406,3 +413,500 @@ Ruled out:
   because that line tolerates unused leader results; moving the guard to a
   v0.3-root call produced the expected VMError. This was a test-oracle
   difference, not an l/v/s disagreement.
+
+## Error-classification audit of the whole executor (2026-08-07)
+
+A three-way static sweep of every file under `executor/src/` and
+`executor/crates/`, looking for sites that report `ErrorKind::Internal` for a
+failure the contract's own input decides. One defect survived triage.
+
+### PROMOTED: `fd_seek` negation overflow
+
+`preview1.rs` computed `-offset as u64` for a negative `Whence::Cur` seek.
+`-i64::MIN` overflows, and both cargo profiles set `panic = "abort"`, so the
+executor aborted:
+
+    thread 'main' panicked at src/wasi/preview1.rs:830:46:
+    attempt to negate with overflow
+
+reported to the harness as `reason: 'internal error'`, identically in l/v/s. Any
+contract that can open a mapped file reaches it — `os.lseek(fd, -(2**63),
+os.SEEK_CUR)`. Fixed with `offset.unsigned_abs()`, which clamps to 0 like every
+other over-large negative offset. Pinned by
+`tests/integration/wasi/fd_seek_extremes/`, verified to fail before the fix.
+
+### Ruled out
+
+- **The rest of `wasi/`**: fd-table, path, iovec and buffer arithmetic is guarded
+  by the `MAX_FDS` and `u32` limiter invariants; the remaining downcasts hold
+  because `pos <= contents.len() <= u32::MAX` is maintained on every seek branch.
+- **`message_fee_allocation` fee-expression failures** (`fees.rs:98,102`,
+  `message.rs:74,190`): a negative or above-`U256` fee does reach
+  `Error::internal`, but the allocation tree comes from the host's
+  `ExecutionData` envelope (`lib.rs:427`), never from the contract. The contract
+  only selects which node matches. Host input, so `Internal` is the correct
+  classification.
+- **Entry-message timestamp** (`preview1.rs:283`): `datetime.timestamp() as u64 *
+  1_000_000_000` overflows for far-future dates, but the datetime is host-supplied
+  too.
+- **`runners/`, `exe/`, `host/`, `calldata`**: no input-determined `Internal`
+  sites left. Archive, `runner.json`, version, template and environment failures
+  all carry `invalid_contract runner malformed`; the calldata decoder's `expect`s
+  guard states that arbitrary wire bytes cannot construct.
+- **Memory-exhaustion paths** throughout: excluded by the determinism rule, since
+  the outcome depends on pressure rather than on the input alone.
+
+## Internal-error hunt: `?`-to-Internal conversions (2026-08-10)
+
+Static sweep for contract-reachable `ErrorKind::Internal`: every `?` on a
+foreign error whose blanket `From` maps to `Internal` (`io`, `serde_json`,
+`Utf8Error`, `TryFromIntError`, `ZipError`, `BinaryReaderError`), every bare
+`anyhow` `?`, and every `internal!`/`Error::internal`, across `wasi/`, `rt/`,
+`runners/`, `host/`, `exe/`.
+
+### PROMOTED & FIXED: locked-slots / upgraders read leaks a VMError as a crash
+
+`create_supervisor` (`executor/src/lib.rs`) reads the sender's locked-slots and
+upgraders set out of the *contract's own* root storage, whose length words the
+contract controls. An over-limit `upgraders` (>32), `locked_slots` (>256), or a
+memory budget exhausted mid-read returns a canonical `VmError::out_of(..)` from
+`host/mod.rs`. `create_supervisor` returns `anyhow::Result` and this error was
+`?`-propagated out of `exe::run::handle` -> `main` with no result frame, so the
+harness saw `reason: 'internal error'`, identically in l/v/s.
+
+Trigger: a contract grows its own `upgraders` VLA to 33 entries, then any later
+write-permitted run aborts before its body runs. Fixed by catching the VM-kind
+error in `create_supervisor` and deferring it to the run's prepare stage (the
+existing VMError->receipt path in `run_with_impl`), so it comes back as
+`VMError("out_of upgraders")`. Genuine host-read failures still stay `Internal`.
+Pinned by `tests/integration/storage/upgraders_overflow/`, verified to fail
+(internal error) before the fix.
+
+Also fixed in passing: `rt/fees.rs:103` had a `log_error!` with malformed
+key syntax (`error:rt::errors::internal!(...)`) that did not compile -- HEAD of
+the v0.3 line did not build.
+
+### Ruled out (with probes)
+
+- **`register_runner` + `spawn_runner` + `map_file` over 30 malformed archives**
+  (probe, now deleted): bad/truncated/non-zip, empty/non-json/non-utf8/deeply
+  nested `runner.json`, garbage `chain:`/`custom:`/`name:` ids in `Depends`,
+  `MapFile` with `..`, malformed wasm, text edge cases, local-vs-central header
+  clashes, and `Depends` on a well-formed-but-absent runner id. Every one
+  resolved to a canonical `invalid_contract runner malformed` / `wasm
+  validating` / `wasm entrypoint`. No internal error, no panic.
+- **200k randomly mutated runner zips** through `runners::parse` (throwaway Rust
+  test, now deleted): never panicked.
+- The `?`-to-`Internal` sites in `wasi/` and `rt/` are neutralized by local
+  `From` impls (`TryFromIntError`/`serde_json` -> `Errno` on the WASI surface;
+  leader-result parse is total via `malformed_leader_result`) or by explicit
+  `Error::wrap(invalid_contract().., ..)`. `runners/`/`host/` `?` sites are
+  either `map_err`'d to VM errors or fed by host/manifest input (correctly
+  `Internal`). Two defence-in-depth gaps noted but not live: the main-runner
+  `load_action` (`supervisor/mod.rs:571`) and the runtime-runner gl_calls lack a
+  wrap barrier, benign only because their callees already return VM errors.
+
+## Panic hunt: contract-reachable slice/arithmetic panics (2026-08-10)
+
+Static sweep for panicking operations whose operands a contract chooses --
+range slicing (`&x[a..b]`), unchecked `+`/`-`/`*` on `usize`/`u32`/`U256`,
+`unwrap`/`expect`/`unreachable!`/`debug_assert!` -- across `wasi/`, `rt/`,
+`runners/`, `host/`, `exe/` and `crates/{calldata,common,sdk-rs}`. One defect
+found, kept as a failing probe.
+
+### FOUND: `fd_pread` past EOF slices out of range
+
+`_scratch/pread_oob/` -- **KEPT, it fails.** `fd_pread` (`preview1.rs:687`)
+computes `buf_len = min(iov.buf_len, contents.len().saturating_sub(offset))` and
+then slices `&contents[offset..offset + buf_len]`. The saturation only clamps
+the *length*: for `offset > contents.len()` the length is 0 but the slice
+*start* is still past the end, and `&v[50..50]` on a 49-byte slice panics.
+`panic = "abort"` in both profiles, so the executor dies:
+
+    thread 'main' panicked at src/wasi/preview1.rs:687:67:
+    range start index 50 out of range for slice of length 49
+
+reported to the harness as `reason: 'internal error'`. Unlike the `fd_seek`
+negation overflow, this is a slice bounds check, so it is *not* debug-profile
+dependent -- a release executor panics identically.
+
+Trigger, from any contract that can map a file (probe registers its own runner):
+`os.pread(fd, 8, len + 1)`. `os.pread(fd, 8, len)` is fine -- exactly at EOF the
+start is in range. The equivalent `fd_read`/`fd_seek` paths are clamped
+correctly; `fd_pwrite` is `Notsup`.
+
+**Not a regression of any branch**: the expression is byte-identical at
+`acb37c7`, the initial executor split.
+
+### Ruled out
+
+- **`fd_write`'s `size: u32` iovec accumulator** (`preview1.rs:725`) does
+  overflow if one call's `ciov` lengths sum above 4 GiB (entries may alias the
+  same guest memory, so the sum is not bounded by memory size), but it is
+  unreachable from Python: the WASI CPython build has no `os.writev`/`os.readv`
+  (probe printed `writev False`, `readv False`, `pread True`), so every guest
+  write carries exactly one iovec, and reaching the bound would first write
+  ~4 GiB to stdout.
+- **`fees.rs` U256 arithmetic**: `CostVec::sum` and `consume_bucket_raw`'s
+  `cumulative += prev_cost` are unchecked `U256` adds (the `uint` crate panics on
+  overflow in *both* profiles), but every summand is checked `<= remaining`
+  first, so overflowing needs bucket totals above 2^255 -- host input, not the
+  contract's. `rational_to_u256` returning `U256::MAX` instead of erroring is
+  what would feed it; the contract-facing magnitude bound (`message.rs:225`,
+  worst case < 2^183) keeps it out of reach.
+- **`rt/vm/storage.rs`** page arithmetic: `read`/`write` are bounded by the
+  `index.checked_add(buf_len)` guard in `genlayer_sdk/mod.rs:653,720`, so every
+  `page_idx * 32` stays inside `u32`; `make_delta`'s `k.1 - 1` is guarded by
+  `k.1 != 0`.
+- **`vfs::Trie::follow`'s `debug_assert!(is_normalized_path_component(..))`**:
+  every caller normalizes with `absolute = true`, under which a `..` can never
+  survive into the result, so the assert cannot fire on a guest path.
+- **`runners/archive.rs`, `runners/parse.rs`, `crates/calldata` decoder,
+  `crates/common/{gvm32,templater,version,logger,util/str}`**: all slicing is
+  either `checked_add` + `bytes.get(..)`, guarded by a `starts_with`, or over
+  fixed-size ASCII prefixes; the calldata uleb/container decoder bounds capacity
+  by the remaining input.
+- **`random_get`** bounds-checks the guest pointer before allocating, so its
+  host-side `Vec` is bounded by guest memory.
+
+## Internal-error hunt: the WASI/VFS surface a mapped file opens (2026-08-10)
+
+Three contract-triggered `INTERNAL_ERROR`s, all reproduced in leader, validator
+and sync alike, all present at the base commit `acb37c7` (none is a regression
+of this branch). Probes kept under `_scratch/`, one per defect. Every one is
+reached from a plain deterministic contract with no special permissions: the
+entry ticket is `register_runner` + `map_file`, which any contract may call.
+
+### `_scratch/pread_oob/` -- `fd_pread` slices from an offset past the end
+
+    os.pread(fd, 4, len(file) + 1)
+
+    thread 'main' panicked at src/wasi/preview1.rs:687:67:
+    range start index 44 out of range for slice of length 43
+
+`fd_pread` clamps the *length* (`contents.len().saturating_sub(offset)`) but
+never the *start*: `&contents.as_ref()[offset..(offset + buf_len)]` panics
+whenever `offset > contents.len()`, even though `buf_len` has been clamped to 0.
+`offset == len` is fine, `offset == len + 1` aborts. `panic = "abort"` in both
+profiles, so this is a process abort, reported as `reason: 'internal error'`.
+Exactly the sibling of the `fd_seek` negation overflow fixed on 2026-08-07 --
+the same audit read this function and stopped at the `try_into`s.
+
+### `_scratch/vfs_deep_path/` -- deep VFS trie overflows the native stack
+
+    map_file(rid, 'file', '/' + '/'.join('d' * 20000) + '/f.txt')
+
+    thread 'main' has overflowed its stack
+    fatal runtime error: stack overflow, aborting
+
+`preview1::map_file` builds the directory trie iteratively, so the mapping
+itself succeeds ("mapped" is printed); the crash comes afterwards, when the
+20 000-deep `FilesTrie`/`BTreeMap` chain is dropped -- `Drop` is recursive and
+there is no depth bound on a mapping target. 5 000 components survive, 20 000
+does not, so the threshold sits in between and is stack-size dependent. The
+memory limiter charges `FILE_MAPPING + path_len`, which a 40 KB path pays
+easily; the limiter is not a depth bound.
+
+### `_scratch/map_target_empty/` -- a VMError escapes as an internal error
+
+    map_file(rid, 'file', '/')
+
+    genvm "internal error": causes ["VMError(invalid_contract runner malformed)"]
+
+Any mapping target that normalizes to zero components -- `''`, `'/'`, `'///'`,
+`'/.'`, `'.'` -- hits the `locs_arr.is_empty()` guard in `preview1::map_file`,
+which returns a perfectly canonical `invalid_contract runner malformed`. It
+still comes back as `INTERNAL_ERROR` rather than as a receipt: the error is
+raised as a `wasmtime::Result`, and by the time `lib.rs:550` looks at it the
+`rt::errors::Error` downcast no longer succeeds, so `unwrap_vm_errors` treats it
+as an executor fault. The same VMError raised elsewhere on the runner path (e.g.
+`runner/custom_malformed`) does produce a receipt, so the defect is the route,
+not the code. Targets that normalize to something non-empty (`/./a`, `/a//b`,
+`/vmx/a`, `/a\0b`) all map fine.
+
+### Ruled out in the same sweep
+
+- **`fd_seek` extremes** (`2^63-1` and `-2^63` on Set/Cur, `End`): clamped or
+  `Notsup`, as the 2026-08-07 fix intended.
+- **Fd exhaustion**: 2 000 `open`s of a mapped file hit the `MAX_FDS` VMError
+  cleanly and the freed descriptors are reused without a double release.
+- **Long single path component** (1 MB): mapped and charged, no overflow.
+- **`fd_write` iovec-sum overflow** -- PROMOTED, it is real. `size += add_size`
+  in `fd_write` accumulates the ciovec lengths in a `u32`, and the buffers may
+  overlap, so the sum is not bounded by the guest's memory. Not reachable from a
+  Python contract (this CPython build has no `os.writev`/`os.readv`/`os.preadv`;
+  probed), so the case is a hand-written `.wat` runner:
+  `tests/integration/wasi/fd_write_iovec_overflow/`. It grows memory to the
+  limiter's ceiling (63 487 pages here, ~3.875 GiB), then writes two ciovecs of
+  `2^32 - total` and `total` bytes:
+
+      thread 'main' panicked at src/wasi/preview1.rs:725:13:
+      attempt to add with overflow
+
+  The first ciovec is written before the second is added in, so an unfixed
+  executor writes `2^32 - memory` (~128 MiB here) to stdout before aborting; the
+  case refuses to run if that would exceed 256 MiB. Once the total is validated
+  before anything is written, the case writes nothing but its marker.
+
+### Promoted
+
+All four now live in `tests/integration/wasi/` and all four are red until the
+executor is fixed: `fd_pread_extremes`, `map_file_deep_path` (golden encodes a
+refusal: a depth bound on a mapping target), `map_file_empty_target` (golden
+encodes the receipt the route currently swallows) and `fd_write_iovec_overflow`.
+New tags `wasi-fd-pread`, `wasi-fd-write` and `wasi-map-file` in
+`tests/tags.json`.
+
+## Internal-error hunt round 2: nothing new (2026-08-10)
+
+A follow-up sweep after the four WASI/VFS defects. **No new contract-triggered
+`INTERNAL_ERROR` found.** Recorded so the next session skips these.
+
+### Statically re-read and ruled out
+
+- **`rt/fees.rs` + `install/config/genvm.yaml`**: the only guest-controlled fee
+  inputs are `calldataLength`/`blobSize`/`outputLength`/`pages` (linear, `ceilDiv`
+  only -- `rational_to_u256`'s is-integer `internal_ensure!` cannot fire) and the
+  `use_balance` `fee_params`. The rotations-length overrun the SDK deliberately
+  does *not* bound is caught by the yaml's `if 2 * appealRounds >= arrayLen
+  validatorsPerRound then vmError "fee too_many_rounds"`; `arrayGetElem rotations
+  (idiv round 2)` and the `leaderRounds` fold both index within `len-1`.
+  `CostVec::sum` is dead code (no non-test caller); `reported_fee`'s `self.0[0]`
+  is guarded by `internal_ensure!(n > 0)` in `build_bucket`.
+- **`runners/actions.rs` `InitAction` nesting**: serde_json's own 128-frame
+  `check_recursion!` covers `deserialize_enum`/`_map`/`_seq`, and each nesting
+  level of `Seq`/`When`/`With` costs two frames, so a runner.json cannot get
+  past ~64 levels -- `validate_impl`'s `INIT_ACTION_DEPTH` (128) is a second
+  belt. `Ctx::apply` is an explicit `Work` stack, not recursion, and `Depends`
+  cycles are cut by `visited`. A `Depends` cycle between two *registered*
+  runners is impossible by construction: `custom:<hash>` is the sha3 of the code,
+  so A cannot name B while B names A.
+- **`calldata`**: every contract-facing entry (`gl_call`'s `calldata::decode`,
+  `decode_obj`'s `BinaryDeserializer`) caps depth at 128 with an explicit stack,
+  and `from_value` then works on an already-bounded in-memory `Value`. The
+  `Maybe` boundary *does* reset the depth budget (documented in
+  `codec/de/unparsed.rs`), and `to_value`'s `expect("encode-decode roundtrip
+  failed")` would abort if a re-encoded structure came out deeper than 128 --
+  but a contract cannot reach it: everything it sends is decoded through the
+  128-cap first and materialized (a `Value` source never produces
+  `Maybe::Checked`), so only a malicious *host* could stack the budgets.
+  `Maybe::kind()`'s `raw.0[0]` / `panic!("checked value is invalid ...")` has no
+  caller in the executor at all.
+- **`rt/memlimiter.rs`**: `release_no_consumed`'s post-hoc overflow `assert!`
+  needs a release without a matching consume; `VFS::place_content`/`pop_fd` are
+  symmetric on the `release_memory` flag, and mapping/fd charges are never
+  released.
+- **`rt/vm/storage.rs` `read_code_len`/`read_code_blob`**: a
+  `chain:<addr>:<a|f>:<slot>` runner id lets a contract choose the 4-byte length
+  word (any non-root slot is writable). The u32 page arithmetic in `Storage::read`
+  *would* overflow, but only for `code_size >= u32::MAX - 2`, and `charge_load`
+  maps exactly that range to `out_of memory` (`RUNNER_LOAD_COST + size` overflows
+  the checked add). Smaller sizes read zeros and die in `runners::parse` as
+  `invalid_contract runner absent`. `read` provably fills every byte of the
+  `Box::new_uninit_slice` it hands out: the host-read window spans the first to
+  the last unknown page, and the `else if` in the copy loop only gates *caching*.
+- **`host/mod.rs::get_locked_slots_for_sender`**: `4 + i * Address::SIZE` is
+  bounded by `UPGRADERS = 32`; the same for `LOCKED_SLOTS = 256`.
+- **`crates/common/{templater,version,gvm32}`, `runners/{archive,parse}.rs`,
+  `caching.rs`**: no unguarded slicing or arithmetic left.
+- **`run.rs::strip_vm_error_detail`'s `debug_assert!(is_valid_(..))`**: the only
+  free-form `VmError` string in the executor comes from a *nested executor's*
+  reply (`ResultCode::VmError` -> `Cow::Owned(code)`), i.e. host input.
+  `proc_exit` clamps to `exit_code 0..=125`, which `is_valid_` accepts.
+
+### Probed and ruled out
+
+- `_scratch/wasi_battery/` (deleted) -- ~45 `os.*` calls against a mapped file, a
+  mapped subtree, the preopen root and fds 0/1/2/3: seeks and preads at
+  `2**63-1`, reads at EOF, double `close`, `close(0)`/`close(2)` followed by a
+  reopen that *reuses fd 0 and 2*, `openat` escaping via `../..`, `stat` on a
+  100 000-char path and a 300-component path, `readdir` on a file, `read`/`pread`
+  on a directory fd, and every write-side call. Every one returns a plain errno
+  (`Rofs`/`Badf`/`Notsup`/`Isdir`/`Noent`) or succeeds. Note `os.posix_fallocate`,
+  `os.statvfs`, `os.readv`/`writev` do not exist in this CPython build.
+- `_scratch/maptraps/` (deleted) -- seven one-shot runs, one per `map_file`
+  destination that traps: file over an existing dir, file under an existing leaf,
+  a subtree under an existing leaf, `..` traversal, `/vm/`, whole archive onto
+  `/`, and the component-count boundary. All canonical (`invalid_contract`,
+  `invalid_contract runner malformed`), l/v/s identical. This also pins the new
+  `VFS_PATH_COMPONENTS` bound: 128 components map, 129 are refused.
+
+### Fuzzed in-process (new, and the fastest way to redo this)
+
+The jsonnet harness cannot reach most raw WASI arguments -- CPython forms one
+iovec per call, no `writev`/`readv`, and every pointer it passes is valid. A
+`.wat` contract can, but hand-writing one per hypothesis is slow. A **unit test
+inside `preview1.rs`** reaches the same surface with no wasm at all, because
+`ContextVFS { vfs, context }` has crate-private fields and
+`wiggle::GuestMemory::Unshared(&mut [u8])` is an ordinary byte slice:
+
+```rust
+let mut ctx = Context::new(chrono::DateTime::from_timestamp(0, 0).unwrap(), conf, [7u8; 32]);
+ctx.map_file("/d/f.txt", bytes::Bytes::from_static(b"0123456789")).unwrap();
+let mut vfs = vfs::VFS::new(Vec::new(), rt::memlimiter::Limiter::new()).unwrap();
+let mut mem = vec![0u8; 1 << 16];
+let mut c = ContextVFS { vfs: &mut vfs, context: &mut ctx };
+let mut m = wiggle::GuestMemory::Unshared(&mut mem);
+c.fd_pread(&mut m, fd, wiggle::GuestPtr::<[types::Iovec]>::new((0, 4000)), u64::MAX)
+```
+
+`futures` is not a dependency -- block on the async entry points with a
+`tokio::runtime::Builder::new_current_thread()`.
+
+**3 000 000 randomized calls** across every preview1 entry point
+(`fd_read`/`fd_pread`/`fd_write` with up to 4096 iovecs of arbitrary
+pointer/length words, `fd_readdir` at `cookie = u64::MAX` and
+`buf_len = u32::MAX`, `fd_seek` at `i64::MIN`/`i64::MAX` on all three whences,
+`random_get`/`args_get`/`environ_get`/`fd_prestat_dir_name` at the memory edge,
+`path_open`/`path_filestat_get`/`path_readlink` over a path pool including `""`,
+`"//////"`, `"../../.."`, an embedded NUL and `U+10FFFF`, plus `fd_close` /
+`fd_renumber` / `fd_advise` / `fd_allocate` / `fd_filestat_set_size` and
+`map_file` remapping the trie *under* the open fds) produced **no panic**. The
+probe is deleted; rebuild it from the snippet above if a new hypothesis needs it.
+
+Also checked: `calldata` decode -> encode -> decode over random byte strings is
+byte-faithful and never panics (but random bytes are a poor generator -- ~1 % of
+inputs decode; a grammar-based generator is needed to push this further, and
+`crates/sdk-rs/fuzz/gvm-gl-call-roundtrip.rs` already covers `gl_call::Message`
+under AFL).
+
+### `rt/vm/storage.rs` fuzzed in-process too
+
+`tests/storage_page_accounting.rs` already carries a `FakeHost`/`data_fees`
+scaffold; reusing it, 60 000 randomized `read`/`write` pairs over offsets
+clustered on page boundaries and on the `u32` ceiling
+(`0, 1, 4, 31, 32, 33, 63, 64, 127, 1024, 0xffff, 0xfffff, MAX-64, MAX-33,
+MAX-32, MAX-1` x lengths `0..70000`), interleaved with `fork`/`fold`, asserted
+read-your-writes on every write. No panic, no stale read, no accounting
+underflow. Probe deleted.
+
+The one `Storage::read` call whose length is *not* bounded by the WASI
+`index.checked_add(buf_len)` guard is `read_code_blob(slot, code_size)`, which
+reads at `index = 4`. Its page arithmetic overflows `u32` for
+`code_size >= u32::MAX - 2` (then `end_page * 32 == 2^32`), and that is
+genuinely unreachable rather than merely unlikely: `charge_load` computes
+`RUNNER_LOAD_COST + code_size` with a checked add, so it refuses everything
+above `u32::MAX - 4096 == 4294963199 < 4294967293`. `write_code`'s explicit
+`code.len() > u32::MAX - 4` rejection is the matching guard on the write side.
+Do not re-derive this -- the margin is 4093 bytes and it is deliberate.
+
+### The throughput unlock: wrap trapping probes in `spawn_sandbox`
+
+Most `VMError`s are fatal traps, so the obvious probe shape is one contract per
+case and one run per contract -- which is why earlier sweeps cost seven runs for
+seven `map_file` destinations. That is unnecessary. **A sub-VM failure is a
+value, not a trap, in the parent**, so one run can cover a whole corpus:
+
+```python
+res = spawn_sandbox(lambda: fn(arg), allow_write_storage=True, allow_send_messages=True)
+print(label, str(res)[:110])   # Return(...) | VMError("...") | UserError(...)
+```
+
+Three things worth knowing before using it:
+
+- `gl_call` **errno** failures raise a catchable Python `SystemError: <n>: <name>`
+  in whatever VM makes the call, so those need no sandbox. Only the trap-shaped
+  failures (`register_runner`, `map_file`, runner resolution) do.
+- Grant the sandbox the permissions the case needs. A default sandbox has
+  `write_storage=False`/`send_messages=False`, so `EmitEvent`, `PostMessage` and
+  `RunNondet` come back `6: forbidden` and never reach their handlers.
+- A malformed `gl_call` payload is rejected by the *decoder* long before the
+  handler, and the payload shapes are easy to get wrong: the method name in a
+  `MainCallData` object is the key `''` (not `'method'`), an address must be a
+  `gl.Address` (raw `bytes` encodes as `TYPE_BYTES` and yields `2: inval`),
+  `on` is `'accepted'`/`'finalized'`, `state` is the `StorageType` **int**, and
+  unit variants (`Yield`, `GetTimestamp`) encode as bare strings, not
+  single-key maps. If every case returns `2: inval`, the schema is wrong and
+  nothing under test has run.
+
+### Swept with it, all canonical, nothing found
+
+- **44 adversarial `runner.json` documents x `register_runner` + `spawn_runner`**
+  -- empty/duplicate-key/`$schema` objects, `StartWasm`/`LinkWasm` at `""`, `/`,
+  `../file`, a non-wasm file and an absent file, `Depends` on `contract`/`""`/
+  `custom:`/a bare `chain:` address, every `MapFile` destination shape,
+  `AddEnv` with an empty name, a `=` in the name, a self-referential `${a}`,
+  `${ENV[PATH]}` and a 100 000-byte value, `SetArgs`, `When` on both cond
+  arms, `With` on `contract` and on an absent id, and `Seq`/`When` nested 40 and
+  30 deep. Plus 15 raw archives (empty, `#`, `//`, `--`, bare version line,
+  wasm magic with and without a trailing byte, `PK\x03\x04`, a bare EOCD,
+  invalid UTF-8, trailing NULs).
+- **17 VFS destinations x {file, file twice, whole subtree}** -- confirms the
+  new bound from the inside: 127 components map, 128 map, 129 are refused,
+  5000 are refused. `/contract.py` and `/py` are mappable (the modules are
+  already imported, so it does nothing); mapping a subtree under an existing
+  leaf is `invalid_contract`.
+- **19 hand-built `gl_call` byte payloads + 45 structured messages** -- nesting
+  at depth 2/127/128/129/1000/100000, huge ulebs, container lengths of 2^32-1,
+  duplicate and descending map keys, an unknown variant, two variants in one
+  map; `EthSend`/`EthCall` calldata of 0/1/3/4/5 bytes (the `call_key.0[..4]`
+  boundary), `DeployContract` at `salt_nonce`/`value` = 2^256-1 and a 1 MiB
+  code blob, `EmitEvent` with 0/1/4/5 topics and 31/32/33/0-byte topics and a
+  256 KiB blob, method names of 0/31/32/33/100000 bytes (the `CallKey::
+  for_method` hash boundary), and every unit variant.
+- **The `chain:<addr>:<a|f>:<slot>` runner id, properly** -- an earlier attempt
+  looked clean for the wrong reason: a chain runner reads through a *fresh*
+  `Storage` bound to an explicit state mode, so it never sees the current
+  transaction's uncommitted override. It has to be a two-step
+  `util.chain([...])` case: step 0 writes the blob, step 1 resolves the id.
+  Done that way, 13 blobs x both states behave: a valid text runner actually
+  starts (`exit_code 1` from the empty entry payload), a declared length of
+  `u32::MAX` and `u32::MAX - 3` are refused as `out_of memory` by `charge_load`
+  **before** any allocation or host read, a short declaration is `invalid_contract
+  runner malformed`, `0xff` bytes are `not_utf8_text`. Keep declared lengths
+  under ~1 MiB: at 2 GiB the *mock host* materializes the slot and the case
+  times out, which is a harness failure, not a finding.
+
+### Concurrency over the shared runner cache -- ruled out
+
+The one lead the static sweeps could not settle. A contract registered **24**
+`custom:` runners (so the det VM pins 24 cells), then launched **48**
+`run_nondet` blocks, each of which spawns a sandbox inside itself. In
+validator/sync the leader result is consumed immediately and the real nondet VMs
+are queued, so with `threads: 2` several run at once -- every one of them
+attaching to all 24 granted pins through `inherit_load` -> `attach_load` ->
+`LoadedSet::insert`, while also racing on the shared disk-runner cells
+(`cpython`, `py-genlayer`, ...). Re-registering the same 24 archives afterwards
+returned identical ids (all cache hits, pins still live).
+
+All three modes printed the same thing and nothing fired: not
+`LoadedSet::insert`'s re-insert assert, not `WeakCache::assert_invariants`, not
+`assert_empty_on_teardown`, not `pin_of`'s initialized-cell assert. `dashmap`'s
+per-shard `entry()` makes `WeakCache::cell` atomic, and `loaded` is a `&mut`
+borrow, so no `await` can interleave two loads of the same set.
+
+Two SDK gotchas that cost runs here: the leader closure is **cloudpickled**, so
+it must not capture anything unpicklable (`gl.vm.VMError` fails with
+`Can't pickle R: attribute lookup R on typing failed`) -- hoist the body into a
+module-level function; and inside a contract method `run_nondet` already returns
+the value, not a `Lazy`, so `.get()` raises `AttributeError`.
+
+### `map_archive_file` -- ruled out
+
+The last untested combination: archive entry names x `file`/`to` pairs, which is
+where the only unchecked `u32` add on a contract-controlled length lives
+(`FILE_MAPPING + name_len`, `actions.rs`), next to `&name[must_start_with.len()..]`
+and `check_mapping_target`. Driven in-process (an in-crate `#[cfg(test)]` module,
+since `map_archive_file` is `pub(crate)`; build an `Archive { data, total_size }`
+literal and a `preview1::Context::new`), **320 000 calls** over 22 entry names
+(including `a` vs `a/` vs `a0` ordering neighbours, multi-byte `\u{e9}` and
+`\u{10ffff}` prefixes) x 16 `file` prefixes x 18 destinations, plus 1 MiB
+destinations. No panic.
+
+Both risky expressions are safe for structural reasons worth recording:
+`&name[file.len()..]` is guarded by `name.starts_with(file)`, and a `str` prefix
+match is always a char boundary; and `FILE_MAPPING + name_len` needs
+`name_in_fs.len()` within 256 of `u32::MAX`, but `name_in_fs` is
+`to + "/" + suffix` where `to` is bounded by guest memory (3.875 GiB max) and a
+zip entry name is bounded by the `u16` name-length field (64 KiB), so the sum
+cannot approach 2^32.
+
+### Where a next session should look
+
+Everything reachable from a *contract* through `wasi/`, `runners/`, `rt/fees`,
+`rt/vm/storage` and `calldata` has now been swept twice. The remaining
+`ErrorKind::Internal` and panic sites are all fed by host or node-config input
+(fee-expression parse, allocation tree, module replies, nested-executor result
+codes, `all.json` vs on-disk runner mismatch). Making progress there means
+changing the threat model to a hostile host -- which is the AFL/system-test
+lane, not a jsonnet probe.

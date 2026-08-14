@@ -44,7 +44,7 @@ panic = "abort"
 [features]
 # The fuzz examples link against the AFL runtime, which only `cargo-afl`
 # supplies. Gate them so a plain `cargo test` skips them instead of failing.
-fuzzing = []
+fuzzing = ["dep:mutatis", "genlayer_calldata/fuzzing"]
 
 [[example]]
 name = "fuzz-genvm-storage"
@@ -52,13 +52,33 @@ path = "fuzz/genvm-storage.rs"
 required-features = ["fuzzing"]
 
 [[example]]
-name = "fuzz-leader-result"
-path = "fuzz/leader-result.rs"
+name = "fuzz-leader-result-raw"
+path = "fuzz/leader-result-raw.rs"
 required-features = ["fuzzing"]
 
 [[example]]
-name = "fuzz-entry-data"
-path = "fuzz/entry-data.rs"
+name = "fuzz-leader-result-structured"
+path = "fuzz/leader-result-structured.rs"
+required-features = ["fuzzing"]
+
+[[example]]
+name = "fuzz-entry-data-raw"
+path = "fuzz/entry-data-raw.rs"
+required-features = ["fuzzing"]
+
+[[example]]
+name = "fuzz-entry-data-structured"
+path = "fuzz/entry-data-structured.rs"
+required-features = ["fuzzing"]
+
+[[example]]
+name = "fuzz-runners-parse-raw"
+path = "fuzz/runners-parse-raw.rs"
+required-features = ["fuzzing"]
+
+[[example]]
+name = "fuzz-runners-parse-structured"
+path = "fuzz/runners-parse-structured.rs"
 required-features = ["fuzzing"]
 
 [dependencies.wasmtime]
@@ -88,12 +108,11 @@ genvm-common = { path = "crates/common" }
 # ../../../crates/modules-interfaces resolves to <manager>/crates/modules-interfaces .
 # The host<->executor interface lives in the manager (many executors depend on
 # it). The executor is intentionally NOT standalone-buildable on its own.
-genlayer_calldata = { path = "crates/calldata", features = ["arbitrary"] }
+genlayer_calldata = { path = "crates/calldata" }
 genlayer_sdk = { path = "crates/sdk-rs", default-features = false }
 genvm_modules_interfaces = { path = "crates/modules-interfaces" }
 
 anyhow = { version = "1.0.97", default-features = false }
-arbitrary = { version = "1.0.3", features = ["derive"] }
 archery = "1.2.2"
 async-trait = "0.1.88"
 base32 = "0.5.1"
@@ -106,7 +125,9 @@ chrono = { version = "0.4.41", default-features = false, features = [
     "serde",
 ] }
 clap = { version = "4.5.35", features = ["derive"] }
+concat-idents = "1.1.5"
 const-lru = "1.0.0"
+crc32fast = "1.4.2"
 crossbeam = "0.8.4"
 dashmap = "6.1.0"
 futures-util = "0.3.31"
@@ -134,6 +155,7 @@ serde_yaml = "0.9.34"
 sha2 = "0.10.8"
 sha3 = { version = "0.10.8", features = ["asm"] }
 symbol_table = { version = "0.4.0", features = ["global", "serde"] }
+thiserror = "2.0.19"
 tokio = { version = "1.44.1", features = [
     "rt",
     "rt-multi-thread",
@@ -150,4 +172,21 @@ zip = "4.0.0"
 
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
+anyhow = { version = "1.0.97", default-features = false }
+genvm-common = { path = "crates/common" }
+genvm-fuzzing = { path = "../../../crates/fuzzing" }
 libc = "0.2.162"
+primitive-types = { version = "0.13.1", default-features = false, features = [
+    "impl-serde",
+    "std",
+] }
+tokio = { version = "1.44.1", features = [
+    "macros",
+    "rt",
+], default-features = false }
+
+[dependencies.mutatis]
+default-features = false
+features = ["derive", "std"]
+optional = true
+version = "0.5.3"

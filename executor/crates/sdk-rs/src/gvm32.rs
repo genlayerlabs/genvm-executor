@@ -6,6 +6,8 @@
 //! decoding is case-insensitive, treats `i`/`l` as `1` and `o` as `0`, and
 //! ignores `-`. Used for encoding hashes.
 
+use crate::int_traits::*;
+
 const ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
 /// Encodes a byte slice as a Crockford Base32 string (lowercase, no padding).
@@ -14,16 +16,16 @@ pub fn encode(bytes: &[u8]) -> String {
     let mut value: u32 = 0;
     let mut bits: u32 = 0;
     for &b in bytes {
-        value = (value << 8) | b as u32;
+        value = (value << 8) | u32::from(b);
         bits += 8;
         while bits >= 5 {
             bits -= 5;
-            out.push(ALPHABET[((value >> bits) & 0x1f) as usize] as char);
+            out.push(ALPHABET[((value >> bits) & 0x1f).into_int_comptime()] as char);
         }
         value &= (1 << bits) - 1;
     }
     if bits > 0 {
-        out.push(ALPHABET[((value << (5 - bits)) & 0x1f) as usize] as char);
+        out.push(ALPHABET[((value << (5 - bits)) & 0x1f).into_int_comptime()] as char);
     }
     out
 }
@@ -77,7 +79,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>, DecodeError> {
             continue;
         }
         let digit = decode_char(c).ok_or(DecodeError::InvalidChar(c as char))?;
-        value = (value << 5) | digit as u32;
+        value = (value << 5) | u32::from(digit);
         bits += 5;
         if bits >= 8 {
             bits -= 8;

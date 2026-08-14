@@ -1,4 +1,4 @@
-use arbitrary::Arbitrary;
+use genlayer_sdk::int_traits::IntoIntComptime;
 use genlayer_sdk::storage::{Slot, StorageType, TreeMap};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ pub fn __genvm_storage_read(slot: &[u8; 32], offset: u32, buf: &mut [u8]) -> u32
     STORAGE.with(|s| {
         let s = s.borrow();
         if let Some(data) = s.get(slot) {
-            let off = offset as usize;
+            let off = offset.into_int_comptime();
             for (i, b) in buf.iter_mut().enumerate() {
                 *b = data.get(off + i).copied().unwrap_or(0);
             }
@@ -34,23 +34,19 @@ pub fn __genvm_storage_write(slot: &[u8; 32], offset: u32, buf: &[u8]) -> u32 {
     STORAGE.with(|s| {
         let mut s = s.borrow_mut();
         let data = s.entry(*slot).or_default();
-        let end = offset as usize + buf.len();
+        let end = offset.into_int_comptime() + buf.len();
         if data.len() < end {
             data.resize(end, 0);
         }
-        data[offset as usize..end].copy_from_slice(buf);
+        data[offset.into_int_comptime()..end].copy_from_slice(buf);
     });
     0
 }
 
-// Fuzz operations
+#[path = "shared/tree-map-op.rs"]
+mod shared;
 
-#[derive(Debug, Arbitrary)]
-enum Op {
-    Insert { key: u32, value: u32 },
-    Remove { key: u32 },
-    Get { key: u32 },
-}
+use shared::Op;
 
 fn check_order(tree: &<TreeMap<u32, u32> as StorageType>::Handle, reference: &BTreeMap<u32, u32>) {
     let mut entries = Vec::new();
@@ -101,7 +97,10 @@ fn run_fuzz(ops: Vec<Op>) {
 }
 
 fn main() {
-    afl::fuzz!(|data: Vec<Op>| {
-        run_fuzz(data);
+    afl::fuzz!(|data: &[u8]| {
+        let Some(ops) = genvm_fuzzing::decode::<Vec<Op>>(data) else {
+            return;
+        };
+        run_fuzz(ops);
     });
 }

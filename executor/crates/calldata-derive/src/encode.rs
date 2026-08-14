@@ -3,6 +3,7 @@ use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
 use crate::attrs::{ContainerAttrs, FieldAttrs};
+use crate::int_traits::IntoIntComptime;
 
 pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let name = &input.ident;
@@ -66,7 +67,7 @@ fn encode_struct(fields: &Fields) -> syn::Result<TokenStream> {
                     })
                 }
             } else {
-                let len = fields.unnamed.len() as u64;
+                let len: u64 = fields.unnamed.len().into_int_comptime();
                 let encodes = fields
                     .unnamed
                     .iter()
@@ -137,10 +138,11 @@ fn encode_named_fields(
 
     // Fields without `option_as_absence` are always present; the rest add a
     // runtime `is_some()` term so the map length matches the emitted keys.
-    let base_len = entries
+    let base_len: u64 = entries
         .iter()
         .filter(|(_, _, _, a)| !a.option_as_absence)
-        .count() as u64;
+        .count()
+        .into_int_comptime();
     let len_terms = entries
         .iter()
         .filter(|(_, _, _, a)| a.option_as_absence)
@@ -269,7 +271,7 @@ fn encode_enum_external(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                             }
                         })
                         .collect::<syn::Result<Vec<_>>>()?;
-                    let len = n as u64;
+                    let len: u64 = n.into_int_comptime();
                     Ok(quote! {
                         Self::#variant_ident(#(#bindings),*) => {
                             __enc.start_map(1)?;
@@ -293,7 +295,7 @@ fn encode_enum_external(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                     }
                     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-                    let inner_len = entries.len() as u64;
+                    let inner_len: u64 = entries.len().into_int_comptime();
                     let all_idents: Vec<_> = fields
                         .named
                         .iter()
@@ -390,7 +392,7 @@ fn encode_enum_untagged(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                             }
                         })
                         .collect::<syn::Result<Vec<_>>>()?;
-                    let len = n as u64;
+                    let len: u64 = n.into_int_comptime();
                     Ok(quote! {
                         Self::#variant_ident(#(#bindings),*) => {
                             __enc.start_array(#len)?;
@@ -411,7 +413,7 @@ fn encode_enum_untagged(data: &syn::DataEnum) -> syn::Result<TokenStream> {
                     }
                     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-                    let inner_len = entries.len() as u64;
+                    let inner_len: u64 = entries.len().into_int_comptime();
                     let all_idents: Vec<_> = fields
                         .named
                         .iter()
@@ -496,7 +498,7 @@ fn encode_enum_tagged(data: &syn::DataEnum, tag_field: &str) -> syn::Result<Toke
 
                     // Tag + fields, all sorted together.
                     // Insert the tag entry and sort.
-                    let total = (entries.len() + 1) as u64;
+                    let total: u64 = (entries.len() + 1).into_int_comptime();
 
                     // We need to interleave tag among fields in sorted order.
                     entries.sort_by(|a, b| a.0.cmp(&b.0));

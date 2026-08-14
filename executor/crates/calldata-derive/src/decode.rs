@@ -86,7 +86,8 @@ fn decode_struct(name: &syn::Ident, fields: &Fields) -> syn::Result<TokenStream>
                                 return ::core::result::Result::Err(
                                     genlayer_calldata::codec::DecodeError::LengthMismatch {
                                         expected: #len,
-                                        got: _len as usize,
+                                        got: ::core::primitive::usize::try_from(_len)
+                                            .unwrap_or(::core::primitive::usize::MAX),
                                     }
                                 );
                             }
@@ -503,7 +504,8 @@ fn decode_enum_external(name: &syn::Ident, data: &syn::DataEnum) -> syn::Result<
                     return ::core::result::Result::Err(
                         genlayer_calldata::codec::DecodeError::LengthMismatch {
                             expected: 1,
-                            got: __len as usize,
+                            got: ::core::primitive::usize::try_from(__len)
+                                .unwrap_or(::core::primitive::usize::MAX),
                         },
                     );
                 }
@@ -608,7 +610,8 @@ fn decode_variant_payload(
                             return ::core::result::Result::Err(
                                 genlayer_calldata::codec::DecodeError::LengthMismatch {
                                     expected: #n,
-                                    got: __len as usize,
+                                    got: ::core::primitive::usize::try_from(__len)
+                                        .unwrap_or(::core::primitive::usize::MAX),
                                 }
                             );
                         }

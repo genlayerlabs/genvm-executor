@@ -17,7 +17,7 @@ impl std::fmt::Display for Address {
     }
 }
 
-#[cfg(feature = "arbitrary")]
+#[cfg(feature = "fuzzing")]
 impl arbitrary::Arbitrary<'_> for Address {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         let mut raw = [0u8; ADDRESS_SIZE];
@@ -45,8 +45,8 @@ impl Address {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut out = [0u8; 40];
         for (i, &b) in self.0.iter().enumerate() {
-            out[i * 2] = HEX[(b >> 4) as usize];
-            out[i * 2 + 1] = HEX[(b & 0x0f) as usize];
+            out[i * 2] = HEX[usize::from(b >> 4)];
+            out[i * 2 + 1] = HEX[usize::from(b & 0x0f)];
         }
 
         // hash of the lowercase hex; a hex letter is upper-cased when the
@@ -310,14 +310,14 @@ impl From<primitive_types::U256> for Value {
     }
 }
 
-#[cfg(feature = "arbitrary")]
+#[cfg(feature = "fuzzing")]
 impl arbitrary::Arbitrary<'_> for Value {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         Self::arbitrary_depth(u, 3)
     }
 }
 
-#[cfg(feature = "arbitrary")]
+#[cfg(feature = "fuzzing")]
 impl Value {
     fn arbitrary_depth(u: &mut arbitrary::Unstructured<'_>, depth: u8) -> arbitrary::Result<Self> {
         if depth == 0 {

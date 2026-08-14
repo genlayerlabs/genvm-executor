@@ -4,14 +4,15 @@ use std::{borrow::BorrowMut, io::Write};
 use tracing::instrument;
 use wiggle::{GuestError, GuestMemory, GuestPtr};
 
+use genvm_common::internal_constants::top_limits;
 use genvm_common::*;
 
 use super::vfs;
+use crate::int_traits::*;
 use crate::{
-    rt,
+    rt, runners,
     wasi::{self, base, common::align_slice},
 };
-use std::collections::BTreeMap;
 
 pub struct Context {
     args_buf: Vec<u8>,
@@ -19,8 +20,10 @@ pub struct Context {
     env_buf: Vec<u8>,
     env_offsets: Vec<u32>,
 
+    preopen: vfs::Trie<()>,
+
     fs: Box<FilesTrie>,
-    unix_timestamp: u64,
+    unix_timestamp_nanos: u64,
 
     conf: base::Config,
     mt19937_rng: mt19937::MT19937,
@@ -116,14 +119,7 @@ impl From<GuestError> for generated::types::Error {
     }
 }
 
-enum FilesTrie {
-    Dir {
-        children: BTreeMap<String, Box<FilesTrie>>,
-    },
-    File {
-        data: bytes::Bytes,
-    },
-}
+type FilesTrie = vfs::Trie<bytes::Bytes>;
 
 impl Context {
     pub fn log(&self) -> serde_json::Value {
@@ -131,13 +127,13 @@ impl Context {
             {
                 "env": String::from_utf8_lossy(&self.env_buf),
                 "args": String::from_utf8_lossy(&self.args_buf),
-                "datetime_timestamp": self.unix_timestamp,
-                "datetime": chrono::DateTime::<chrono::Utc>::from_timestamp(self.unix_timestamp as i64, 0).map(|x| x.to_rfc3339()),
+                "datetime_timestamp": self.unix_timestamp_nanos,
+                "datetime": chrono::DateTime::<chrono::Utc>::from_timestamp(self.unix_timestamp_nanos as i64, 0).map(|x| x.to_rfc3339()),
             }
         )
     }
-    pub fn set_args(&mut self, args: &[String]) -> anyhow::Result<()> {
-        for c in args {
+    pub fn set_args(&mut self, args: &runners::actions::SetArgs) -> anyhow::Result<()> {
+        for c in &args.0 {
             let off: u32 = self
                 .args_buf
                 .len()
@@ -150,8 +146,8 @@ impl Context {
         Ok(())
     }
 
-    pub fn set_env(&mut self, env: &[(String, String)]) -> anyhow::Result<()> {
-        for (name, val) in env {
+    pub fn set_env(&mut self, env: &runners::actions::Env) -> anyhow::Result<()> {
+        for (name, val) in &env.vars {
             let off: u32 = self
                 .env_buf
                 .len()
@@ -166,43 +162,50 @@ impl Context {
         Ok(())
     }
 
-    pub fn map_file(&mut self, location: &str, contents: bytes::Bytes) -> wasmtime::Result<()> {
-        let mut location_patched = String::new();
-        location_patched.reserve(location.len());
+    /// Reports our own error type: a code boxed in a `wasmtime::Error` is lost.
+    pub fn map_file(&mut self, location: &str, contents: bytes::Bytes) -> rt::errors::Result<()> {
+        let malformed = || {
+            rt::errors::Error::vm(
+                abi::consts::VmError::invalid_contract()
+                    .runner()
+                    .malformed(),
+            )
+        };
 
-        let mut last_slash = true;
-        for c in location.chars() {
-            if c == '/' {
-                if !last_slash {
-                    location_patched.push(c);
-                }
-                last_slash = true;
-            } else {
-                last_slash = false;
-                location_patched.push(c);
-            }
+        let locs_arr = vfs::split_normalize_path(location, true);
+
+        if locs_arr.is_empty() {
+            return Err(
+                malformed().context(format!("mapping destination `{location}` names no file"))
+            );
+        }
+
+        // the trie is dropped recursively, so unbounded depth is a stack overflow
+        if locs_arr.len() > top_limits::VFS_PATH_COMPONENTS.into_int_comptime() {
+            return Err(malformed().context(format!(
+                "mapping destination has {} components, at most {} are allowed",
+                locs_arr.len(),
+                top_limits::VFS_PATH_COMPONENTS,
+            )));
         }
 
         let mut cur_trie: &mut FilesTrie = &mut self.fs;
-        let locs_arr: Vec<&str> = location_patched.split("/").collect();
         for loc in &locs_arr[0..locs_arr.len() - 1] {
+            let loc = *loc;
             cur_trie = match cur_trie.borrow_mut() {
-                FilesTrie::Dir { children } => match children.entry(String::from(*loc)) {
+                FilesTrie::Dir(children) => match children.entry(String::from(loc)) {
                     std::collections::btree_map::Entry::Occupied(entry) => {
-                        Ok::<&mut FilesTrie, wasmtime::Error>(entry.into_mut())
+                        Ok::<&mut FilesTrie, rt::errors::Error>(entry.into_mut())
                     }
                     std::collections::btree_map::Entry::Vacant(entry) => {
-                        Ok(&mut **entry.insert(Box::new(FilesTrie::Dir {
-                            children: BTreeMap::new(),
-                        })))
+                        Ok(&mut *entry.insert(FilesTrie::Dir(Default::default())))
                     }
                 },
-                FilesTrie::File { data: _ } => {
+                FilesTrie::Leaf(_) => {
                     // wanted a dir but found a file
                     return Err(rt::errors::Error::vm(
                         abi::consts::VmError::invalid_contract().val(),
-                    )
-                    .into());
+                    ));
                 }
             }?;
         }
@@ -210,19 +213,26 @@ impl Context {
         let fname = locs_arr[locs_arr.len() - 1];
 
         match cur_trie.borrow_mut() {
-            FilesTrie::Dir { children } => match children.entry(String::from(fname)) {
+            FilesTrie::Dir(children) => match children.entry(String::from(fname)) {
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    **entry.get_mut() = FilesTrie::File { data: contents };
+                    if matches!(entry.get(), FilesTrie::Leaf(_)) {
+                        *entry.get_mut() = FilesTrie::Leaf(contents);
+                    } else {
+                        // wanted a file but found a dir
+                        return Err(rt::errors::Error::vm(
+                            abi::consts::VmError::invalid_contract().val(),
+                        ));
+                    }
                 }
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(Box::new(FilesTrie::File { data: contents }));
+                    entry.insert(FilesTrie::Leaf(contents));
                 }
             },
-            FilesTrie::File { data: _ } => {
+            FilesTrie::Leaf(_) => {
                 // wanted a dir but found a file
-                return Err(
-                    rt::errors::Error::vm(abi::consts::VmError::invalid_contract().val()).into(),
-                );
+                return Err(rt::errors::Error::vm(
+                    abi::consts::VmError::invalid_contract().val(),
+                ));
             }
         };
 
@@ -278,20 +288,52 @@ impl Context {
         });
         let seed = mt19937::MT19937::new_with_slice_seed(&seed_words);
 
+        let unix_ts_ns = (datetime.timestamp() as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(u64::from(datetime.timestamp_subsec_nanos()));
+
         Self {
             args_buf: Vec::new(),
             args_offsets: Vec::new(),
             env_buf: Vec::new(),
             env_offsets: Vec::new(),
-            fs: Box::new(FilesTrie::Dir {
-                children: BTreeMap::new(),
-            }),
-            unix_timestamp: datetime.timestamp() as u64 * 1_000_000_000
-                + datetime.timestamp_subsec_nanos() as u64,
+            fs: Box::new(FilesTrie::Dir(Default::default())),
+            unix_timestamp_nanos: unix_ts_ns,
             conf,
+            preopen: vfs::Trie::Leaf(()),
             mt19937_rng: seed,
         }
     }
+}
+
+pub fn join_dir_and_path<'a, T>(
+    preopen: &vfs::Trie<()>,
+    dir: &'a [T],
+    path: &'a str,
+) -> Result<Vec<&'a str>, generated::types::Error>
+where
+    T: AsRef<str> + 'a,
+{
+    let all_comp =
+        vfs::split_normalize_paths(dir.iter().map(|s| s.as_ref()).chain(path.split('/')), true);
+
+    match preopen.follow(all_comp.iter().map(std::ops::Deref::deref)) {
+        vfs::TrieFollowResult::NotFound => return Err(generated::types::Errno::Notcapable.into()),
+        vfs::TrieFollowResult::NotDir | vfs::TrieFollowResult::Found(vfs::Trie::Leaf(_)) => {} // we hit a leaf
+        vfs::TrieFollowResult::Found(vfs::Trie::Dir(_)) => {
+            return Err(generated::types::Errno::Notcapable.into())
+        } // leaf = has perms. Here we don't
+    }
+
+    for component in dir {
+        debug_assert!(vfs::is_normalized_path_component(component.as_ref()));
+    }
+
+    for component in &all_comp {
+        debug_assert!(vfs::is_normalized_path_component(component));
+    }
+
+    Ok(all_comp)
 }
 
 fn args_env_get(
@@ -381,7 +423,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         _id: generated::types::Clockid,
         _precision: generated::types::Timestamp,
     ) -> Result<generated::types::Timestamp, generated::types::Error> {
-        Ok(self.context.unix_timestamp)
+        Ok(self.context.unix_timestamp_nanos)
     }
 
     fn fd_advise(
@@ -613,10 +655,11 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
                     for iov in iovs.iter() {
                         let iov = iov?;
                         let iov = memory.read(iov)?;
-                        let remaining_len = contents.len() as u32 - *pos;
+                        let contents_len: u32 = contents.len().into_int_downcast_panicking();
+                        let remaining_len = contents_len - *pos;
                         let len = iov.buf_len.min(remaining_len);
-                        let cont_slice: &[u8] =
-                            &contents.as_ref()[*pos as usize..(*pos + len) as usize];
+                        let cont_slice: &[u8] = &contents.as_ref()
+                            [(*pos).into_int_comptime()..(*pos + len).into_int_comptime()];
                         memory.copy_from_slice(cont_slice, iov.buf.as_array(len))?;
                         *pos += len;
                         written += len;
@@ -648,11 +691,12 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
                 }
                 vfs::FileDescriptor::File(vfs::FileContents { contents, .. }) => {
                     let mut written: usize = 0;
-                    let mut offset: usize = offset.try_into()?;
+                    // clamped, not saturated: a past-the-end offset still indexes
+                    let mut offset: usize = usize::try_from(offset)?.min(contents.len());
                     for iov in iovs.iter() {
                         let iov = iov?;
                         let iov = memory.read(iov)?;
-                        let remaining_len = contents.len().saturating_sub(offset);
+                        let remaining_len = contents.len() - offset;
                         let mut buf_len: usize = iov.buf_len.try_into()?;
                         buf_len = buf_len.min(remaining_len);
                         let cont_slice: &[u8] = &contents.as_ref()[offset..(offset + buf_len)];
@@ -684,6 +728,19 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             vfs::FileDescriptor::Stdin => return Err(generated::types::Errno::Notsup.into()),
             _ => return Err(generated::types::Errno::Rofs.into()),
         };
+        // ciovecs may overlap, so check the total before writing anything
+        let mut total: u32 = 0;
+        for ciov in ciovs.iter() {
+            let ciov_read = memory.read(ciov?)?;
+            total = match total.checked_add(ciov_read.buf_len) {
+                Some(total) => total,
+                None => {
+                    log_warn!("ciovec lengths do not fit the written-bytes count");
+                    return Err(generated::types::Errno::Overflow.into());
+                }
+            };
+        }
+
         let mut size: u32 = 0;
         for ciov in ciovs.iter() {
             let ciov_read = memory.read(ciov?)?;
@@ -801,19 +858,25 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
                     match whence {
                         generated::types::Whence::Cur => {
                             if offset < 0 {
-                                let offset = -offset as u64;
-                                if offset > *pos as u64 {
+                                // `unsigned_abs`, not `-offset`: negating
+                                // `i64::MIN` overflows, and the profile aborts.
+                                let offset = offset.unsigned_abs();
+                                if offset > u64::from(*pos) {
                                     *pos = 0;
                                 } else {
-                                    *pos -= offset as u32;
+                                    let offset: u32 = offset.into_int_downcast_panicking();
+                                    *pos -= offset;
                                 }
                             } else {
                                 let offset = offset as u64;
-                                let rem = contents.len() as u32 - *pos;
-                                if offset > rem as u64 {
-                                    *pos = contents.len() as u32;
+                                let contents_len: u32 =
+                                    contents.len().into_int_downcast_panicking();
+                                let rem = contents_len - *pos;
+                                if offset > u64::from(rem) {
+                                    *pos = contents.len().into_int_downcast_panicking();
                                 } else {
-                                    *pos += offset as u32;
+                                    let offset: u32 = offset.into_int_downcast_panicking();
+                                    *pos += offset;
                                 }
                             }
                         }
@@ -822,10 +885,11 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
                         }
                         generated::types::Whence::Set => {
                             let offset = if offset < 0 { 0 } else { offset as u64 };
-                            if offset > contents.len() as u32 as u64 {
-                                *pos = contents.len() as u32;
+                            let contents_len: u32 = contents.len().into_int_downcast_panicking();
+                            if offset > u64::from(contents_len) {
+                                *pos = contents.len().into_int_downcast_panicking();
                             } else {
-                                *pos = offset as u32;
+                                *pos = offset.into_int_downcast_panicking();
                             }
                         }
                     };
@@ -881,11 +945,12 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             return Err(generated::types::Errno::Badf.into());
         };
 
-        let dirent = self.dir_fd_follow_trie(dir_path, &self.context.fs, None)?;
-        let FilesTrie::Dir {
-            children: direntries,
-        } = dirent
-        else {
+        let dirent = self.dir_fd_get_trie(&vfs::split_normalize_paths(
+            dir_path.iter().map(String::as_str),
+            true,
+        ))?;
+
+        let FilesTrie::Dir(direntries) = dirent else {
             return Err(generated::types::Errno::Badf.into());
         };
 
@@ -911,17 +976,14 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         ];
 
         let dirent_actual_iter = direntries.iter().zip(3u64..).map(|(x, idx)| {
-            let name_len: u32 =
-                x.0.len()
-                    .try_into()
-                    .expect("directory entry name too long for u32");
+            let name_len: u32 = x.0.len().into_int_downcast_panicking();
             (
                 generated::types::Dirent {
                     d_next: idx,
                     d_ino: 0,
-                    d_type: match **x.1 {
-                        FilesTrie::Dir { .. } => generated::types::Filetype::Directory,
-                        FilesTrie::File { .. } => generated::types::Filetype::RegularFile,
+                    d_type: match *x.1 {
+                        FilesTrie::Dir(_) => generated::types::Filetype::Directory,
+                        FilesTrie::Leaf(_) => generated::types::Filetype::RegularFile,
                     },
                     d_namlen: name_len,
                 },
@@ -939,7 +1001,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             use wiggle::GuestType;
             let dirent_mem_buf =
                 &mut align_slice(&mut dirent_mem_buf, generated::types::Dirent::guest_align())
-                    [..generated::types::Dirent::guest_size() as usize];
+                    [..generated::types::Dirent::guest_size().into_int_comptime()];
             let mut fake_mem = wiggle::GuestMemory::Unshared(dirent_mem_buf);
 
             fake_mem.write(
@@ -950,7 +1012,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             buf = write_bytes_capacity(
                 memory,
                 buf,
-                &dirent_mem_buf[..generated::types::Dirent::guest_size() as usize],
+                &dirent_mem_buf[..generated::types::Dirent::guest_size().into_int_comptime()],
                 &mut cap,
             )?;
             if cap == 0 {
@@ -990,14 +1052,10 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         let Some(vfs::FileDescriptor::Dir { path: dir_path }) = self.vfs.fds.get(&fdi) else {
             return Err(generated::types::Errno::Badf.into());
         };
-        let mut result_path = dir_path.clone();
-        let mut cur_trie =
-            self.dir_fd_follow_trie(dir_path, &self.context.fs, Some(&mut result_path))?;
-        for fname in path.split("/") {
-            cur_trie = self.dir_fd_get_trie(fname, cur_trie, &mut Some(&mut result_path))?;
-        }
+        let path_components = join_dir_and_path(&self.context.preopen, dir_path, &path)?;
+        let cur_trie = self.dir_fd_get_trie(&path_components)?;
         match cur_trie {
-            FilesTrie::File { data } => Ok(generated::types::Filestat {
+            FilesTrie::Leaf(data) => Ok(generated::types::Filestat {
                 dev: 0,
                 ino: 0,
                 filetype: generated::types::Filetype::RegularFile,
@@ -1007,7 +1065,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
                 mtim: 0,
                 ctim: 0,
             }),
-            FilesTrie::Dir { .. } => Ok(generated::types::Filestat {
+            FilesTrie::Dir(_) => Ok(generated::types::Filestat {
                 dev: 0,
                 ino: 0,
                 filetype: generated::types::Filetype::Directory,
@@ -1075,14 +1133,10 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             let Some(vfs::FileDescriptor::Dir { path: dir_path }) = self.vfs.fds.get(&fdi) else {
                 return Err(generated::types::Errno::Badf.into());
             };
-            let mut resulting_path = dir_path.clone();
-            let mut cur_trie =
-                self.dir_fd_follow_trie(dir_path, &self.context.fs, Some(&mut resulting_path))?;
-            for fname in file_path.split("/") {
-                cur_trie = self.dir_fd_get_trie(fname, cur_trie, &mut Some(&mut resulting_path))?;
-            }
+            let path_components = join_dir_and_path(&self.context.preopen, dir_path, &file_path)?;
+            let cur_trie = self.dir_fd_get_trie(&path_components)?;
             match cur_trie {
-                FilesTrie::File { data } => {
+                FilesTrie::Leaf(data) => {
                     let f = vfs::FileDescriptor::File(vfs::FileContents {
                         contents: data.clone(),
                         pos: 0,
@@ -1093,7 +1147,10 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
                 }
                 FilesTrie::Dir { .. } => {
                     let f = vfs::FileDescriptor::Dir {
-                        path: resulting_path,
+                        path: path_components
+                            .into_iter()
+                            .map(String::from)
+                            .collect::<Vec<String>>(),
                     };
                     self.vfs.fds.insert(new_fd, f);
                     Ok(new_fd.into())
@@ -1220,7 +1277,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         let buf = buf.as_array(buf_len);
         memory.bounds_check(buf)?;
 
-        let mut mem: Vec<u8> = std::iter::repeat_n(0, buf_len as usize).collect();
+        let mut mem: Vec<u8> = std::iter::repeat_n(0, buf_len.into_int_comptime()).collect();
 
         if self.context.conf.permissions.deterministic {
             use rand_core::RngCore as _;
@@ -1282,48 +1339,27 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
 }
 
 impl ContextVFS<'_> {
-    fn dir_fd_get_trie<'a>(
+    fn dir_fd_get_trie(
         &self,
-        dir_path: &str,
-        cur_trie: &'a FilesTrie,
-        path: &mut Option<&mut Vec<String>>,
-    ) -> Result<&'a FilesTrie, generated::types::Error> {
-        if dir_path == "." || dir_path.is_empty() {
-            return Ok(cur_trie);
-        }
-        if dir_path == ".." {
-            match path {
-                None => return Err(generated::types::Errno::Noent.into()),
-                Some(rf) => {
-                    let _ = rf.pop();
-                    let goto = rf.clone();
-                    self.dir_fd_follow_trie(&goto, &self.context.fs, Some(rf))?;
-                }
+        path_from_root: &[&str],
+    ) -> Result<&FilesTrie, generated::types::Error> {
+        let mut cur_trie: &FilesTrie = &self.context.fs;
+
+        for component in path_from_root {
+            let p = *component;
+            debug_assert!(vfs::is_normalized_path_component(p));
+
+            match cur_trie {
+                FilesTrie::Leaf(_) => return Err(generated::types::Errno::Badf.into()),
+                FilesTrie::Dir(children) => match children.get(p) {
+                    Some(new_trie) => {
+                        cur_trie = new_trie;
+                    }
+                    None => return Err(generated::types::Errno::Noent.into()),
+                },
             }
         }
-        match cur_trie {
-            FilesTrie::File { .. } => Err(generated::types::Errno::Badf.into()),
-            FilesTrie::Dir { children } => match children.get(dir_path) {
-                Some(new_trie) => {
-                    if let Some(rf) = path {
-                        rf.push(dir_path.into());
-                    }
-                    Ok(new_trie)
-                }
-                None => Err(generated::types::Errno::Noent.into()),
-            },
-        }
-    }
 
-    fn dir_fd_follow_trie<'a>(
-        &self,
-        dir_path: &Vec<String>,
-        mut cur_trie: &'a FilesTrie,
-        mut path: Option<&mut Vec<String>>,
-    ) -> Result<&'a FilesTrie, generated::types::Error> {
-        for dir in dir_path {
-            cur_trie = self.dir_fd_get_trie(dir, cur_trie, &mut path)?;
-        }
         Ok(cur_trie)
     }
 
@@ -1358,7 +1394,7 @@ fn write_bytes_capacity(
 ) -> Result<GuestPtr<u8>, generated::types::Error> {
     let len = u32::try_from(buf.len())?.min(*capacity);
 
-    memory.copy_from_slice(&buf[..len as usize], ptr.as_array(len))?;
+    memory.copy_from_slice(&buf[..len.into_int_comptime()], ptr.as_array(len))?;
     *capacity -= len;
     let next = ptr.add(len)?;
     Ok(next)

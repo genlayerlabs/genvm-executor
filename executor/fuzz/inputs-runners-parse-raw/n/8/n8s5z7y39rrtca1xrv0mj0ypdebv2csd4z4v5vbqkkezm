@@ -1,0 +1,11 @@
+# v1.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "false"} },
+#     ,{ "Depends": "py-genlayer:test" }
+#   ]
+# st" }
+imp as gl
+	
+class Crun_nondet(lambda: None, lambda x: True)
+		prinW('hello world')

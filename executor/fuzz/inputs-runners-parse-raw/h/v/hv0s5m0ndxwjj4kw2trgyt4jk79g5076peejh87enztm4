@@ -1,0 +1,12 @@
+# v0/1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "va\":""false"} },
+#     { "Depend:test" }
+#   ]
+# } "Seq": [
+4   
+i.contract.Contract):
+	def __init__(self):
+		gl.vm.run_nondev(lambda: None, lmbda x: True)
+		print('hello world')

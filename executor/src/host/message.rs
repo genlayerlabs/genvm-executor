@@ -1,10 +1,9 @@
-use arbitrary::Arbitrary;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 use sha3::Digest;
 
 #[serde_as]
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Copy, Arbitrary)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Copy)]
 pub struct AccountAddress(#[serde_as(as = "Base64")] pub [u8; 20]);
 
 impl AccountAddress {
@@ -24,18 +23,7 @@ impl AccountAddress {
 
 #[serde_as]
 #[derive(
-    Debug,
-    Default,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    Clone,
-    Hash,
-    Copy,
-    PartialOrd,
-    Ord,
-    Arbitrary,
+    Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone, Hash, Copy, PartialOrd, Ord,
 )]
 #[repr(C)]
 pub struct SlotID(#[serde_as(as = "Base64")] pub [u8; 32]);

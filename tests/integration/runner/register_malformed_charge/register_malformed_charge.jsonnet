@@ -4,7 +4,7 @@ local util = import 'templates/util.jsonnet';
 // error. The pre-parse charge is retained, but the failed parse produces no
 // `runner load` record — so only the preceding valid registration is logged as
 // `charged`, and nothing is logged for the malformed bytes.
-{tags: util.features([['runner', 'register']], 'stable'),
+{tags: util.features([['runner', 'load'], ['runner', 'malformed'], ['runner', 'register']], 'stable') + ['python'],
 	entry: util.addPaths([simple.run('${jsonnetDir}/${fileBaseName}.py') {
 		stable_hash: false,
 		permissions: 'wscn',

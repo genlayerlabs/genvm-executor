@@ -1,0 +1,8 @@
+# v0.1ye.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "false"} },
+#     { "Depends": "py-genlayer:test"																																										 :
+	d):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

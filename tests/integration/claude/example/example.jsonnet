@@ -17,12 +17,11 @@ local common = {
 };
 
 {
-	tags: ["stable", "fuzz"],
+	tags: util.features([['message', 'external', 'view']], 'stable') + ['fuzz', 'python'],
 	entry: util.addPaths([
 		// step 0: deploy A
 		common {
 			vars: vars,
-			deadline: 10,
 			code: '${jsonnetDir}/contract_a.py',
 			message: msg {
 				contract_address: addrA,
@@ -34,7 +33,6 @@ local common = {
 				// step 1: deploy B
 				common {
 					vars: vars,
-					deadline: 10,
 					code: '${jsonnetDir}/contract_b.py',
 					message: msg {
 						contract_address: addrB,
@@ -46,7 +44,6 @@ local common = {
 						// step 2: call B.read_from(A)
 						common {
 							vars: vars,
-							deadline: 10,
 							code: null,
 							accounts: {
 								[addrA]: { code: '${jsonnetDir}/contract_a.py' },

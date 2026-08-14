@@ -5,6 +5,9 @@ pub mod codec;
 pub mod consts;
 mod encoder;
 mod error;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
+mod int_traits;
 mod types;
 
 pub mod unparsed {

@@ -1,0 +1,13 @@
+[package]
+name = "fuzz-mutator-genvm-common-encode"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "lib.rs"
+
+[dependencies]
+genlayer_calldata = { path = "../../..", features = ["fuzzing"] }
+genvm-fuzzing = { path = "../../../../../../../../crates/fuzzing" }

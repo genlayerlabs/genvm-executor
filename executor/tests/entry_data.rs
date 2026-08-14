@@ -1,7 +1,6 @@
 use genlayer_calldata::codec::{Decode, HasDeserializer};
 use genlayer_sdk::abi;
 use genvm::calldata::{self, Value};
-use genvm::public_abi;
 
 fn map(entries: &[(&str, Value)]) -> Value {
     Value::Map(

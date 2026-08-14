@@ -45,6 +45,11 @@ fn write_atomically(path: &std::path::Path, data: &[u8]) -> anyhow::Result<()> {
     let write_tmp = || -> std::io::Result<()> {
         let mut file = std::fs::File::create(&tmp_path)?;
         file.write_all(data)?;
+
+        let mut perms = file.metadata()?.permissions();
+        perms.set_readonly(true);
+        file.set_permissions(perms)?;
+
         file.sync_all()?;
         std::fs::rename(&tmp_path, path)
     };
@@ -108,9 +113,11 @@ fn compile_single_file(
     let mut result_dir_path = precompile_dir.to_owned();
     result_dir_path.push(base_path);
 
-    let data = util::mmap_file(zip_path).with_context(|| format!("memory mapping {zip_path:?}"))?;
+    let data = bytes::Bytes::from(
+        std::fs::read(zip_path).with_context(|| format!("reading {zip_path:?}"))?,
+    );
 
-    let arch = genvm::runners::Archive::from_ustar(bytes::Bytes::copy_from_slice(data.as_ref()))
+    let arch = genvm::runners::Archive::from_ustar_bytes(data)
         .with_context(|| format!("parsing ustar archive {zip_path:?}"))?;
 
     for (entry_name, contents) in arch

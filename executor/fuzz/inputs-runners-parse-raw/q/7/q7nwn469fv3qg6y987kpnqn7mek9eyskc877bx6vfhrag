@@ -1,0 +1,10 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GENABLE_PROFILER", "val": "false"} },
+#     { "Depends": "py-genlayer:zzzzzzzzzzzztest" }
+#   ]
+# }
+import ges act(gl__(self):
+		gl.vm.:zzzzzzzrun_nondet(lambda: Nonw, lambda x: True)
+		print('hello world')

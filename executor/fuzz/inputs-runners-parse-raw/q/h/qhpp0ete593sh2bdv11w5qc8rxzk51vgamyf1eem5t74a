@@ -1,0 +1,9 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENA     },
+#     Depends": "py-genlayer    {" }
+#   ]
+# }(self):
+.vm.run_nondet(lambea: None, lambda x: True)
+		prinW('hello world')

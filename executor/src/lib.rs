@@ -2,6 +2,7 @@ pub mod caching;
 pub mod config;
 pub mod domain;
 pub mod host;
+pub mod int_traits;
 pub mod modules;
 pub mod rt;
 pub mod runners;
@@ -20,16 +21,29 @@ use wasi::genlayer_sdk::ExtendedMessage;
 
 use std::sync::Arc;
 
+use crate::int_traits::*;
 use crate::wasi::genlayer_sdk::VMDataAccumulator;
 
+// wasmtime's own conversion boxes an executor `Error` beyond recovery, peel it
 pub fn wasmtime_to_anyhow(e: wasmtime::Error) -> anyhow::Error {
+    let e = match e.downcast::<rt::errors::Error>() {
+        Ok(our_e) => return anyhow::Error::new(our_e),
+        Err(e) => e,
+    };
+
     match e.downcast() {
         Ok(anyhow_e) => anyhow_e,
         Err(e) => e.into(),
     }
 }
 
+// wasmtime's own conversion boxes an executor `Error` beyond recovery, peel it
 pub fn anyhow_to_wasmtime(e: anyhow::Error) -> wasmtime::Error {
+    let e = match e.downcast::<rt::errors::Error>() {
+        Ok(our_e) => return wasmtime::Error::from(our_e),
+        Err(e) => e,
+    };
+
     match e.downcast() {
         Ok(wasmtime_e) => wasmtime_e,
         Err(e) => wasmtime::Error::from_anyhow(e),
@@ -50,7 +64,7 @@ impl<W: calldata::Writer> calldata::codec::Encode<W> for Metrics {
     fn encode(&self, enc: &mut calldata::Encoder<W>) -> Result<(), Self::Error> {
         enc.start_map(4)?;
         enc.push_map_k("hosts")?;
-        enc.start_array(self.hosts.len() as u64)?;
+        enc.start_array(self.hosts.len().into_int_comptime())?;
         for h in self.hosts.iter() {
             calldata::codec::Encode::encode(h, enc)?;
         }
@@ -80,6 +94,11 @@ pub struct CreateSupervisorNamedArgs {
 pub struct ExecutionContext {
     pub supervisor: Arc<rt::supervisor::Supervisor>,
     det_limiter: rt::memlimiter::Limiter,
+    /// A contract-caused VMError raised while assembling the supervisor (reading
+    /// the contract's own locked-slots / upgraders set out of storage). It is
+    /// deferred to the run's prepare stage so it surfaces as a receipt instead
+    /// of aborting the process.
+    prepare_error: Option<public_abi::VmError>,
 }
 
 pub fn create_supervisor(
@@ -129,7 +148,7 @@ pub fn create_supervisor(
 
     let storage_host_idx =
         if (host::host_fns::Methods::StorageRead as usize) < named.method_hosts.len() {
-            named.method_hosts[host::host_fns::Methods::StorageRead as usize] as usize
+            named.method_hosts[host::host_fns::Methods::StorageRead as usize].into()
         } else {
             0
         };
@@ -137,14 +156,46 @@ pub fn create_supervisor(
     // Slot locks only ever reject a write, so a run that cannot write does not
     // need them -- and paying to read a set it can never consult would charge
     // memory for nothing.
+    //
+    // The set lives in the contract's own root storage, so its length word is
+    // contract-controlled: an over-limit `upgraders`/`locked_slots` count, or a
+    // memory budget exhausted while reading it, is a `VmError::out_of(..)`. That
+    // is a contract fault, not an executor fault, so it must become a receipt --
+    // defer it to the run's prepare stage rather than letting it `?` out of the
+    // process. A genuine host-read failure stays internal and still propagates.
+    let mut prepare_error = None;
     let locked_slots = if named.can_write_storage {
-        hosts[storage_host_idx]
-            .get_locked_slots_for_sender(
-                calldata::Address::from(message.contract_address.raw()),
-                calldata::Address::from(message.sender_address.raw()),
-                &limiter_det,
-            )
-            .context("reading locked slots")?
+        match hosts[storage_host_idx].get_locked_slots_for_sender(
+            calldata::Address::from(message.contract_address.raw()),
+            calldata::Address::from(message.sender_address.raw()),
+            &limiter_det,
+        ) {
+            Ok(set) => set,
+            Err(e) => match e.downcast::<rt::errors::Error>() {
+                Ok(
+                    err @ rt::errors::Error {
+                        kind: rt::errors::ErrorKind::Vm(_),
+                        ..
+                    },
+                )
+                | Ok(
+                    err @ rt::errors::Error {
+                        kind: rt::errors::ErrorKind::FatalVm(_),
+                        ..
+                    },
+                ) => {
+                    prepare_error = Some(match err.kind {
+                        rt::errors::ErrorKind::Vm(code) | rt::errors::ErrorKind::FatalVm(code) => {
+                            code
+                        }
+                        _ => unreachable!(),
+                    });
+                    host::LockedSlotsSet::empty()
+                }
+                Ok(err) => return Err(anyhow::Error::new(err).context("reading locked slots")),
+                Err(e) => return Err(e.context("reading locked slots")),
+            },
+        }
     } else {
         host::LockedSlotsSet::empty()
     };
@@ -163,6 +214,7 @@ pub fn create_supervisor(
     Ok(ExecutionContext {
         supervisor: rt::supervisor::Supervisor::start(config, ctor)?,
         det_limiter: limiter_det,
+        prepare_error,
     })
 }
 
@@ -213,17 +265,21 @@ fn convert_nested_permissions(
     }
 }
 
-fn extra_leader_output_error(
+fn extra_leader_nondet_output_error(
     supervisor: &rt::supervisor::Supervisor,
     run_ok: &rt::vm::RunOk,
 ) -> Option<public_abi::VmError> {
+    if matches!(run_ok, rt::vm::RunOk::FatalVMError(..)) {
+        return None;
+    }
+
     let executed = supervisor
         .nondet_call_no
         .load(std::sync::atomic::Ordering::SeqCst);
     let published = supervisor
         .leader_nondet_results
         .as_ref()
-        .map_or(0, |v| v.len() as u32);
+        .map_or(0, |v| v.len().into_int_downcast_panicking());
 
     if !has_extra_leader_output(supervisor.shared_data.run_mode, executed, published) {
         return None;
@@ -244,6 +300,7 @@ pub async fn run_with_impl(
 ) -> anyhow::Result<rt::vm::FullResult> {
     let supervisor = context.supervisor.clone();
     let storage_pages_limit = supervisor.get_storage_limiter();
+    let limiter_det = context.det_limiter.derived();
 
     // Everything a nested run imports arrives together or not at all, so unpack
     // it once here rather than probing the same option at four call sites.
@@ -262,6 +319,7 @@ pub async fn run_with_impl(
     let mut topmost_storage = rt::vm::storage::Storage::new(
         entry_data.message.contract_address,
         storage_pages_limit,
+        limiter_det.clone(),
         wasi::genlayer_sdk::StorageHostHolder(
             supervisor.host.clone(),
             wasi::genlayer_sdk::ReadToken {
@@ -272,25 +330,22 @@ pub async fn run_with_impl(
     );
 
     let (topmost_runner_id, root_permissions) = match async {
+        // A contract-caused VMError deferred from supervisor assembly (reading
+        // this contract's own locked-slots / upgraders set) surfaces here so the
+        // catch below turns it into a receipt.
+        if let Some(code) = &context.prepare_error {
+            return Err(rt::errors::Error::vm(code.clone()).into());
+        }
+
         let entry_call_data: abi::entry::MainCallData = calldata::decode_obj(&entry_data.calldata)
             .map_err(|e| rt::errors::Error {
-                kind: rt::errors::ErrorKind::Vm(
-                    rt::errors::convert_vm_error_from_pending_abi(
-                        public_abi_pending::VmError::malformed_entry(),
-                    ),
-                    None,
-                ),
+                kind: rt::errors::ErrorKind::Vm(public_abi::VmError::malformed_entry()),
                 context: Vec::new(),
                 source: Some(Box::new(e)),
             })?;
 
         if entry_data.message.is_init && entry_call_data.name.is_some() {
-            return Err(
-                rt::errors::Error::vm(rt::errors::convert_vm_error_from_pending_abi(
-                    public_abi_pending::VmError::malformed_entry(),
-                ))
-                .into(),
-            );
+            return Err(rt::errors::Error::vm(public_abi::VmError::malformed_entry()).into());
         }
 
         // Contract-owned permissions live in the root slot, not the node-granted
@@ -304,7 +359,11 @@ pub async fn run_with_impl(
             // Record the major this contract is deployed for, so later runs can
             // verify major compatibility (see `read_major` / major_mismatch check).
             topmost_storage
-                .write_major(genvm_common::version::CURRENT.major as u8)
+                .write_major(
+                    genvm_common::version::CURRENT
+                        .major
+                        .into_int_downcast_panicking(),
+                )
                 .await?;
 
             let code_slot = rt::vm::storage::default_code_slot();
@@ -337,11 +396,14 @@ pub async fn run_with_impl(
         };
 
         let id = match &imported_runner_id {
-            Some(imported) => {
-                rt::supervisor::actions::resolve_runner_id(&supervisor, &id, &imported.0)
-                    .await
-                    .context("resolving imported topmost runner id")?
-            }
+            Some(imported) => rt::supervisor::actions::resolve_runner_id(
+                &supervisor,
+                &limiter_det,
+                &id,
+                &imported.0,
+            )
+            .await
+            .context("resolving imported topmost runner id")?,
             None => id,
         };
 
@@ -356,8 +418,10 @@ pub async fn run_with_impl(
         // propagate via `?`.
         Err(e) => {
             let run_ok = rt::errors::unwrap_vm_errors(e.into())?;
-            if let Some(code) = extra_leader_output_error(&supervisor, &run_ok) {
-                return Ok(rt::vm::FullResult::empty_from(rt::vm::RunOk::VMError(
+            // A leader that published more output than the run consumed is a
+            // leader fault whenever it is detected, so it is fatal here too
+            if let Some(code) = extra_leader_nondet_output_error(&supervisor, &run_ok) {
+                return Ok(rt::vm::FullResult::empty_from(rt::vm::RunOk::FatalVMError(
                     code, None,
                 )));
             }
@@ -366,8 +430,11 @@ pub async fn run_with_impl(
     };
 
     let can_use_balance_for_message_fees =
-        primitive_types::U256::from_little_endian(&root_permissions)
-            .bit(public_abi::Permissions::CanUseBalanceForMessageFees.value() as usize);
+        primitive_types::U256::from_little_endian(&root_permissions).bit(
+            public_abi::Permissions::CanUseBalanceForMessageFees
+                .value()
+                .into_int_comptime(),
+        );
     let vm_permissions = match imported_permissions {
         Some(imported) => convert_nested_permissions(imported),
         None => wasi::base::Permissions {
@@ -384,14 +451,14 @@ pub async fn run_with_impl(
     let data_fees_limit = supervisor.shared_data.gep(|x| &x.data_fees_limit);
 
     let essential_data = Box::new(wasi::genlayer_sdk::SingleVMData {
-        limiter: context.det_limiter.derived(),
+        limiter: limiter_det,
         // A budget minted elsewhere is a remainder, not an authority: a chain
         // root on a line with a looser limit must not buy depth this executor
         // does not offer.
         remaining_recursion: entry_data
             .remaining_recursion
-            .map_or(public_abi::top_limits::VM_RECURSION, |supplied| {
-                supplied.min(public_abi::top_limits::VM_RECURSION)
+            .map_or(internal_constants::top_limits::VM_RECURSION, |supplied| {
+                supplied.min(internal_constants::top_limits::VM_RECURSION)
             }),
         spawn_kind: "initial".to_owned(),
         // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
@@ -425,22 +492,24 @@ pub async fn run_with_impl(
 
     let run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
 
-    if let Some(code) = extra_leader_output_error(&supervisor, &run_result.run_ok) {
-        return Ok(rt::vm::FullResult::empty_from(rt::vm::RunOk::VMError(
+    if let Some(code) = extra_leader_nondet_output_error(&supervisor, &run_result.run_ok) {
+        return Ok(rt::vm::FullResult::empty_from(rt::vm::RunOk::FatalVMError(
             code, None,
         )));
     }
 
     Ok(rt::vm::FullResult {
         kind: match &run_result.run_ok {
-            rt::vm::RunOk::Return(_) => public_abi::ResultCode::Return,
-            rt::vm::RunOk::UserError(_) => public_abi::ResultCode::UserError,
-            rt::vm::RunOk::VMError(_, _) => public_abi::ResultCode::VmError,
+            rt::vm::RunOk::Return(_) => host::host_fns::ResultCode::Return,
+            rt::vm::RunOk::UserError(_) => host::host_fns::ResultCode::UserError,
+            rt::vm::RunOk::VMError(_, _) => host::host_fns::ResultCode::VmError,
+            rt::vm::RunOk::FatalVMError(_, _) => host::host_fns::ResultCode::FatalVmError,
         },
         data: match run_result.run_ok {
             rt::vm::RunOk::Return(buf) => buf,
             rt::vm::RunOk::UserError(val) => val,
             rt::vm::RunOk::VMError(msg, _) => calldata::Value::Str(msg.0.into()).into(),
+            rt::vm::RunOk::FatalVMError(msg, _) => calldata::Value::Str(msg.0.into()).into(),
         },
         backtrace: run_result.backtrace,
         wasm_store_hashes: run_result.wasm_store_hashes,
@@ -482,7 +551,12 @@ pub async fn run_with(
             Err(e_res)
         }
         (Err(e_res), Ok(_)) => Err(e_res),
-        (Ok(_), Err(e_nondet)) => Err(e_nondet),
+        (Ok(_), Err(e_nondet)) => {
+            match rt::errors::unwrap_vm_errors(rt::errors::UnwrapDynError::from(e_nondet)) {
+                Ok(run_ok) => Ok((rt::vm::FullResult::empty_from(run_ok), None)),
+                Err(e) => Err(e),
+            }
+        }
         (Ok(res), Ok(c)) => Ok((res, c)),
     };
 
@@ -512,15 +586,19 @@ pub async fn run_with(
     let llm_consumption = *supervisor.shared_data.llm_consumption.lock().await;
 
     let res = match res {
-        Ok((a, b)) => Ok(host::FullResult::new(
-            a,
-            supervisor.take_nondet_results().await,
-            b,
-            data_fees_remaining,
-            data_fees_consumed,
-            llm_consumption,
-            supervisor.take_recorded_actions().await,
-        )),
+        Ok((mut a, b)) => {
+            a.discard_effects_unless_returned();
+
+            Ok(host::FullResult::new(
+                a,
+                supervisor.take_nondet_results().await,
+                b,
+                data_fees_remaining,
+                data_fees_consumed,
+                llm_consumption,
+                supervisor.take_recorded_actions().await,
+            ))
+        }
         Err(e) => Err(e),
     };
 

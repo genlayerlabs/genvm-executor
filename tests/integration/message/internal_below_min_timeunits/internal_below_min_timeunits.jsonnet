@@ -39,7 +39,7 @@ local alloc = {
 	children: [],
 };
 
-{tags: util.features([['message'], ['fees']], 'stable'),
+{tags: util.features([['message', 'send'], ['fees']], 'stable') + ['python'],
 	entry: util.addPaths([
 		simple_deploy.run('${jsonnetDir}/${fileBaseName}.py') {
 			gas_data: gasData,

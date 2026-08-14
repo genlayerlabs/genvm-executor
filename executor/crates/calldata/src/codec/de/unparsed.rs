@@ -54,7 +54,7 @@ impl<T> From<T> for Maybe<T> {
     }
 }
 
-#[cfg(feature = "arbitrary")]
+#[cfg(feature = "fuzzing")]
 impl<'a, T: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Maybe<T> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         u.arbitrary().map(|t| Maybe::Materialized(t))

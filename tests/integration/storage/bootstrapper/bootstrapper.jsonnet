@@ -6,7 +6,7 @@ local target_code = importstr './bootstrapper_target.py';
 // contract instance slot = sha3_256(ROOT_SLOT_ID(32 zero bytes) + CONTRACT_OFFSET(1 as u32 le))
 local contract_instance_slot = 'e1ae23412792df6b6a98fb7c9839701fb8b02b6fc7ed022810f78346494685e7';
 
-{tags: util.features([['storage']], 'stable'),
+{tags: util.features([['storage', 'bootstrap']], 'stable') + ['python'],
 	entry: util.addPaths([util.chain([
 	// deploy bootstrapper
 	s {

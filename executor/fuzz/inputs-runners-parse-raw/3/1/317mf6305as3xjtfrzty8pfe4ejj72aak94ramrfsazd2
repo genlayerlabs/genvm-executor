@@ -1,0 +1,9 @@
+# {
+#   "Seq": [
+#     { "Depends": "sof" },
+#     { "Depends": "sofat:test" },
+#     { "Depends": "float:test" },
+#     { "Depends": "py-genlayetest" },
+#  
+#     { "Depends": "py-genlay   { "I am ok')
+exit(0)

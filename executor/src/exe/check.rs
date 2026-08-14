@@ -15,19 +15,16 @@ pub struct Args {
     precompile: bool,
 }
 
-fn read_registry<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> anyhow::Result<T> {
-    let contents = std::fs::read_to_string(path).with_context(|| format!("reading {path:?}"))?;
-    serde_json::from_str(&contents).with_context(|| format!("parsing {path:?}"))
-}
-
 pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
     let registry_dir = std::path::Path::new(&config.registry_dir);
     let runners_dir = std::path::Path::new(&config.runners_dir);
 
     log_info!(registry_dir:? = registry_dir, runners_dir:? = runners_dir; "checking install");
 
-    let all: BTreeMap<String, Vec<String>> = read_registry(&registry_dir.join("all.json"))?;
-    let latest: BTreeMap<String, String> = read_registry(&registry_dir.join("latest.json"))?;
+    let all: BTreeMap<String, Vec<String>> =
+        genvm::runners::cache::read_registry(&registry_dir.join("all.json"))?;
+    let latest: BTreeMap<String, String> =
+        genvm::runners::cache::read_registry(&registry_dir.join("latest.json"))?;
 
     // (a) every runner `latest` resolves to must also be listed in `all`.
     for (id, hash) in &latest {

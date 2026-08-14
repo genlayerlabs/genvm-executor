@@ -13,7 +13,7 @@ local step(method) = {
 };
 
 {
-	tags: util.features([['runner']], 'stable'),
+	tags: util.features([['runner', 'malformed']], 'stable') + ['python'],
 	entry: util.addPaths([{
 		vars: {},
 		code: '${jsonnetDir}/${fileBaseName}.py',

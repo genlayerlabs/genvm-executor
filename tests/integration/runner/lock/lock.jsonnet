@@ -1,7 +1,7 @@
 local simple = import 'templates/simple_deploy.jsonnet';
 local util = import 'templates/util.jsonnet';
 {
-	tags: util.features([['runner', 'lock']], 'stable'),
+	tags: util.features([['runner', 'lock']], 'stable') + ['python'],
 	prepare: '${jsonnetDir}/prepare.py',
 	entry: util.addPaths([simple.run('${jsonnetDir}/contract.zip') {stable_hash: false}])
 }

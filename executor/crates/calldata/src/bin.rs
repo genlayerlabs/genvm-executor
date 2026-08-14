@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::consts::*;
+use super::int_traits::IntoIntComptime;
 use super::types::*;
 
 #[derive(Debug)]
@@ -119,7 +120,12 @@ impl Parser<'_> {
         if size.bits() > 32 {
             Err(BinDecodeError::ContainerSizeTooLarge { bits: size.bits() })
         } else {
-            Ok(size.to_u32_digits().first().cloned().unwrap_or(0) as usize)
+            Ok(size
+                .to_u32_digits()
+                .first()
+                .cloned()
+                .unwrap_or(0)
+                .into_int_comptime())
         }
     }
 
@@ -142,14 +148,15 @@ impl Parser<'_> {
             let mut val = self.fetch_uleb()?;
 
             let val_least_byte =
-                (val.iter_u32_digits().next().unwrap_or(0) & (u8::MAX as u32)) as u8;
+                (val.iter_u32_digits().next().unwrap_or(0) & u32::from(u8::MAX)) as u8;
             let typ = val_least_byte & (((1 << BITS_IN_TYPE) - 1) as u8);
 
             val >>= BITS_IN_TYPE;
 
             let mut completed = match typ {
                 TYPE_SPECIAL => {
-                    if val.bits() > 8 - BITS_IN_TYPE as u64 {
+                    let bits_in_type: u64 = BITS_IN_TYPE.into_int_comptime();
+                    if val.bits() > 8 - bits_in_type {
                         return Err(BinDecodeError::InvalidSpecialValue {
                             value: val_least_byte,
                         });
@@ -366,7 +373,7 @@ pub fn encode_to<W: Writer>(enc: &mut Encoder<W>, value: &Value) -> Result<(), W
                 Value::Bytes(data) => enc.push_bytes(data)?,
                 Value::Number(big_int) => enc.push_bigint(big_int)?,
                 Value::Map(values) => {
-                    enc.start_map(values.len() as u64)?;
+                    enc.start_map(values.len().into_int_comptime())?;
 
                     for (k, v) in values.iter().rev() {
                         stack.push(Item::Value(v));
@@ -374,7 +381,7 @@ pub fn encode_to<W: Writer>(enc: &mut Encoder<W>, value: &Value) -> Result<(), W
                     }
                 }
                 Value::Array(values) => {
-                    enc.start_array(values.len() as u64)?;
+                    enc.start_array(values.len().into_int_comptime())?;
 
                     for x in values.iter().rev() {
                         stack.push(Item::Value(x));

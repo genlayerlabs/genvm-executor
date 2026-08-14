@@ -26,19 +26,24 @@ name = "storage_root"
 path = "examples/storage_root.rs"
 
 [[example]]
+name = "fibonacci"
+path = "examples/fibonacci.rs"
+
+[[example]]
 name = "fuzz-gvm-tree-map"
 path = "fuzz/gvm-tree-map.rs"
-required-features = ["arbitrary", "storage", "dont_define_wasi_storage"]
+required-features = ["fuzzing", "storage", "dont_define_wasi_storage"]
 
 [[example]]
 name = "fuzz-gvm-gl-call-roundtrip"
 path = "fuzz/gvm-gl-call-roundtrip.rs"
-required-features = ["arbitrary"]
+required-features = ["fuzzing"]
 
 [features]
-arbitrary = ["dep:arbitrary", "genlayer_calldata/arbitrary"]
+arbitrary = ["fuzzing"]
 default = ["wasi", "storage"]
 dont_define_wasi_storage = []
+fuzzing = ["dep:arbitrary", "genlayer_calldata/fuzzing"]
 storage = ["wasi"]
 wasi = []
 
@@ -60,4 +65,10 @@ version = "0.0.2"
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
 bytes = { version = "1.11.0", features = ["serde"] }
+genvm-fuzzing = { path = "../../../../../crates/fuzzing" }
 primitive-types = { version = "0.13", features = ["impl-serde"] }
+
+[dev-dependencies.mutatis]
+default-features = false
+features = ["derive", "std"]
+version = "0.5.3"

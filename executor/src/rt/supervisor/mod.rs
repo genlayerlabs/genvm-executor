@@ -4,15 +4,17 @@ use std::{
 };
 
 use anyhow::Context as _;
+use genvm_common::internal_constants::{memory_limiter_consts, top_limits};
 use genvm_common::*;
 
+use crate::int_traits::*;
 use crate::{
     config, host, public_abi,
     rt::{self, DetNondet},
     runners, wasi,
 };
 
-pub(crate) mod actions;
+pub mod actions;
 mod compilation;
 
 struct WasmModuleCache {
@@ -135,10 +137,10 @@ impl Drop for Supervisor {
 }
 
 const fn get_native_stack_size() -> u32 {
-    let native_stack_size = (6 as u32) << 20;
+    let native_stack_size = 6_u32 << 20;
 
-    let approximation = public_abi::top_limits::WASM_STACK_VALUE_SLOTS * 8 * 4
-        + public_abi::top_limits::WASM_CALL_DEPTH * 64;
+    let approximation =
+        top_limits::WASM_STACK_VALUE_SLOTS * 8 * 4 + top_limits::WASM_CALL_DEPTH * 64;
 
     if native_stack_size < approximation {
         panic!("native stack size is smaller than the configured call depth limit");
@@ -158,10 +160,10 @@ pub fn create_engines(
         .consume_fuel(false)
         .cranelift_opt_level(wasmtime::OptLevel::None)
         .async_stack_size(8 << 20)
-        .max_wasm_stack(get_native_stack_size() as usize)
+        .max_wasm_stack(get_native_stack_size().into_int_comptime())
         .wasm_stack_limits(
-            public_abi::top_limits::WASM_CALL_DEPTH,
-            public_abi::top_limits::WASM_STACK_VALUE_SLOTS,
+            top_limits::WASM_CALL_DEPTH,
+            top_limits::WASM_STACK_VALUE_SLOTS,
         );
 
     base_conf
@@ -264,7 +266,7 @@ pub async fn submit_nondet_vm_task(zelf: &Arc<Supervisor>, task: NonDetVMTask) {
 impl Supervisor {
     pub async fn push_nondet_result(&self, call_no: u32, result: bytes::Bytes) {
         let mut vec = self.nondet_results.lock().await;
-        let idx = call_no as usize;
+        let idx = u32_into_usize(call_no);
         while vec.len() <= idx {
             vec.push(bytes::Bytes::new());
         }
@@ -282,7 +284,7 @@ impl Supervisor {
     pub fn get_leader_nondet_result(&self, call_no: u32) -> Option<bytes::Bytes> {
         self.leader_nondet_results
             .as_ref()
-            .and_then(|v| v.get(call_no as usize).cloned())
+            .and_then(|v| v.get(u32_into_usize(call_no)).cloned())
     }
 
     pub fn get_storage_limiter(&self) -> rt::vm::storage::Limiter {
@@ -400,10 +402,7 @@ pub async fn spawn(
         });
     }
 
-    if !vm
-        .limiter
-        .consume(crate::public_abi::memory_limiter_consts::VM_SPAWN_COST)
-    {
+    if !vm.limiter.consume(memory_limiter_consts::VM_SPAWN_COST) {
         return Err(rt::SpawnError {
             error: rt::errors::Error::vm(crate::public_abi::VmError::out_of().memory().val())
                 .into(),
@@ -464,7 +463,7 @@ pub async fn spawn(
     ) {
         return Err(rt::SpawnError {
             error: e,
-            state: Box::new(rt::SpawnErrorState::Spawned(vm_base)),
+            state: Box::new(rt::SpawnErrorState::Spawned(Box::new(vm_base))),
         });
     }
 
@@ -497,7 +496,7 @@ pub async fn spawn(
             ) {
                 return Err(rt::SpawnError {
                     error: e,
-                    state: Box::new(rt::SpawnErrorState::Spawned(vm_base)),
+                    state: Box::new(rt::SpawnErrorState::Spawned(Box::new(vm_base))),
                 });
             }
             zelf.action_recorder
@@ -531,7 +530,7 @@ pub async fn apply_contract_actions(
         }),
         Err(e) => Err(rt::SpawnError {
             error: e,
-            state: Box::new(rt::SpawnErrorState::Spawned(vm.vm_base)),
+            state: Box::new(rt::SpawnErrorState::Spawned(Box::new(vm.vm_base))),
         }),
     }
 }
@@ -550,7 +549,7 @@ async fn apply_contract_actions_inner(
         .await
         .with_context(|| format!("reading contract major for {topmost_runner_id}"))?;
     let node_major = genvm_common::version::CURRENT.major;
-    if contract_major as u16 != node_major {
+    if u16::from(contract_major) != node_major {
         return Err(rt::errors::Error::wrap(
             public_abi::VmError::invalid_contract().major_mismatch(),
             anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
@@ -587,8 +586,8 @@ async fn apply_contract_actions_inner(
         .map_err(|e| rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e))?;
 
     let mut ctx = actions::Ctx {
-        env: BTreeMap::new(),
-        visited: HashSet::new(),
+        env: runners::Env::new(limiter.clone()),
+        visited: HashSet::from([topmost_runner_id.canonical()]),
         topmost_runner_id: topmost_runner_id.clone(),
         supervisor: zelf,
         vm: &mut vm.vm_base,
@@ -600,9 +599,10 @@ async fn apply_contract_actions_inner(
     {
         Ok(Some(inst)) => inst,
         Ok(None) => {
-            return Err(anyhow::anyhow!(
-                "actions returned by runner do not have a start instruction"
-            ));
+            return Err(runners::malformed_runner_error(format!(
+                "init actions for contract {topmost_runner_id} have no start instruction"
+            ))
+            .into());
         }
         Err(e) => {
             return Err(
@@ -681,6 +681,13 @@ async fn nondet_vm_processor(
                             },
                             Some(b) => !b,
                         }
+                    },
+                    Ok(rt::vm::RunOk::FatalVMError(e, cause)) => {
+                        let e: anyhow::Error = rt::errors::Error::fatal_vm_cause(e, cause).into();
+                        if let Some(old_err) = zelf.queue.encountered_error.swap(Some(e)) {
+                            log_error!(error:ah = old_err; "encountered another error, overwriting");
+                        }
+                        continue;
                     },
                     Ok(other) => {
                         log_warn!(result:? = other; "unexpected result in nondet block, setting to disagree");

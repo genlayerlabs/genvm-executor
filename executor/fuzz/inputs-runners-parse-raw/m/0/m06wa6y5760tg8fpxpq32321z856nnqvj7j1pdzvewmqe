@@ -1,0 +1,11 @@
+# {
+#   "Seq": [
+#     { "Depends": "~oftfloat:test" },
+#     { "Depends": "softfloat:^est" },
+#     { "Depends": "ph-ge[layer:test" }
+#   ]
+# }
+
+
+printk')
+exit(0)

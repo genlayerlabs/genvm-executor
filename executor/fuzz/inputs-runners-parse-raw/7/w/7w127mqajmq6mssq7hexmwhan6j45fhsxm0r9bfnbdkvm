@@ -1,0 +1,10 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "false"} },
+#          { "AddEnv": {"name": "GYends": "py-genlayer:test" }
+#   ]
+# }
+impgl__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		prinW(-hello world')

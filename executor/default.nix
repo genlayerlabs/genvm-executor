@@ -16,6 +16,9 @@
   ...
 }@args:
 let
+  install-src =
+    get-root-subtree [ "${exec-prefix}/executor/install" ] + "/${exec-prefix}/executor/install";
+
   # Release manifests (latest.json/all.json) are produced by the umbrella's
   # runner machinery, which owns the accumulate-and-build logic. This executor
   # checkout is mounted at <umbrella>/executors/v0.3.x, so the umbrella root
@@ -43,6 +46,8 @@ let
           "crates/modules-interfaces"
           "crates/calldata"
           "crates/calldata-derive"
+          # a dev-dependency, but cargo still needs its manifest to resolve
+          "crates/fuzzing"
           "${exec-prefix}/executor/crates"
           "${exec-prefix}/executor/third-party"
           "${exec-prefix}/executor/Cargo.toml"
@@ -61,7 +66,7 @@ let
 
       srcs = [
         exe
-        ./install
+        install-src
       ];
 
       dontUnpack = true;

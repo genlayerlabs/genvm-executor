@@ -1,0 +1,12 @@
+# v000000000000000000000000000000000007.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GENLAYER_ENABLE_PROFILER", "val": "false"} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+# }
+importr as gl
+
+
+class Contractne, lambda x: True)
+		print('hello world')

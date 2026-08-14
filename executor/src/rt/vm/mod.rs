@@ -11,16 +11,29 @@ pub enum RunOk {
     Return(calldata::unparsed::Maybe<calldata::Value>),
     UserError(calldata::unparsed::Maybe<calldata::Value>),
     VMError(abi::consts::VmError, Option<anyhow::Error>),
+    FatalVMError(abi::consts::VmError, Option<anyhow::Error>),
 }
 
 impl RunOk {
-    /// Like clone, but drops the `cause` of a `VMError` if present
+    /// Like clone, but drops the `cause` of a VM error if present
     pub fn duplicate(&self) -> Self {
         match self {
             RunOk::Return(buf) => RunOk::Return(buf.clone()),
             RunOk::UserError(buf) => RunOk::UserError(buf.clone()),
             RunOk::VMError(e, _cause) => RunOk::VMError(e.clone(), None),
+            RunOk::FatalVMError(e, _cause) => RunOk::FatalVMError(e.clone(), None),
         }
+    }
+
+    pub fn into_nonfatal(self) -> rt::errors::Result<Self> {
+        match self {
+            RunOk::FatalVMError(e, cause) => Err(rt::errors::Error::fatal_vm_cause(e, cause)),
+            run_ok => Ok(run_ok),
+        }
+    }
+
+    pub fn into_contract_observable_bytes(self) -> rt::errors::Result<Vec<u8>> {
+        self.into_nonfatal().map(|run_ok| run_ok.as_bytes())
     }
 }
 
@@ -33,7 +46,7 @@ pub struct RunResult {
 
 #[derive(Debug, Clone, genlayer_calldata::Encode)]
 pub struct FullResult {
-    pub kind: public_abi::ResultCode,
+    pub kind: host_fns::ResultCode,
     pub data: calldata::unparsed::Maybe<calldata::Value>,
     pub backtrace: Option<rt::errors::Backtrace>,
     pub wasm_store_hashes: rt::errors::WasmStoreHashes,
@@ -54,14 +67,16 @@ impl FullResult {
     pub fn empty_from(run_ok: RunOk) -> Self {
         Self {
             kind: match run_ok {
-                RunOk::Return(_) => public_abi::ResultCode::Return,
-                RunOk::UserError(_) => public_abi::ResultCode::UserError,
-                RunOk::VMError(_, _) => public_abi::ResultCode::VmError,
+                RunOk::Return(_) => host_fns::ResultCode::Return,
+                RunOk::UserError(_) => host_fns::ResultCode::UserError,
+                RunOk::VMError(_, _) => host_fns::ResultCode::VmError,
+                RunOk::FatalVMError(_, _) => host_fns::ResultCode::FatalVmError,
             },
             data: match run_ok {
                 RunOk::Return(buf) => buf,
                 RunOk::UserError(val) => val,
                 RunOk::VMError(msg, _) => calldata::Value::Str(msg.into()).into(),
+                RunOk::FatalVMError(msg, _) => calldata::Value::Str(msg.into()).into(),
             },
             backtrace: None,
             wasm_store_hashes: rt::errors::WasmStoreHashes::default(),
@@ -71,16 +86,15 @@ impl FullResult {
         }
     }
 
-    pub fn timeout() -> Self {
-        Self {
-            kind: public_abi::ResultCode::VmError,
-            data: calldata::Value::Str(public_abi::VmError::timeout().into()).into(),
-            backtrace: None,
-            wasm_store_hashes: rt::errors::WasmStoreHashes::default(),
-            subvm_hashes: empty_subvm_hashes(),
-            storage_changes: Vec::new(),
-            emissions: Vec::new(),
+    /// Only a returning run carries effects; anything else reports none,
+    /// whatever it wrote or emitted before failing
+    pub fn discard_effects_unless_returned(&mut self) {
+        if self.kind == host_fns::ResultCode::Return {
+            return;
         }
+
+        self.storage_changes.clear();
+        self.emissions.clear();
     }
 }
 
@@ -117,6 +131,15 @@ impl RunOk {
                 res.extend_from_slice(buf.0.as_bytes());
                 res
             }
+            // Fatality has to survive a sub-VM buffer that is relayed across a
+            // major boundary, so it keeps a code of its own -- one the host
+            // wire admits and the contract-facing enumeration does not.
+            RunOk::FatalVMError(buf, _) => {
+                let mut res = Vec::with_capacity(1 + buf.0.len());
+                res.push(crate::host::host_fns::ResultCode::FatalVmError as u8);
+                res.extend_from_slice(buf.0.as_bytes());
+                res
+            }
         }
     }
 }
@@ -137,15 +160,17 @@ impl std::fmt::Display for RunOk {
                             }
                         }
                         Ok(c) => c.to_string(),
-                        Err(util::str::InvalidSequence(seq)) => {
-                            seq.iter().map(|c| format!("\\{:02x}", *c as u32)).join("")
-                        }
+                        Err(util::str::InvalidSequence(seq)) => seq
+                            .iter()
+                            .map(|c| format!("\\{:02x}", u32::from(*c)))
+                            .join(""),
                     })
                     .join("");
                 f.write_fmt(format_args!("Return(\"{str}\")"))
             }
             Self::UserError(r) => write!(f, "UserError({:?})", r),
             Self::VMError(r, _) => f.debug_tuple("VMError").field(r).finish(),
+            Self::FatalVMError(r, _) => f.debug_tuple("FatalVMError").field(r).finish(),
         }
     }
 }
@@ -238,6 +263,9 @@ impl VM<wasmtime::Instance> {
             Ok((rt::vm::RunOk::VMError(e, cause), _)) => {
                 log_debug!(result = "VMError", message = e.0, cause:? = cause; "execution result unwrapped")
             }
+            Ok((rt::vm::RunOk::FatalVMError(e, cause), _)) => {
+                log_debug!(result = "FatalVMError", message = e.0, cause:? = cause; "execution result unwrapped")
+            }
             Err(e) => {
                 log_debug!(result = "Error", error:ah = e; "execution result unwrapped")
             }
@@ -262,7 +290,7 @@ impl VM<wasmtime::Instance> {
             }
             Err(e) => Err(rt::SpawnError {
                 error: e,
-                state: Box::new(rt::SpawnErrorState::Spawned(self.vm_base)),
+                state: Box::new(rt::SpawnErrorState::Spawned(Box::new(self.vm_base))),
             }),
         }
     }
@@ -329,6 +357,94 @@ impl RunResult {
                 &subvm_hashes,
                 wasm_store_hashes,
             ),
+            RunOk::FatalVMError(data, _) => small_hash(
+                ResultCode::FatalVmError,
+                &calldata::Value::Str(data.0.to_string()),
+                &subvm_hashes,
+                wasm_store_hashes,
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fatal_result_is_not_contract_observable_bytes() {
+        let code = public_abi::VmError::timeout();
+        let err = RunOk::FatalVMError(code.clone(), None)
+            .into_contract_observable_bytes()
+            .unwrap_err();
+
+        let recovered = err.into_run_ok().expect("fatal VM error must stay typed");
+        match recovered {
+            RunOk::FatalVMError(recovered, _) => assert_eq!(recovered, code),
+            other => panic!("expected FatalVMError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fatal_result_serialization_is_total() {
+        let code = public_abi::VmError::timeout();
+        let bytes = RunOk::FatalVMError(code.clone(), None).as_bytes();
+
+        assert_eq!(
+            bytes[0],
+            crate::host::host_fns::ResultCode::FatalVmError as u8
+        );
+        assert_eq!(&bytes[1..], code.0.as_bytes());
+    }
+
+    // Fatality is reported truthfully to the host; degrading it to an ordinary
+    // VM error is the manager's job, at the outermost boundary.
+    #[test]
+    fn fatal_result_is_reported_as_fatal() {
+        let full =
+            FullResult::empty_from(RunOk::FatalVMError(public_abi::VmError::timeout(), None));
+
+        assert_eq!(full.kind, host_fns::ResultCode::FatalVmError);
+    }
+
+    fn with_effects(run_ok: RunOk) -> FullResult {
+        let mut full = FullResult::empty_from(run_ok);
+        full.storage_changes = vec![storage::Delta::for_test([7; 36], vec![1, 2, 3])];
+        full.emissions = vec![domain::ExecutionEmission::EthSend {
+            address: calldata::Address::zero(),
+            calldata: bytes::Bytes::from_static(b"payload"),
+            value: primitive_types::U256::zero(),
+            message_fee: primitive_types::U256::zero(),
+            receipt_fee: primitive_types::U256::zero(),
+            fee_params: abi::fees::ExternalMessageParams {
+                gas_limit: primitive_types::U256::zero(),
+                max_gas_price: primitive_types::U256::zero(),
+            },
+        }];
+        full
+    }
+
+    #[test]
+    fn returning_run_keeps_its_effects() {
+        let mut full = with_effects(RunOk::empty_return());
+        full.discard_effects_unless_returned();
+
+        assert_eq!(full.storage_changes.len(), 1);
+        assert_eq!(full.emissions.len(), 1);
+    }
+
+    #[test]
+    fn non_returning_run_reports_no_effects() {
+        for run_ok in [
+            RunOk::UserError(calldata::Value::Null.into()),
+            RunOk::VMError(public_abi::VmError::timeout(), None),
+            RunOk::FatalVMError(public_abi::VmError::timeout(), None),
+        ] {
+            let mut full = with_effects(run_ok);
+            full.discard_effects_unless_returned();
+
+            assert!(full.storage_changes.is_empty(), "{:?}", full.kind);
+            assert!(full.emissions.is_empty(), "{:?}", full.kind);
         }
     }
 }

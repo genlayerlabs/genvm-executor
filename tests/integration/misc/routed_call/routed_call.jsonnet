@@ -13,7 +13,7 @@ local base = simple.run('${jsonnetDir}/routed_call_from.py', '${jsonnetDir}/rout
 	}
 |||
 );
-{tags: util.features([['message', 'external', 'view']], 'stable'),
+{tags: util.features([['message', 'external', 'view']], 'stable') + ['python'],
 	entry: util.addPaths([base {
 		next: [super.next[0] {
 			next: [super.next[0] {

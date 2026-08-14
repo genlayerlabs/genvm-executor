@@ -1,4 +1,3 @@
-use arbitrary::Arbitrary;
 use genvm::{
     rt::{self, vm::storage::HostStorageLocking},
     SlotID,
@@ -108,24 +107,13 @@ impl HostStorage for MockHostStorage {
     }
 }
 
-#[derive(Debug, Clone, Arbitrary)]
-enum StorageOp {
-    Write {
-        slot_id: [u8; 32],
-        index: u32,
-        data: Vec<u8>,
-    },
-    Read {
-        slot_id: [u8; 32],
-        index: u32,
-        len: u8, // Limit to reasonable size
-    },
-}
+#[path = "shared/storage-input.rs"]
+mod input;
 
-#[derive(Debug, Clone, Arbitrary)]
-struct FuzzInput {
-    initial_data: Vec<(SlotID, u32, Vec<u8>)>,
-    operations: Vec<StorageOp>,
+use input::{slot_bytes, FuzzInput, Op as StorageOp};
+
+fn slot_id(slot: u8) -> SlotID {
+    SlotID::from(slot_bytes(slot))
 }
 
 async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
@@ -133,7 +121,8 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
     let mut mock_host = MockHostStorage::new();
 
     // Initialize host storage with initial data
-    for (slot_id, index, data) in &input.initial_data {
+    for entry in &input.initial_data {
+        let (index, data) = (&entry.index, &entry.data);
         if data.len() > u32::MAX as usize {
             panic!("Data length too large for write operation");
         }
@@ -141,7 +130,7 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
         let new_len = (last_index - index) as usize;
         let data = &data[..new_len];
 
-        mock_host.write_storage_slice(*slot_id, *index, data)?;
+        mock_host.write_storage_slice(slot_id(entry.slot), *index, data)?;
     }
 
     let mut reference_host = mock_host.clone();
@@ -184,6 +173,7 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
             )
             .unwrap(),
         )),
+        rt::memlimiter::Limiter::new(),
         host.clone(),
     );
 
@@ -191,12 +181,13 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
     for op in input.operations {
         println!("Executing operation: {:?}", op);
         match op {
+            StorageOp::Nop => {}
             StorageOp::Write {
-                slot_id,
+                slot: slot,
                 index,
                 data,
             } => {
-                let slot_id = SlotID::from(slot_id);
+                let slot_id = slot_id(slot);
 
                 if data.len() > u32::MAX as usize {
                     panic!("Data length too large for write operation");
@@ -210,11 +201,11 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
                 storage.write(slot_id, index, data).await?;
             }
             StorageOp::Read {
-                slot_id,
+                slot: slot,
                 index,
                 len,
             } => {
-                let slot_id = SlotID::from(slot_id);
+                let slot_id = slot_id(slot);
                 let len = len as usize;
 
                 let last_index = index.saturating_add(len as u32);
@@ -237,7 +228,8 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
     }
 
     // Final consistency check: read random ranges and verify
-    for (slot_id, base_index, _) in &input.initial_data {
+    for entry in &input.initial_data {
+        let (slot_id, base_index) = (slot_id(entry.slot), &entry.index);
         for offset in 0..32u32 {
             for len in [1, 2, 4, 8, 16, 32, 64, 128, 256].iter().cloned() {
                 let index = base_index.saturating_add(offset);
@@ -247,8 +239,8 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
                 let mut storage_buf = vec![0u8; len];
                 let mut reference_buf = vec![0u8; len];
 
-                storage.read(*slot_id, index, &mut storage_buf).await?;
-                reference_host.storage_read(*slot_id, index, &mut reference_buf)?;
+                storage.read(slot_id, index, &mut storage_buf).await?;
+                reference_host.storage_read(slot_id, index, &mut reference_buf)?;
 
                 if storage_buf != reference_buf {
                     panic!(
@@ -276,7 +268,10 @@ fn run_fuzz(input: FuzzInput) -> anyhow::Result<()> {
 }
 
 fn main() {
-    afl::fuzz!(|data: FuzzInput| {
+    afl::fuzz!(|data: &[u8]| {
+        let Some(data) = genvm_fuzzing::decode::<FuzzInput>(data) else {
+            return;
+        };
         if let Err(err) = run_fuzz(data) {
             eprintln!("Fuzz error: {:?}", err);
             panic!("Storage fuzz test failed: {}", err);

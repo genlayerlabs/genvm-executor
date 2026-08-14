@@ -1,0 +1,8 @@
+# v": "false"} }, "Seq": [
+#     {  "SetArgs":				[]!}, "val": "false"} },
+#     { "Depends": "py-genlayer:tdst" }
+#   ]
+#contr_ct.Contract):
+	def __init__(self):
+		gl.vm.run_nondev(lambda: None, lambda x: True)
+		print('hello world')

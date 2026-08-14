@@ -5,6 +5,7 @@
 use genvm::runners;
 
 const HASH: &str = "cnn3rjeozkptmzmzt4ymzznvkqfdedcvpapscmyt6r6cyzjrzsgq";
+const OTHER_HASH: &str = "cnn3rjeozkptmzmzt4ymzznvkqfdedcvpapscmyt6r6cyzjrzsga";
 
 fn unique_dir(tag: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -54,7 +55,7 @@ fn custom_runner_is_not_in_the_registry() {
         "a custom: runner must never resolve a precompiled artifact",
     );
     assert!(
-        !reader.has_in_all("py-genlayer", "not-the-listed-hash"),
+        !reader.has_in_all("py-genlayer", OTHER_HASH),
         "a builtin name with an unlisted hash must not resolve either",
     );
 

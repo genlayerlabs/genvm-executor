@@ -8,7 +8,7 @@ local ret(value) = { "kind": "return", "value": value };
 local vm_err(code) = { "kind": "vm_error", "value": code };
 
 // Every result code byte, including the two the wire format does not admit:
-// 3 (`internal_error` — a live enum variant, never proposable) and 7 (unknown).
+// 3 (`internal_error` — host-facing only, never proposable) and 7 (unknown).
 local result_codes = [0, 1, 2, 3, 7];
 
 // Calldata type tags are the low 3 bits: 0..6 are the defined types, so 7 is
@@ -37,7 +37,7 @@ local leader_nondets =
 		[ret(1)],
 		// Two well-formed results where the contract runs a single block: the
 		// second block is never reached, so this pins down the surplus rule —
-		// the run's result is replaced with `leader_output extra`.
+		// the run's result is replaced with `leader_fault nondet_output extra`.
 		[ret(11), ret(11)],
 	]
 	+ [
@@ -62,7 +62,7 @@ local test_cases = [
 	for leader_nondet in leader_nondets
 ];
 {
-	tags: util.features([['nondet', 'consensus', 'leader'], ['nondet'], ['exploit']], 'stable'),
+	tags: util.features([['nondet', 'consensus', 'leader', 'malicious'], ['exploit', 'leader-fault']], 'stable') + ['python'],
 	entry: util.addPaths([
 		simple_deploy.run('${jsonnetDir}/../malicious-leader.py') {
 			modes: 'vs',

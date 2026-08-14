@@ -41,6 +41,8 @@ pub enum EvalError {
     DivisionByZero,
     #[error("infinite recursion while forcing a lazy value (tying the knot?)")]
     InfiniteRecursion,
+    #[error("lazy value already failed to evaluate: {0}")]
+    AlreadyFailed(String),
     #[error("exponent too large")]
     ExponentTooLarge,
     #[error("object key not found: `{0}`")]
@@ -169,6 +171,7 @@ pub struct Thunk(Arc<Mutex<ThunkState>>);
 
 enum ThunkState {
     Forced(Value),
+    Failed(String),
     Deferred(Box<dyn FnOnce() -> Result<Value, EvalError> + Send>),
     InProgress,
 }
@@ -190,6 +193,11 @@ impl Thunk {
                     *state = ThunkState::Forced(v.clone());
                     return Ok(v);
                 }
+                ThunkState::Failed(msg) => {
+                    let err = EvalError::AlreadyFailed(msg.clone());
+                    *state = ThunkState::Failed(msg);
+                    return Err(err);
+                }
                 ThunkState::InProgress => {
                     return Err(EvalError::InfiniteRecursion);
                 }
@@ -202,12 +210,12 @@ impl Thunk {
         let result = deferred();
 
         let mut state = self.0.lock().expect("thunk mutex poisoned");
-        match &result {
-            Ok(v) => *state = ThunkState::Forced(v.clone()),
-            // Leave it `InProgress`: a failed computation is not retried, and
-            // any later force surfaces the recursion/error path consistently.
-            Err(_) => {}
-        }
+        // A failed computation is not retried either: later forces report that failure
+        *state = match &result {
+            Ok(v) => ThunkState::Forced(v.clone()),
+            Err(e) => ThunkState::Failed(e.to_string()),
+        };
+
         result
     }
 }
@@ -355,6 +363,65 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn assert_replays(err: EvalError, expected: &str) {
+        match err {
+            EvalError::AlreadyFailed(msg) => {
+                assert!(msg.contains(expected), "unexpected replayed failure: {msg}")
+            }
+            other => panic!("expected a replayed failure, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn failed_thunk_is_not_retried() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let thunk = {
+            let runs = runs.clone();
+            Thunk::deferred(move || {
+                runs.fetch_add(1, Ordering::Relaxed);
+                Err(EvalError::DivisionByZero)
+            })
+        };
+
+        assert!(matches!(thunk.force(), Err(EvalError::DivisionByZero)));
+        assert_replays(thunk.force().unwrap_err(), "division by zero");
+        assert_replays(thunk.force().unwrap_err(), "division by zero");
+        assert_eq!(runs.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn failed_thunk_does_not_report_infinite_recursion() {
+        let cases = [
+            (EvalError::UndefinedVariable("x".to_owned()), "`x`"),
+            (
+                EvalError::TypeError {
+                    expected: "number",
+                    got: "string",
+                },
+                "expected number",
+            ),
+            (
+                EvalError::Dyn(Box::new(std::io::Error::other("boom"))),
+                "boom",
+            ),
+        ];
+
+        for (err, expected) in cases {
+            let err = Mutex::new(Some(err));
+            let thunk = Thunk::deferred(move || Err(err.lock().unwrap().take().unwrap()));
+
+            assert!(thunk.force().is_err());
+            assert_replays(thunk.force().unwrap_err(), expected);
         }
     }
 }

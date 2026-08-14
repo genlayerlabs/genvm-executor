@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::int_traits::IntoIntComptime;
 use crate::{Address, Value};
 
 use super::{Decode, DecodeError, Deserializer, MapAccess, SeqAccess, Visitor};
@@ -19,9 +20,11 @@ pub(super) fn dispatch_ref<V: Visitor>(visitor: V, value: &Value) -> Result<V::V
         Value::Number(v) => visitor.visit_bigint(v),
         Value::Str(v) => visitor.visit_str(v),
         Value::Bytes(v) => visitor.visit_bytes(v),
-        Value::Array(arr) => visitor.visit_seq(arr.len() as u64, RefValueSeqAccess(arr.iter())),
+        Value::Array(arr) => {
+            visitor.visit_seq(arr.len().into_int_comptime(), RefValueSeqAccess(arr.iter()))
+        }
         Value::Map(map) => visitor.visit_map(
-            map.len() as u64,
+            map.len().into_int_comptime(),
             RefValueMapAccess {
                 iter: map.iter(),
                 pending: None,
@@ -42,9 +45,12 @@ pub(super) fn dispatch_owned<V: Visitor>(
         Value::Number(v) => visitor.visit_bigint(&v),
         Value::Str(v) => visitor.visit_str(&v),
         Value::Bytes(v) => visitor.visit_bytes(&v),
-        Value::Array(arr) => visitor.visit_seq(arr.len() as u64, ValueSeqAccess(arr.into_iter())),
+        Value::Array(arr) => visitor.visit_seq(
+            arr.len().into_int_comptime(),
+            ValueSeqAccess(arr.into_iter()),
+        ),
         Value::Map(map) => visitor.visit_map(
-            map.len() as u64,
+            map.len().into_int_comptime(),
             ValueMapAccess {
                 iter: map.into_iter(),
                 current_key: String::new(),

@@ -14,7 +14,6 @@
     serde::Deserialize,
     genlayer_calldata::Encode,
     genlayer_calldata::Decode,
-    arbitrary::Arbitrary,
 )]
 #[repr(transparent)]
 pub struct Bytes32Hash(

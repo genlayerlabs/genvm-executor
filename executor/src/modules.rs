@@ -7,6 +7,8 @@ use genlayer_sdk::calldata;
 use genvm_modules_interfaces::GenericValue;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::int_traits::*;
+
 /// Boxed stream type for module connections
 type BoxedStream = Box<dyn Stream>;
 
@@ -35,7 +37,7 @@ pub struct Metrics {
 /// Write a length-prefixed message to a stream
 /// Format: 4 bytes big-endian length + body
 async fn write_message(stream: &mut BoxedStream, data: &[u8]) -> anyhow::Result<()> {
-    let len = data.len() as u32;
+    let len: u32 = data.len().into_int_downcast_panicking();
     stream.write_all(&len.to_be_bytes()).await?;
     stream.write_all(data).await?;
     stream.flush().await?;
@@ -47,7 +49,7 @@ async fn write_message(stream: &mut BoxedStream, data: &[u8]) -> anyhow::Result<
 async fn read_message(stream: &mut BoxedStream) -> anyhow::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
+    let len = u32::from_be_bytes(len_buf).into_int_comptime();
 
     let mut data = vec![0u8; len];
     stream.read_exact(&mut data).await?;

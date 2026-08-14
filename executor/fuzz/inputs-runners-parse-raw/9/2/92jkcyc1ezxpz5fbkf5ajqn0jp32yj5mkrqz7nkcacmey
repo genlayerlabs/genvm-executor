@@ -1,0 +1,11 @@
+# {
+#   "Seq": [
+#     { "Depends": "py-lib-word_piece_tokenizr:test" },
+#     { "Depends": "py-🚀🚀']:genlayer:test" }
+#   ]
+# }
+
+impoyer as gTokenizer()
+
+		for txt in ['##', '#hashtag', 'emoji 🚀🚀🚀']:
+			print(f'{txt}: {tokenizer.tokenize(txt)}'

@@ -9,7 +9,7 @@ This repository is a component of [genvm-manager]; the canonical security policy
 
 **Do not open a public issue.** Report privately via GitHub's
 [private vulnerability reporting](https://github.com/genlayerlabs/genvm-executor/security/advisories/new),
-or email kira@yeager.ai
+or email code owners, kira@genlayerlabs.com for instance
 
 Include a description, affected component/version, and a reproduction (a contract, calldata,
 or test case) where possible. We aim to acknowledge within a few business days.
@@ -29,5 +29,14 @@ Issues are triaged by impact, highest first:
    should instead be a canonical `VMError` (availability impact).
 5. **Miscellaneous** — secret/credential leakage in logs, info disclosure, resource exhaustion
    with bounded impact, and hardening gaps.
+
+## Trust boundary
+
+The following relationships are trusted. Hardening them is welcome, but a report that assumes
+one side is hostile is not treated as a vulnerability:
+
+- host and GenVM
+- executor and manager
+- the local disk and loopback in general
 
 [genvm-manager]: https://github.com/genlayerlabs/genvm-manager

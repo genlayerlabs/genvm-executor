@@ -1,0 +1,11 @@
+# v0/1.10
+# {
+#   "Seq": [
+#     {  "SetArgs":
+																	LE_PROFILER", "val": "false"} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+#contr_ct.Contract):
+	def __init__(self):
+		gl.vm.run_nondev(lambda: None, lambda x: True)
+		print('hello world')

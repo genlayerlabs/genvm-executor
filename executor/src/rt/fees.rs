@@ -99,7 +99,10 @@ fn rational_to_u256(
         sign != num_bigint::Sign::Minus,
         "fee cost must be non-negative"
     );
-    rt::errors::internal_ensure!(bytes.len() <= 32, "fee cost exceeds U256 range");
+    if bytes.len() > 32 {
+        log_error!(error:err = rt::errors::internal!("fee cost exceeds U256 range: {int}"); "fee cost exceeds U256 range");
+        return Ok(primitive_types::U256::MAX);
+    }
     let mut buf = [0u8; 32];
     buf[32 - bytes.len()..].copy_from_slice(&bytes);
     Ok(primitive_types::U256::from_big_endian(&buf))
@@ -356,7 +359,7 @@ impl DataLimit {
     async fn consume_bucket_raw(&self, bucket: &Bucket, costs: &[primitive_types::U256]) -> bool {
         let mut buckets = self.buckets.lock().await;
         for (idx, (&bno, &cost)) in bucket.bucket_nos.iter().zip(costs.iter()).enumerate() {
-            let Some(remaining) = buckets.get(bno as usize) else {
+            let Some(remaining) = buckets.get(usize::from(bno)) else {
                 log_warn!(bucket = bno; "consume_bucket: bucket index out of range");
                 return false;
             };
@@ -389,11 +392,11 @@ impl DataLimit {
             }
         }
         for (i, (&bno, &cost)) in bucket.bucket_nos.iter().zip(costs.iter()).enumerate() {
-            buckets[bno as usize] -= cost;
+            buckets[usize::from(bno)] -= cost;
             log_debug!(
                 bucket = bno,
                 cost:display = cost,
-                remaining:display = buckets[bno as usize];
+                remaining:display = buckets[usize::from(bno)];
                 "consume_bucket: ok"
             );
             *bucket.total_consumed[i].lock().await += cost;
@@ -548,7 +551,7 @@ impl DataLimit {
 
         // Check all buckets first (atomic: all-or-nothing).
         for (&bno, &total) in &deductions {
-            let Some(remaining) = buckets.get(bno as usize) else {
+            let Some(remaining) = buckets.get(usize::from(bno)) else {
                 log_warn!(bucket = bno; "consume_message_fee: bucket index out of range");
                 return false;
             };
@@ -565,7 +568,7 @@ impl DataLimit {
 
         // Apply all deductions.
         for (&bno, &total) in &deductions {
-            buckets[bno as usize] -= total;
+            buckets[usize::from(bno)] -= total;
         }
         std::mem::drop(buckets);
 

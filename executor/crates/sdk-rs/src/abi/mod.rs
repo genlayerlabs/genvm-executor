@@ -10,7 +10,7 @@
 
 use genlayer_calldata as calldata;
 
-#[cfg(feature = "arbitrary")]
+#[cfg(feature = "fuzzing")]
 pub(crate) mod arb;
 
 pub mod consts;

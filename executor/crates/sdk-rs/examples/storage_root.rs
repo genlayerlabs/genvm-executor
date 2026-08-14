@@ -3,6 +3,7 @@
 use genlayer_sdk::abi::entry::MessageData;
 use genlayer_sdk::abi::entry::contract_def::Contract;
 use genlayer_sdk::calldata::Value;
+use genlayer_sdk::int_traits::IntoIntComptime;
 use genlayer_sdk::storage::Root;
 
 const MAGIC: &str = "MAGIC_MARKER_42";
@@ -23,7 +24,7 @@ impl Contract for StorageRootExample {
         // search own code for the magic string
         let code = root.code().get();
         let code_len = code.len();
-        let mut code_bytes = vec![0u8; code_len as usize];
+        let mut code_bytes = vec![0u8; code_len.into_int_comptime()];
         if code_len > 0 {
             code.slot.read(code.offset + 4, &mut code_bytes);
         }

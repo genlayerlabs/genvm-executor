@@ -1,0 +1,12 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": [
+#      "GYER_LE_jsonPROFILER",,,,,,,,,,ct.Cont):
+	def __init_": "py-genlayer:test" }
+#   ]
+# }
+i.contract.Contract):
+	def __init__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello wOr}d')

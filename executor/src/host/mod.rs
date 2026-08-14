@@ -2,11 +2,11 @@ pub use genvm_common::host_fns;
 pub mod message;
 
 use genlayer_sdk::abi;
+use genvm_common::internal_constants::top_limits;
 use genvm_common::*;
 
-use crate::public_abi;
 use crate::public_abi::root_offsets;
-use crate::public_abi::{ResultCode, StorageType};
+use crate::public_abi::StorageType;
 use genlayer_sdk::calldata::Address;
 use genlayer_sdk::calldata::ADDRESS_SIZE;
 
@@ -15,6 +15,7 @@ use std::os::fd::FromRawFd;
 
 use anyhow::{Context, Result};
 
+use crate::int_traits::*;
 use crate::{calldata, domain, rt};
 pub use message::SlotID;
 
@@ -74,18 +75,60 @@ fn read_u32(sock: &mut dyn Sock, context: &str) -> Result<u32> {
     Ok(u32::from_le_bytes(int_buf))
 }
 
-fn read_bytes(sock: &mut dyn Sock, context: &str) -> Result<Box<[u8]>> {
-    let len = read_u32(sock, context)?;
+fn read_exact_bytes(sock: &mut dyn Sock, len: usize, context: &str) -> Result<Vec<u8>> {
+    use std::io::Read;
 
-    let res = Box::new_uninit_slice(len as usize);
-    let mut res = unsafe { res.assume_init() };
-    sock.read_exact(&mut res)
-        .with_context(|| format!("reading {} bytes from host: {context}", len))?;
+    let mut res = Vec::with_capacity(len);
+    let mut taken = std::io::Read::take(&mut *sock, len.into_int_comptime());
+    let read = taken
+        .read_to_end(&mut res)
+        .with_context(|| format!("reading {len} bytes from host: {context}"))?;
+
+    anyhow::ensure!(read == len, "unexpected EOF reading {context}");
     Ok(res)
 }
 
+fn read_bytes(sock: &mut dyn Sock, context: &str) -> Result<Vec<u8>> {
+    let len = read_u32(sock, context)?;
+
+    read_exact_bytes(sock, len.into_int_comptime(), context)
+}
+
+fn read_or_discard_bytes(
+    sock: &mut dyn Sock,
+    context: &str,
+    limit: u32,
+) -> Result<Option<Box<[u8]>>> {
+    let len = read_u32(sock, context)?;
+
+    if len > limit {
+        const DISCARD_BUF_SIZE: usize = 4096;
+
+        let mut buf = vec![0u8; DISCARD_BUF_SIZE];
+        let mut remaining = u32_into_usize(len);
+
+        while remaining != 0 {
+            let step = remaining.min(buf.len());
+
+            sock.read_exact(&mut buf[..step])
+                .with_context(|| format!("discarding {len} bytes from host: {context}"))?;
+
+            remaining -= step;
+        }
+
+        return Ok(None);
+    }
+
+    let mut res = vec![0u8; len.into_int_comptime()].into_boxed_slice();
+
+    sock.read_exact(&mut res)
+        .with_context(|| format!("reading {len} bytes from host: {context}"))?;
+
+    Ok(Some(res))
+}
+
 fn write_slice(sock: &mut dyn Sock, data: &[u8]) -> Result<()> {
-    let len = data.len() as u32;
+    let len: u32 = data.len().into_int_downcast_panicking();
 
     sock.write_all(&len.to_le_bytes())?;
     sock.write_all(data)?;
@@ -114,8 +157,15 @@ fn handle_host_error(sock: &mut dyn Sock, context: &str) -> Result<()> {
         // the current execution context; it must not occur during on-chain
         // consensus execution.
         host_fns::Errors::Forbidden => {
-            Err(rt::errors::Error::vm(abi::consts::VmError::host_forbidden()).into())
+            Err(rt::errors::Error::vm(abi::consts::VmError::forbidden()).into())
         }
+    }
+}
+
+fn encode_body(buf: &mut Vec<u8>, res: &FullResult) {
+    match calldata::codec::Encode::encode(res, &mut calldata::Encoder::new(buf)) {
+        Ok(()) => {}
+        Err(e) => match e {},
     }
 }
 
@@ -123,15 +173,13 @@ pub fn encode_result(res: &Result<FullResult>) -> Result<Vec<u8>> {
     match res {
         Ok(d) => {
             let mut encoded = Vec::from([d.reported.kind as u8]);
-            let as_value = calldata::to_value(d);
-            calldata::encode_to(&mut calldata::Encoder::new(&mut encoded), &as_value)?;
+            encode_body(&mut encoded, d);
             Ok(encoded)
         }
         Err(e) => {
-            let mut encoded = Vec::from([ResultCode::InternalError as u8]);
+            let mut encoded = Vec::from([host_fns::ResultCode::InternalError as u8]);
             let fake_res = FullResult::new_internal_error(format!("{e:?}"));
-            let as_value = calldata::to_value(&fake_res);
-            calldata::encode_to(&mut calldata::Encoder::new(&mut encoded), &as_value)?;
+            encode_body(&mut encoded, &fake_res);
             Ok(encoded)
         }
     }
@@ -220,7 +268,8 @@ impl FullResult {
             data: &'a calldata::unparsed::Maybe<calldata::Value>,
             data_fees_consumed: &'a rt::fees::BucketsConsumed,
             data_fees_remaining: &'a Vec<primitive_types::U256>,
-            kind: &'a public_abi::ResultCode,
+            emissions: &'a Vec<domain::ExecutionEmission>,
+            kind: &'a host_fns::ResultCode,
             wasm_store_hashes: &'a rt::errors::WasmStoreHashes,
             storage_changes: &'a Vec<rt::vm::storage::Delta>,
             subvm_hashes: &'a bytes::Bytes,
@@ -230,7 +279,7 @@ impl FullResult {
             type Error = W::Error;
 
             fn encode(&self, enc: &mut calldata::Encoder<W>) -> Result<(), Self::Error> {
-                enc.start_map(8)?;
+                enc.start_map(9)?;
 
                 enc.push_map_k("backtrace")?;
                 calldata::codec::Encode::encode(self.backtrace, enc)?;
@@ -243,6 +292,9 @@ impl FullResult {
 
                 enc.push_map_k("data_fees_remaining")?;
                 calldata::codec::Encode::encode(self.data_fees_remaining, enc)?;
+
+                enc.push_map_k("emissions")?;
+                calldata::codec::Encode::encode(self.emissions, enc)?;
 
                 enc.push_map_k("kind")?;
                 calldata::codec::Encode::encode(self.kind, enc)?;
@@ -260,8 +312,17 @@ impl FullResult {
             }
         }
 
+        // Fatality is a control-flow property, not part of the outcome: a caller
+        // may not catch it, but the value it names is the same `vm_error` the
+        // host reports and `small_hash` folds. Hashing it apart would make one
+        // outcome hash two ways.
+        let hashed_kind = match rt_result.kind {
+            host_fns::ResultCode::FatalVmError => host_fns::ResultCode::VmError,
+            kind => kind,
+        };
+
         let hashable = Hashable {
-            kind: &rt_result.kind,
+            kind: &hashed_kind,
             data: &rt_result.data,
             backtrace: &rt_result.backtrace,
             wasm_store_hashes: &rt_result.wasm_store_hashes,
@@ -269,12 +330,12 @@ impl FullResult {
             subvm_hashes: &rt_result.subvm_hashes,
             data_fees_remaining: &data_fees_remaining,
             data_fees_consumed: &data_fees_consumed,
+            emissions: &rt_result.emissions,
         };
 
-        let as_value = calldata::to_value(&hashable);
         let mut hasher = rt::vm::Sha3Writer(sha3::Digest::new());
         let mut enc = calldata::Encoder::new(&mut hasher);
-        match calldata::encode_to(&mut enc, &as_value) {
+        match calldata::codec::Encode::encode(&hashable, &mut enc) {
             Ok(()) => {}
             Err(e) => match e {},
         }
@@ -323,14 +384,13 @@ impl FullResult {
     }
 }
 
-fn convert_result_code(code: public_abi::ResultCode) -> genvm_modules_interfaces::ResultCode {
+fn convert_result_code(code: host_fns::ResultCode) -> genvm_modules_interfaces::ResultCode {
     match code {
-        public_abi::ResultCode::Return => genvm_modules_interfaces::ResultCode::Return,
-        public_abi::ResultCode::UserError => genvm_modules_interfaces::ResultCode::UserError,
-        public_abi::ResultCode::VmError => genvm_modules_interfaces::ResultCode::VmError,
-        public_abi::ResultCode::InternalError => {
-            genvm_modules_interfaces::ResultCode::InternalError
-        }
+        host_fns::ResultCode::Return => genvm_modules_interfaces::ResultCode::Return,
+        host_fns::ResultCode::UserError => genvm_modules_interfaces::ResultCode::UserError,
+        host_fns::ResultCode::VmError => genvm_modules_interfaces::ResultCode::VmError,
+        host_fns::ResultCode::FatalVmError => genvm_modules_interfaces::ResultCode::FatalVmError,
+        host_fns::ResultCode::InternalError => genvm_modules_interfaces::ResultCode::InternalError,
     }
 }
 
@@ -523,7 +583,7 @@ impl Host {
         )?;
         let len = u32::from_le_bytes(len_buf);
 
-        if len > abi::consts::top_limits::LOCKED_SLOTS {
+        if len > top_limits::LOCKED_SLOTS {
             return Err(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().locked_slots()).into(),
             );
@@ -535,15 +595,16 @@ impl Host {
             );
         }
 
-        let res = Box::new_uninit_slice(len as usize);
+        let mut res = Box::<[SlotID]>::new_uninit_slice(len.into_int_comptime());
+        for slot in &mut res {
+            slot.write(SlotID::ZERO);
+        }
         let mut res = unsafe { res.assume_init() };
 
         let read_to = unsafe {
-            std::slice::from_raw_parts_mut(
-                res.as_mut_ptr() as *mut u8,
-                (len * SlotID::SIZE) as usize,
-            )
+            std::slice::from_raw_parts_mut(res.as_mut_ptr().cast(), std::mem::size_of_val(&*res))
         };
+
         self.storage_read(
             StorageType::Default,
             contract_address,
@@ -575,7 +636,7 @@ impl Host {
         )?;
         let len = u32::from_le_bytes(len_buf);
 
-        if len > abi::consts::top_limits::UPGRADERS {
+        if len > top_limits::UPGRADERS {
             return Err(rt::errors::Error::vm(abi::consts::VmError::out_of().upgraders()).into());
         }
 
@@ -613,7 +674,8 @@ impl Host {
         sock.write_all(&account.raw())?;
         sock.write_all(&slot.raw())?;
         sock.write_all(&index.to_le_bytes())?;
-        sock.write_all(&(buf.len() as u32).to_le_bytes())?;
+        let buf_len: u32 = buf.len().into_int_downcast_panicking();
+        sock.write_all(&buf_len.to_le_bytes())?;
 
         handle_host_error(&mut **sock, "storage_read")?;
 
@@ -698,7 +760,12 @@ impl Host {
         Ok(())
     }
 
-    pub fn eth_call(&mut self, address: calldata::Address, calldata: &[u8]) -> Result<Box<[u8]>> {
+    pub fn eth_call(
+        &mut self,
+        address: calldata::Address,
+        calldata: &[u8],
+        limit: u32,
+    ) -> Result<Option<Box<[u8]>>> {
         log_trace!("eth_call");
 
         let mut sock = self.lock_sock();
@@ -706,12 +773,13 @@ impl Host {
 
         sock.write_all(&address.raw())?;
 
-        sock.write_all(&(calldata.len() as u32).to_le_bytes())?;
+        let calldata_len: u32 = calldata.len().into_int_downcast_panicking();
+        sock.write_all(&calldata_len.to_le_bytes())?;
         sock.write_all(calldata)?;
 
         handle_host_error(&mut **sock, "eth_call")?;
 
-        read_bytes(&mut **sock, "eth_call result")
+        read_or_discard_bytes(&mut **sock, "eth_call result", limit)
     }
 
     pub fn get_balance(&mut self, address: calldata::Address) -> Result<primitive_types::U256> {
@@ -776,7 +844,7 @@ impl MultiHost {
 
     pub async fn lock_for(&self, method: host_fns::Methods) -> tokio::sync::MutexGuard<'_, Host> {
         let idx = if (method as usize) < self.method_hosts.len() {
-            self.method_hosts[method as usize] as usize
+            self.method_hosts[method as usize].into()
         } else {
             0
         };
@@ -967,5 +1035,59 @@ mod tests {
 
         server.join().expect("server thread");
         let _ = std::fs::remove_file(path);
+    }
+
+    fn eth_send_with_calldata(calldata: &[u8]) -> domain::ExecutionEmission {
+        domain::ExecutionEmission::EthSend {
+            address: Address::from([0; ADDRESS_SIZE]),
+            calldata: bytes::Bytes::copy_from_slice(calldata),
+            value: primitive_types::U256::zero(),
+            message_fee: primitive_types::U256::zero(),
+            receipt_fee: primitive_types::U256::zero(),
+            fee_params: genlayer_sdk::abi::fees::ExternalMessageParams {
+                gas_limit: primitive_types::U256::zero(),
+                max_gas_price: primitive_types::U256::zero(),
+            },
+        }
+    }
+
+    fn execution_hash_with(emissions: Vec<domain::ExecutionEmission>) -> bytes::Bytes {
+        let mut rt_result = rt::vm::FullResult::empty_from(rt::vm::RunOk::empty_return());
+        rt_result.emissions = emissions;
+
+        FullResult::new(
+            rt_result,
+            Vec::new(),
+            None,
+            Vec::new(),
+            rt::fees::BucketsConsumed::default(),
+            primitive_types::U256::zero(),
+            Vec::new(),
+        )
+        .reported
+        .execution_hash
+    }
+
+    // An emission's content is consensus-critical, and equal-fee emissions are
+    // indistinguishable by the fee keys alone.
+    #[test]
+    fn execution_hash_covers_emission_content() {
+        let one = execution_hash_with(vec![eth_send_with_calldata(b"one")]);
+        let other = execution_hash_with(vec![eth_send_with_calldata(b"two")]);
+
+        assert_ne!(one, other);
+        assert_ne!(one, execution_hash_with(Vec::new()));
+    }
+
+    // Fatality reaches the host as its own code; only the payload is shared
+    // with an ordinary VM error.
+    #[test]
+    fn fatal_run_ok_keeps_its_code_and_payload() {
+        let code = crate::public_abi::VmError::timeout();
+        let result =
+            rt::vm::FullResult::empty_from(rt::vm::RunOk::FatalVMError(code.clone(), None));
+
+        assert_eq!(result.kind, host_fns::ResultCode::FatalVmError);
+        assert_eq!(result.data, calldata::Value::Str(code.into()).into());
     }
 }

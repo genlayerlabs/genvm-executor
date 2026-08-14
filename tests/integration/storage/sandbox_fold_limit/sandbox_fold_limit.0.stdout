@@ -1,0 +1,4 @@
+ballast: 3221225472
+completed iterations: 2
+sandbox error: VMError("out_of memory")
+executed with `Return(null)`

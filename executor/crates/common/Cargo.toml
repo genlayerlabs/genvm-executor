@@ -8,13 +8,10 @@ debug = true
 
 [dependencies]
 genlayer_calldata = { path = "../calldata" }
-genlayer_sdk = { path = "../sdk-rs", default-features = false, features = [
-    "arbitrary",
-] }
+genlayer_sdk = { path = "../sdk-rs", default-features = false }
 genvm_modules_interfaces = { path = "../modules-interfaces" }
 
 anyhow = { version = "1.0.97", features = ["backtrace"] }
-arbitrary = "1.4.2"
 archery = "1.2.2"
 bytes = { version = "1.11.0", features = ["serde"] }
 chrono = { version = "0.4.42", features = ["serde"] }

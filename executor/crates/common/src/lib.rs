@@ -11,6 +11,7 @@ pub use bytes32::Bytes32Hash;
 pub mod cancellation;
 pub mod debug_mode;
 pub use debug_mode::DebugMode;
+pub mod int_traits;
 pub mod io;
 pub mod logger;
 pub mod stats;
@@ -20,6 +21,7 @@ pub mod version;
 
 pub mod expr;
 pub use genvm_modules_interfaces::host_fns;
+pub mod internal_constants;
 pub mod public_abi_pending;
 pub mod util;
 

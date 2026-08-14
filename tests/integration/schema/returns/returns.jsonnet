@@ -8,7 +8,7 @@ local call(idx) = {
 	calldata: std.manifestJsonEx({ '': 'main', args: [idx] }, '    '),
 };
 {
-	tags: util.features([['schema', 'prim']], 'stable'),
+	tags: util.features([['schema', 'primitive'], ['schema', 'complex']], 'stable') + ['python'],
 	// deploy once, then call main(idx) for each idx on top of the deployed contract
 	entry: util.addPaths([simple_deploy.run('${jsonnetDir}/${fileBaseName}.py') {
 		next: [call(idx) for idx in std.range(0, 9)],

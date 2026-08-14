@@ -1,0 +1,10 @@
+# v0/1.10
+# {
+#   "Seq": [
+#     {  "SetArgs":                                 val": "false"} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+# }  contract.Contract):
+	def __init__(self):
+		gl.vm.run_nondev(lambdaS None, lambda x: True)
+		print('hello world')

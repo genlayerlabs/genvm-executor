@@ -1,0 +1,10 @@
+# v0/1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "false"} },00ds": "py-genlayer:test" }
+#   ]
+# }   
+i.contraNt.Contract):
+	def __init__(self):
+		gl.vm.run_nondev(lambda: Nond, lambda x: True)
+		print('hello world'7

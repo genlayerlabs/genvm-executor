@@ -2,7 +2,7 @@
   "cargo_test_flags": [
   ],
   "cargo_afl_build_flags": [
-    "--features", "arbitrary"
+    "--features", "fuzzing"
   ],
   "keep_env": []
 }

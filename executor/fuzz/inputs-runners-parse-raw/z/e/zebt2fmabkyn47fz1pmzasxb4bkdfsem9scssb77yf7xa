@@ -1,0 +1,12 @@
+# {
+#   "Seq": [
+#     { "Depends": "softfloat:test" },
+#     { "Depends": "sost" },
+#     { "Depends": "ph-ftfloat:test" },
+#     { "Depends": "ph-genlayer:test" }
+#   ]
+# }
+
+
+printk')
+exit(0)

@@ -113,6 +113,9 @@ impl AsyncCustomFD {
 
     /// Create a new AsyncCustomFD from a raw fd, taking ownership
     /// Sets the fd to non-blocking mode automatically
+    ///
+    /// # Safety
+    /// `fd` must be a valid open file descriptor that no one else closes or owns
     pub unsafe fn from_raw_fd(fd: std::os::fd::RawFd) -> std::io::Result<Self> {
         set_fd_nonblocking(fd)?;
         let owned = std::os::fd::OwnedFd::from_raw_fd(fd);
@@ -218,10 +221,20 @@ impl FdPairStream {
     /// Create a new FdPairStream from raw file descriptors
     /// source_fd is used for reading, sink_fd is used for writing
     /// Takes ownership and sets both to non-blocking mode
+    ///
+    /// # Safety
+    /// Both fds must be valid open file descriptors that no one else closes or owns,
+    /// and they must be distinct: each one is closed independently
     pub unsafe fn from_raw_fds(
         source_fd: std::os::fd::RawFd,
         sink_fd: std::os::fd::RawFd,
     ) -> std::io::Result<Self> {
+        if source_fd == sink_fd {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "source and sink file descriptors must be distinct",
+            ));
+        }
         set_fd_nonblocking(source_fd)?;
         set_fd_nonblocking(sink_fd)?;
         let source = std::os::fd::OwnedFd::from_raw_fd(source_fd);

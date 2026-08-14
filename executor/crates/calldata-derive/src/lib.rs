@@ -1,6 +1,7 @@
 mod attrs;
 mod decode;
 mod encode;
+mod int_traits;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};

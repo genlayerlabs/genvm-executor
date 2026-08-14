@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::rt::errors::{self, Error};
 
 #[derive(Clone)]
-pub struct Archive {
+pub struct LegacyArchive {
     pub data: BTreeMap<String, bytes::Bytes>,
     pub total_size: u32,
 }
@@ -31,7 +31,7 @@ fn trim_zeroes(x: &[u8]) -> &[u8] {
     &x[0..idx]
 }
 
-impl Archive {
+impl LegacyArchive {
     pub fn from_ustar(original_data: bytes::Bytes) -> errors::Result<Self> {
         const BLOCK_SIZE: usize = 512;
         const _RECORD_SIZE: usize = BLOCK_SIZE * 20;
@@ -124,96 +124,5 @@ impl Archive {
             );
         }
         Ok(res)
-    }
-
-    pub fn from_zip<R: std::io::Read + std::io::Seek>(
-        zip: &mut zip::ZipArchive<R>,
-        bytes: bytes::Bytes,
-    ) -> errors::Result<Self> {
-        let mut res = BTreeMap::new();
-
-        for i in 0..zip.len() {
-            let file = zip.by_index(i)?;
-
-            if file.compression() != zip::CompressionMethod::Stored {
-                return Err(Error::internal(format!(
-                    "unsupported compression method: {:?}",
-                    file.compression()
-                )));
-            }
-
-            let start_index = file.data_start();
-            let compressed_size = file.compressed_size();
-            let end_index = start_index.checked_add(compressed_size).ok_or_else(|| {
-                Error::internal(format!(
-                    "file {} data_start={} compressed_size={} overflow",
-                    file.name(),
-                    start_index,
-                    compressed_size
-                ))
-            })?;
-            if end_index > bytes.len() as u64
-                || start_index > bytes.len() as u64
-                || end_index < start_index
-            {
-                return Err(Error::internal(format!(
-                    "file {} data_start={} compressed_size={} end_index={} bytes_len={}",
-                    file.name(),
-                    start_index,
-                    compressed_size,
-                    end_index,
-                    bytes.len()
-                )));
-            }
-            let buf = bytes.slice(start_index as usize..end_index as usize);
-
-            map_try_insert(&mut res, String::from(file.name()), buf)?;
-        }
-
-        let res = Self {
-            data: res,
-            total_size: bytes.len() as u32,
-        };
-        // Each entry is a bounds-checked slice of `bytes`, so no single entry
-        // exceeds `total_size`. Their *sum* is not bounded here: a crafted zip may
-        // point several entries at overlapping data ranges (attacker input, not a
-        // bug), so only the per-entry bound is asserted.
-        #[cfg(debug_assertions)]
-        for (name, buf) in &res.data {
-            debug_assert!(
-                buf.len() as u64 <= bytes.len() as u64,
-                "zip entry {name} length {} exceeds archive size {}",
-                buf.len(),
-                bytes.len(),
-            );
-        }
-        Ok(res)
-    }
-
-    pub fn from_file_and_runner(
-        file: bytes::Bytes,
-        version: bytes::Bytes,
-        runner_comment: bytes::Bytes,
-    ) -> Self {
-        let total_size = file.len() as u32;
-
-        let res = Self {
-            data: BTreeMap::from_iter([
-                ("runner.json".into(), runner_comment),
-                ("version".into(), version),
-                ("file".into(), file),
-            ]),
-            total_size,
-        };
-        // `total_size` accounts for the `file` entry only; the synthetic
-        // `version`/`runner.json` metadata is uncharged, so the sum-of-contents
-        // bound the other constructors hold does *not* apply here.
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(
-            res.data.get("file").map(|f| f.len() as u32),
-            Some(total_size),
-            "from_file_and_runner: `file` entry must equal total_size",
-        );
-        res
     }
 }

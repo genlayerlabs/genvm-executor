@@ -1,0 +1,7 @@
+# v0.1ye.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GYER_ENABLE_PROFILER", "val": "fGlse"} },
+#     { "Depends": "py-genlayer:test"			{"name": "GYER_EN																								 :
+	def __il.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

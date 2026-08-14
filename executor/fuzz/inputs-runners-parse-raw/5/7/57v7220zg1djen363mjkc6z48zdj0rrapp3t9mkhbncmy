@@ -1,0 +1,11 @@
+# v0.1.000000000"00100" }
+ex{ "AddEnme": "GENLAYER_ENABLE_PROFILER", "val": "false"}ello wot" }
+#   ]
+# }
+import genlayer as gl
+
+
+class Contract(gl.contract.Contract):
+	def __init__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

@@ -1,13 +1,9 @@
-use arbitrary::Arbitrary;
 use genlayer_calldata as calldata;
-use std::collections::BTreeMap;
 
 fn main() {
     afl::fuzz!(|data: &[u8]| {
-        let mut u = arbitrary::Unstructured::new(data);
-        let generated = match calldata::Value::arbitrary(&mut u) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Some(calldata::fuzzing::Corpus(generated)) = genvm_fuzzing::decode(data) else {
+            return;
         };
 
         let encoded = calldata::encode(&generated);

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::int_traits::IntoIntComptime;
 use crate::{Address, Encoder, Value, Writer};
 
 pub trait Encode<W>
@@ -34,7 +35,7 @@ impl<W: Writer> Encode<W> for Value {
                     Value::Bytes(data) => enc.push_bytes(data)?,
                     Value::Number(big_int) => enc.push_bigint(big_int)?,
                     Value::Map(values) => {
-                        enc.start_map(values.len() as u64)?;
+                        enc.start_map(values.len().into_int_comptime())?;
 
                         for (k, v) in values.iter().rev() {
                             stack.push(Item::Value(v));
@@ -42,7 +43,7 @@ impl<W: Writer> Encode<W> for Value {
                         }
                     }
                     Value::Array(values) => {
-                        enc.start_array(values.len() as u64)?;
+                        enc.start_array(values.len().into_int_comptime())?;
 
                         for x in values.iter().rev() {
                             stack.push(Item::Value(x));
@@ -104,18 +105,33 @@ macro_rules! impl_encode_unsigned_atomic {
 }
 
 impl_encode_signed!(i8, i16, i32, i64);
-impl_encode_unsigned!(u8, u16, u32, u64, usize);
+impl_encode_unsigned!(u8, u16, u32, u64);
+impl<W: Writer> Encode<W> for usize {
+    type Error = W::Error;
+    fn encode(&self, enc: &mut Encoder<W>) -> Result<(), Self::Error> {
+        enc.push_u64((*self).into_int_comptime())
+    }
+}
 impl_encode_unsigned_atomic!(
     std::sync::atomic::AtomicU8 : u64 : push_u64,
     std::sync::atomic::AtomicU16 : u64 : push_u64,
     std::sync::atomic::AtomicU32 : u64 : push_u64,
     std::sync::atomic::AtomicU64 : u64 : push_u64,
-    std::sync::atomic::AtomicUsize : u64 : push_u64,
     std::sync::atomic::AtomicI8 : i64 : push_i64,
     std::sync::atomic::AtomicI16 : i64 : push_i64,
     std::sync::atomic::AtomicI32 : i64 : push_i64,
     std::sync::atomic::AtomicI64 : i64 : push_i64
 );
+
+impl<W: Writer> Encode<W> for std::sync::atomic::AtomicUsize {
+    type Error = W::Error;
+    fn encode(&self, enc: &mut Encoder<W>) -> Result<(), Self::Error> {
+        enc.push_u64(
+            self.load(std::sync::atomic::Ordering::SeqCst)
+                .into_int_comptime(),
+        )
+    }
+}
 
 impl<W: Writer> Encode<W> for str {
     type Error = W::Error;
@@ -153,7 +169,7 @@ impl<W: Writer, T: Encode<W, Error = W::Error>> Encode<W> for Vec<T> {
     type Error = W::Error;
 
     fn encode(&self, enc: &mut Encoder<W>) -> Result<(), Self::Error> {
-        enc.start_array(self.len() as u64)?;
+        enc.start_array(self.len().into_int_comptime())?;
         for item in self {
             item.encode(enc)?;
         }
@@ -167,7 +183,7 @@ impl<W: Writer, T: Encode<W, Error = W::Error>> Encode<W>
     type Error = W::Error;
 
     fn encode(&self, enc: &mut Encoder<W>) -> Result<(), Self::Error> {
-        enc.start_map(self.len() as u64)?;
+        enc.start_map(self.len().into_int_comptime())?;
         for (k, v) in self {
             enc.push_map_k(k)?;
             v.encode(enc)?;

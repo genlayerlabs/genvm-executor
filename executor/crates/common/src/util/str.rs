@@ -1,3 +1,5 @@
+use crate::int_traits::*;
+
 #[derive(Clone, Debug)]
 pub struct DecodeUtf8<I: Iterator<Item = u8>>(std::iter::Peekable<I>);
 
@@ -18,17 +20,17 @@ impl<I: Iterator<Item = u8>> Iterator for DecodeUtf8<I> {
             if b & 0x80 == 0 {
                 Ok(b as char)
             } else {
-                let l = (!b).leading_zeros() as usize; // number of bytes in UTF-8 representation
+                let l = (!b).leading_zeros().into_int_comptime(); // number of bytes in UTF-8 representation
                 if !(2..=6).contains(&l) {
                     return Err(InvalidSequence(on_err));
                 };
-                let mut x = (b as u32) & (0x7F >> l);
+                let mut x = u32::from(b) & (0x7F >> l);
                 for _ in 0..l - 1 {
                     match self.0.peek() {
                         Some(&b) if b & 0xC0 == 0x80 => {
                             on_err.push(b);
                             self.0.next();
-                            x = (x << 6) | (b as u32) & 0x3F;
+                            x = (x << 6) | u32::from(b) & 0x3F;
                         }
                         _ => return Err(InvalidSequence(on_err)),
                     }

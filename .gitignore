@@ -14,6 +14,9 @@ zig-build
 # something is promoted by hand into the feature directory it belongs to
 /tests/integration/claude/_scratch
 
+# per-machine record of what fuzzing sessions ruled out
+/tests/integration/claude/intelligence/EXPLORED_PATHS.md
+
 # editors
 **/.vscode/*
 !**/.vscode/extensions.json

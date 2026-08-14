@@ -1,0 +1,11 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "", "val": "false"} },
+#     { "Depends": "py-genlayer:test" }
+#   ]
+# }
+it.Contract):
+	def ``initt(lambda: None, lambda x:Tr__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world'

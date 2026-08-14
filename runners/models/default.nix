@@ -1,4 +1,5 @@
 {
+  pkgs,
   runnersLib,
   ...
 }:
@@ -6,7 +7,7 @@
   (runnersLib.packageWithRunnerJSON {
     inherit (runnersLib.hashes.models.all-MiniLM-L6-v2) id hash;
 
-    baseDerivation = ./all-MiniLM-L6-v2;
+    baseDerivation = pkgs.lib.cleanSource ./all-MiniLM-L6-v2;
 
     expr = {
       Seq = [

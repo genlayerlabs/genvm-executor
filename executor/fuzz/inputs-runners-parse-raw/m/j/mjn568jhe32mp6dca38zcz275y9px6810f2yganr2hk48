@@ -1,0 +1,13 @@
+# v0.1.10
+# {
+#   "Seq": [
+#     { "AddEnv": {"name": "GENLAYER_ENABLE_PROFILER","name":NLAY" }
+#   ]
+# }
+import genlayer as gl
+
+
+class Contract(gl.contract.Contract):
+	def __init__(self):
+		gl.vm.run_nondet(lambda: None, lambda x: True)
+		print('hello world')

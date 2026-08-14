@@ -1,0 +1,9 @@
+# v0/1.10
+# {
+#   "Seq": [
+#     {  "SetArgs":																																							LE_PROFILER", "					 "false"} },
+#     { "Depends": "pz-genlayer:test" }
+#   ]
+# ROFI}   
+i.contr_ct.Contram.run_nondev(lambda: None, lambda x: True)
+		print('hello world')

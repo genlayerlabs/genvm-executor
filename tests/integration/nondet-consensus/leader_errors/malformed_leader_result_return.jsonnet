@@ -3,7 +3,7 @@ local util = import 'templates/util.jsonnet';
 // A `return` whose payload is not decodable calldata. This is the hole being
 // closed — the payload used to be passed through undecoded, straight into the
 // execution hash.
-{tags: util.features([['nondet', 'consensus', 'leader'], ['nondet']], 'stable'),
+{tags: util.features([['nondet', 'consensus', 'leader', 'error']], 'stable') + ['python'],
 	entry: util.addPaths([simple.run('${jsonnetDir}/simple.py', 'bar') {
 	next: [super.next[0] {
 		modes: 'vs',

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::int_traits::*;
 use crate::rt;
 use genlayer_sdk::{abi, gvm32};
 use genvm_common::*;
@@ -170,34 +171,18 @@ pub fn unwrap_vm_errors_backtrace(
 // `From<anyhow::Error>` folds them in and `Error: std::error::Error` lets a
 // converted value flow back out into wasmtime's error type.
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ErrorKind {
-    /// VM-level error carrying a stable code (-> ResultCode::VMError) and an
-    /// optional internal detail. The detail refines the public code for
-    /// diagnostics; it is fused into the consensus string as `<code> # <detail>`
-    /// only at the terminal boundary (see [`fuse_vm_error`]).
-    Vm(abi::consts::VmError, Option<host_fns::VmErrorDetail>),
+    /// VM-level error carrying a stable code (-> ResultCode::VMError). A code
+    /// may already carry its ` # <detail>` suffix, appended by the generated
+    /// trie; the non-deterministic channel strips it again.
+    Vm(abi::consts::VmError),
+    /// VM-level error that propagates through sub-VM callers before host output.
+    FatalVm(abi::consts::VmError),
     /// User/contract error carrying a calldata value (-> ResultCode::UserError).
     User(calldata::unparsed::Maybe<calldata::Value>),
     /// Generic internal executor error (the bare `anyhow` case).
     Internal,
-}
-
-/// Fuse a VM error code with its optional detail into the single
-/// consensus-visible string carried by [`rt::vm::RunOk::VMError`]: the bare
-/// `<code>` when there is no detail, or `<code> # <detail>` (separator exactly
-/// space-'#'-space) when one is present.
-pub fn fuse_vm_error(
-    code: abi::consts::VmError,
-    detail: Option<host_fns::VmErrorDetail>,
-) -> abi::consts::VmError {
-    match detail {
-        None => code,
-        Some(detail) => abi::consts::VmError(std::borrow::Cow::Owned(format!(
-            "{} # {}",
-            code.0, detail.0
-        ))),
-    }
 }
 
 /// The executor's error type. Fields after `kind` are common to every error.
@@ -241,28 +226,18 @@ impl Error {
 
     pub fn vm(code: abi::consts::VmError) -> Self {
         Self {
-            kind: ErrorKind::Vm(code, None),
+            kind: ErrorKind::Vm(code),
             context: Vec::new(),
             source: None,
         }
     }
 
-    /// A VM error carrying an internal [`host_fns::VmErrorDetail`] alongside its
-    /// public code (see [`fuse_vm_error`]).
-    pub fn vm_detailed(code: abi::consts::VmError, detail: host_fns::VmErrorDetail) -> Self {
+    pub fn fatal_vm(code: abi::consts::VmError) -> Self {
         Self {
-            kind: ErrorKind::Vm(code, Some(detail)),
+            kind: ErrorKind::FatalVm(code),
             context: Vec::new(),
             source: None,
         }
-    }
-
-    /// Attach a detail to a VM error (no-op on non-VM kinds).
-    pub fn with_detail(mut self, detail: host_fns::VmErrorDetail) -> Self {
-        if let ErrorKind::Vm(_, d) = &mut self.kind {
-            *d = Some(detail);
-        }
-        self
     }
 
     /// Wrap a cause as a VM error with `code`, **keeping the inner terminal
@@ -273,7 +248,7 @@ impl Error {
     pub fn wrap(code: abi::consts::VmError, cause: impl Into<Error>) -> Self {
         let mut cause = cause.into();
         if !cause.is_vm() && !cause.is_user() {
-            cause.kind = ErrorKind::Vm(code, None);
+            cause.kind = ErrorKind::Vm(code);
         }
         cause
     }
@@ -285,6 +260,19 @@ impl Error {
         match cause {
             Some(cause) => Self::wrap(code, cause),
             None => Self::vm(code),
+        }
+    }
+
+    pub fn fatal_vm_cause(code: abi::consts::VmError, cause: Option<anyhow::Error>) -> Self {
+        match cause {
+            Some(cause) => {
+                let mut cause = Self::from(cause);
+                if !cause.is_fatal_vm() {
+                    cause.kind = ErrorKind::FatalVm(code);
+                }
+                cause
+            }
+            None => Self::fatal_vm(code),
         }
     }
 
@@ -312,7 +300,11 @@ impl Error {
     }
 
     pub fn is_vm(&self) -> bool {
-        matches!(self.kind, ErrorKind::Vm(..))
+        matches!(self.kind, ErrorKind::Vm(..) | ErrorKind::FatalVm(..))
+    }
+
+    pub fn is_fatal_vm(&self) -> bool {
+        matches!(self.kind, ErrorKind::FatalVm(..))
     }
 
     /// Convert into the terminal VM result this error represents. `Vm`/`User`
@@ -327,8 +319,9 @@ impl Error {
             source,
         } = self;
         match kind {
-            ErrorKind::Vm(code, detail) => Ok(rt::vm::RunOk::VMError(
-                fuse_vm_error(code, detail),
+            ErrorKind::Vm(code) => Ok(rt::vm::RunOk::VMError(code, fold_cause(context, source))),
+            ErrorKind::FatalVm(code) => Ok(rt::vm::RunOk::FatalVMError(
+                code,
                 fold_cause(context, source),
             )),
             ErrorKind::User(v) => Ok(rt::vm::RunOk::UserError(v)),
@@ -344,8 +337,8 @@ impl Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            ErrorKind::Vm(c, None) => write!(f, "VMError({})", c.0)?,
-            ErrorKind::Vm(c, Some(d)) => write!(f, "VMError({} # {})", c.0, d.0)?,
+            ErrorKind::Vm(c) => write!(f, "VMError({})", c.0)?,
+            ErrorKind::FatalVm(c) => write!(f, "FatalVMError({})", c.0)?,
             ErrorKind::User(v) => write!(f, "UserError({v:?})")?,
             ErrorKind::Internal => f.write_str("internal error")?,
         }
@@ -372,11 +365,15 @@ impl From<anyhow::Error> for Error {
         // Recover the original kind when a boxed executor `Error` is carried in
         // the anyhow chain, so an `errors::Result` -> `anyhow` -> `errors::Result`
         // round trip across the wasmtime boundary stays typed instead of
-        // collapsing to `Internal`.
+        // collapsing to `Internal`. The boxed error is often buried under
+        // `.with_context(...)` frames, so the whole chain is searched.
         match err.downcast::<Error>() {
             Ok(e) => e,
             Err(err) => Self {
-                kind: ErrorKind::Internal,
+                kind: err
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<Error>())
+                    .map_or(ErrorKind::Internal, |e| e.kind.clone()),
                 context: vec![format!("{err:#}")],
                 source: None,
             },
@@ -496,7 +493,7 @@ impl<W: calldata::Writer> calldata::codec::Encode<W> for WasmStoreHashes {
     type Error = W::Error;
 
     fn encode(&self, enc: &mut calldata::Encoder<W>) -> std::result::Result<(), Self::Error> {
-        enc.start_map(self.0.len() as u64)?;
+        enc.start_map(self.0.len().into_int_comptime())?;
         for (k, v) in &self.0 {
             enc.push_map_k(k)?;
             encode_module_fingerprint(v, enc)?;
@@ -512,7 +509,7 @@ fn encode_module_fingerprint<W: calldata::Writer>(
     // ModuleFingerprint has a single field: memories: Vec<MemoryFingerprint>
     enc.start_map(1)?;
     enc.push_map_k("memories")?;
-    enc.start_array(mfp.memories.len() as u64)?;
+    enc.start_array(mfp.memories.len().into_int_comptime())?;
     for mem in &mfp.memories {
         enc.push_bytes(&mem.0)?;
     }
@@ -529,101 +526,31 @@ pub fn vm_error_is_of_kind(err: &str, prefix: &str) -> bool {
     err.as_bytes()[prefix.len()] == b' '
 }
 
-pub fn convert_vm_error_from_pending_abi(
-    pend: public_abi_pending::VmError,
-) -> abi::consts::VmError {
-    abi::consts::VmError(pend.0)
-}
-
 pub fn vm_error_for_leader_extra(det_result: &[u8]) -> abi::consts::VmError {
     let digest: [u8; 32] = sha3::Sha3_256::digest(det_result).into();
     let err = gvm32::encode(&digest);
     let err = &err[..6];
-    convert_vm_error_from_pending_abi(
-        public_abi_pending::VmError::leader_output()
-            .extra()
-            .val_str(err),
-    )
+    abi::consts::VmError::leader_fault()
+        .nondet_output()
+        .extra()
+        .val_str(err)
 }
 
 pub fn vm_error_for_leader_use_this_error(leader_err: &str) -> abi::consts::VmError {
     let digest: [u8; 32] = sha3::Sha3_256::digest(leader_err.as_bytes()).into();
     let err = gvm32::encode(&digest);
     let err = &err[..6];
-    let candidate = public_abi_pending::VmError::leader_output()
+    let candidate = abi::consts::VmError::leader_fault()
+        .nondet_output()
         .uses_this_error()
         .val_str(err);
 
     if candidate.0.as_ref() != leader_err {
-        convert_vm_error_from_pending_abi(candidate)
+        candidate
     } else {
-        convert_vm_error_from_pending_abi(
-            public_abi_pending::VmError::leader_output()
-                .uses_this_error()
-                .val_str("fix_point"),
-        )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn vm_code(run_ok: &rt::vm::RunOk) -> &str {
-        match run_ok {
-            rt::vm::RunOk::VMError(code, _) => code.0.as_ref(),
-            other => panic!("expected VMError, got {other:?}"),
-        }
-    }
-
-    // Regression: a VM error raised in an `errors::Result` function reaches the
-    // unwrap path boxed as a concrete `Error` after crossing an `anyhow::Result`
-    // boundary (e.g. `get_arch` -> `?`) with extra `.context(..)` layers. It must
-    // still recover as a `VMError`, not collapse to `internal error`.
-    #[test]
-    fn unified_error_survives_anyhow_context_roundtrip() {
-        let code = abi::consts::VmError::invalid_contract().absent_runner_comment();
-
-        let err: anyhow::Error = Error::vm(code.clone()).into();
-        let err = err.context("parsing chain runner for chain:0x01");
-        let err = err.context("getting runner for chain:0x01");
-
-        let recovered = unwrap_vm_errors(UnwrapDynError::from(err)).expect("must be a VM result");
-        assert_eq!(vm_code(&recovered), code.0.as_ref());
-    }
-
-    // `Error::wrap` keeps the inner terminal code: wrapping an existing VM error
-    // with a different code must not mask the original (innermost) one.
-    #[test]
-    fn wrap_keeps_inner_vm_code() {
-        let inner = abi::consts::VmError::invalid_contract().not_utf8_text();
-        let outer = abi::consts::VmError::invalid_contract().val();
-
-        let wrapped = Error::wrap(outer, Error::vm(inner.clone()));
-        let recovered = wrapped.into_run_ok().expect("must be a VM result");
-        assert_eq!(vm_code(&recovered), inner.0.as_ref());
-    }
-
-    // `Error::wrap` promotes an internal cause to the given VM code while keeping
-    // the diagnostic message.
-    #[test]
-    fn wrap_promotes_internal_cause() {
-        let code = abi::consts::VmError::invalid_contract().absent_runner_comment();
-
-        let wrapped = Error::wrap(code.clone(), anyhow::anyhow!("boom"));
-        assert!(wrapped.is_vm());
-        let recovered = wrapped.into_run_ok().expect("must be a VM result");
-        assert_eq!(vm_code(&recovered), code.0.as_ref());
-    }
-
-    // An internal error stays internal (no spurious VM code).
-    #[test]
-    fn internal_error_stays_internal() {
-        let err: anyhow::Error = anyhow::anyhow!("boom");
-        let recovered = unwrap_vm_errors(UnwrapDynError::from(err));
-        assert!(
-            recovered.is_err(),
-            "internal error must not become a VM result"
-        );
+        abi::consts::VmError::leader_fault()
+            .nondet_output()
+            .uses_this_error()
+            .val_str("fix_point")
     }
 }

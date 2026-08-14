@@ -1,0 +1,10 @@
+{
+  "Seq": [
+    {
+      "Depends": "contract"
+    },
+    {
+      "StartWasm": "self_dependency.wasm"
+    }
+  ]
+}

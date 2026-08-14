@@ -2,7 +2,7 @@
   "cargo_test_flags": [
   ],
   "cargo_afl_build_flags": [
-    "--features", "arbitrary,storage,dont_define_wasi_storage"
+    "--features", "fuzzing,arbitrary,storage,dont_define_wasi_storage"
   ],
   "keep_env": []
 }

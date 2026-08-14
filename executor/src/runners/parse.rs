@@ -58,7 +58,7 @@ fn code_to_archive_from_text(code: bytes::Bytes) -> rt::errors::Result<super::Ar
             }
         }
         Err(rt::errors::Error::vm(
-            abi::consts::VmError::invalid_contract().absent_runner_comment(),
+            abi::consts::VmError::invalid_contract().runner().absent(),
         ))
     })()?;
 

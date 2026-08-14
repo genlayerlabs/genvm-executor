@@ -3,7 +3,7 @@ local util = import 'templates/util.jsonnet';
 local simple_deploy = import 'templates/simple_deploy.jsonnet';
 
 {
-	tags: util.features([['wasi', 'environ']], 'stable') + ['fuzz'],
+	tags: util.features([['wasi', 'environment'], ['nasty-determinism', 'id']], 'stable') + ['fuzz', 'python'],
 	entry: util.addPaths([
 		simple_deploy.run('${jsonnetDir}/contract.py') {
 			expected_semantics_components: ['return'],

@@ -1,5 +1,6 @@
 use crate::Address;
 use crate::consts::*;
+use crate::int_traits::IntoIntComptime;
 
 fn write_uleb<W: Writer>(w: &mut W, mut num: num_bigint::BigUint) -> Result<(), W::Error> {
     if num == num_bigint::BigUint::ZERO {
@@ -66,8 +67,9 @@ fn write_uleb_u128<W: Writer>(w: &mut W, mut num: u128) -> Result<(), W::Error> 
 }
 
 fn write_uleb_tagged_u64<W: Writer>(w: &mut W, tag: u8, val: u64) -> Result<(), W::Error> {
-    let val = val as u128;
-    write_uleb_u128(w, (val << BITS_IN_TYPE as u128) + (tag as u128))
+    let val = u128::from(val);
+    let bits_in_type: u128 = BITS_IN_TYPE.into_int_comptime();
+    write_uleb_u128(w, (val << bits_in_type) + u128::from(tag))
 }
 
 fn write_tagged_uleb<W: Writer>(
@@ -94,7 +96,8 @@ impl Writer for CounterWriter {
     type Error = std::convert::Infallible;
 
     fn write_all(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-        self.0 += data.len() as u64;
+        let len: u64 = data.len().into_int_comptime();
+        self.0 += len;
         Ok(())
     }
 }
@@ -327,14 +330,18 @@ impl<W: Writer> Encoder<W> {
     pub fn push_str(&mut self, value: &str) -> Result<(), W::Error> {
         #[cfg(debug_assertions)]
         self.dbg_value();
-        write_uleb_tagged_u64(&mut self.writer, TYPE_STR, value.len() as u64)?;
+        write_uleb_tagged_u64(&mut self.writer, TYPE_STR, value.len().into_int_comptime())?;
         self.writer.write_all(value.as_bytes())
     }
 
     pub fn push_bytes(&mut self, value: &[u8]) -> Result<(), W::Error> {
         #[cfg(debug_assertions)]
         self.dbg_value();
-        write_uleb_tagged_u64(&mut self.writer, TYPE_BYTES, value.len() as u64)?;
+        write_uleb_tagged_u64(
+            &mut self.writer,
+            TYPE_BYTES,
+            value.len().into_int_comptime(),
+        )?;
         self.writer.write_all(value)
     }
 
@@ -356,7 +363,7 @@ impl<W: Writer> Encoder<W> {
     pub fn push_map_k(&mut self, key: &str) -> Result<(), W::Error> {
         #[cfg(debug_assertions)]
         self.dbg_key(key);
-        write_uleb_u64(&mut self.writer, key.len() as u64)?;
+        write_uleb_u64(&mut self.writer, key.len().into_int_comptime())?;
         self.writer.write_all(key.as_bytes())
     }
 }

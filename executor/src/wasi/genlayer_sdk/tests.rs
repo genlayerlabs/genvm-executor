@@ -199,33 +199,36 @@ fn leader_bytes(code: public_abi::ResultCode, payload: &[u8]) -> Vec<u8> {
 }
 
 fn malformed() -> public_abi::VmError {
-    rt::errors::convert_vm_error_from_pending_abi(
-        public_abi_pending::VmError::leader_output().malformed(),
-    )
+    public_abi::VmError::leader_fault()
+        .nondet_output()
+        .malformed()
 }
 
 #[test]
 fn leader_empty_result_is_absent() {
     assert_eq!(
         parse_leader_result(&[]).unwrap_err(),
-        public_abi::VmError::absent_leader_nondet_output()
+        public_abi::VmError::leader_fault().nondet_output().absent()
     );
 }
 
 #[test]
 fn leader_unknown_result_code_is_malformed() {
-    for code in [4u8, 7, 0x80, 0xff] {
+    for code in [7u8, 0x80, 0xff] {
         assert_eq!(parse_leader_result(&[code]).unwrap_err(), malformed());
     }
 }
 
 #[test]
 fn leader_internal_error_code_is_malformed() {
-    // `internal_error` is a live enum variant that `TryFrom<u8>` accepts, but the
-    // wire format (spec: subvm result encoding) admits only 0/1/2. An internal
-    // error is never a proposable result.
-    let data = leader_bytes(public_abi::ResultCode::InternalError, &[]);
-    assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
+    // A proposable result admits only 0/1/2; the host-facing codes share the
+    // numbering but are never proposable.
+    for code in [
+        crate::host::host_fns::ResultCode::InternalError,
+        crate::host::host_fns::ResultCode::FatalVmError,
+    ] {
+        assert_eq!(parse_leader_result(&[code as u8]).unwrap_err(), malformed());
+    }
 }
 
 #[test]
@@ -317,7 +320,7 @@ fn leader_vm_error_off_trie_code_is_malformed() {
 fn leader_vm_error_on_trie_code_passes() {
     for code in [
         "timeout",
-        "host_forbidden",
+        "forbidden",
         "out_of storage",
         "out_of memory",
         "out_of memory wasm_memory",
@@ -395,8 +398,8 @@ fn leader_vm_error_detail_is_rejected_before_the_namespace_remap() {
     // remap hashes the whole proposed string, so running it first would fold an
     // attacker-chosen detail into the derived code.
     for code in [
-        "leader_output malformed # x",
-        "absent_leader_nondet_output # x",
+        "leader_fault nondet_output malformed # x",
+        "leader_fault nondet_output absent # x",
     ] {
         let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
         assert_eq!(
@@ -447,12 +450,12 @@ fn leader_vm_error_in_derived_namespace_is_remapped() {
     // rejecting it, or "the leader proposed X" and "the proposal was rejected
     // as X" would be indistinguishable.
     for code in [
-        "absent_leader_nondet_output",
-        "leader_output",
-        "leader_output malformed",
-        "leader_output uses_this_error abcdef",
-        "leader_output whatever it wants",
-        "absent_leader_nondet_output extra",
+        "leader_fault nondet_output absent",
+        "leader_fault nondet_output",
+        "leader_fault nondet_output malformed",
+        "leader_fault nondet_output uses_this_error abcdef",
+        "leader_fault nondet_output whatever it wants",
+        "leader_fault nondet_output absent extra",
     ] {
         let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
         let err = parse_leader_result(&data).unwrap_err();
@@ -474,7 +477,7 @@ fn derived_outcomes_are_not_proposable_verbatim() {
     // Feeding a validator-derived outcome back in as a proposal must be
     // rejected again -- the namespace is closed under this loop, which is what
     // the `fix_point` sentinel exists for.
-    for seed in ["", "timeout", "leader_output malformed"] {
+    for seed in ["", "timeout", "leader_fault nondet_output malformed"] {
         let derived = rt::errors::vm_error_for_leader_use_this_error(seed);
         let data = leader_bytes(public_abi::ResultCode::VmError, derived.0.as_bytes());
         assert!(
@@ -486,10 +489,10 @@ fn derived_outcomes_are_not_proposable_verbatim() {
 }
 
 #[test]
-fn leader_vm_error_pending_abi_code_is_malformed() {
-    // Pending-ABI codes are not `vm_error` trie paths, so they are unproposable
-    // by construction: `malformed_entry` is an outcome the executor derives.
-    let code = public_abi_pending::VmError::malformed_entry();
+fn leader_vm_error_derived_entry_code_is_malformed() {
+    // `malformed_entry` is an executor-derived outcome, so a leader may not
+    // claim it as its own result.
+    let code = public_abi::VmError::malformed_entry();
     let data = leader_bytes(public_abi::ResultCode::VmError, code.0.as_bytes());
     assert_eq!(parse_leader_result(&data).unwrap_err(), malformed());
 }
@@ -500,12 +503,12 @@ fn every_generated_trie_code_is_accepted() {
     // regenerating `is_valid` would silently make a legitimate leader code
     // unproposable. Mirrors the constructors the generator emits.
     //
-    // `absent_leader_nondet_output` is deliberately absent: it is a trie path,
-    // but it lives in the derived-outcome namespace and so is never proposable
-    // (see `leader_vm_error_in_derived_namespace_is_remapped`).
+    // The leader-fault nondet-output subtree is deliberately absent: it lives
+    // in the derived-outcome namespace and so is never proposable (see
+    // `leader_vm_error_in_derived_namespace_is_remapped`).
     let codes = [
         public_abi::VmError::timeout(),
-        public_abi::VmError::host_forbidden(),
+        public_abi::VmError::forbidden(),
         public_abi::VmError::wasm_trap().val(),
         public_abi::VmError::wasm_trap().unreachable(),
         public_abi::VmError::out_of().storage(),
@@ -559,8 +562,8 @@ fn leader_own_error_is_not_self_filtered() {
     // The acceptance check must not run on the leader's own output: rewriting an
     // honest result into a derived-namespace code would guarantee a hash mismatch
     // against honest validators, which unconditionally replace it again.
-    let stripped = strip_vm_error_detail("absent_leader_nondet_output # inner");
-    assert_eq!(stripped.0, "absent_leader_nondet_output");
+    let stripped = strip_vm_error_detail("leader_fault nondet_output absent # inner");
+    assert_eq!(stripped.0, "leader_fault nondet_output absent");
     assert!(
         parse_leader_result(&leader_bytes(
             public_abi::ResultCode::VmError,
@@ -579,7 +582,7 @@ fn every_stripped_leader_error_round_trips_through_acceptance() {
     // cannot spawn a nondet child of its own).
     for code in [
         "timeout",
-        "host_forbidden",
+        "forbidden",
         "wasm_trap unreachable",
         "out_of memory wasm_memory",
         "exit_code 0",

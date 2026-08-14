@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::rt::errors::{self, ResultExt};
+use anyhow::Context;
 use symbol_table::GlobalSymbol;
 
 /// A shared, initialize-once cell holding an archive. A live [`ArchivePin`] keeps
@@ -217,6 +218,12 @@ impl std::borrow::Borrow<str> for StrSymbol {
     }
 }
 
+impl AsRef<str> for StrSymbol {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 impl Ord for StrSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_str().cmp(other.as_str())
@@ -259,6 +266,87 @@ impl Drop for Reader {
     }
 }
 
+pub fn validate_builtin_runner_hash(hash: &str) -> anyhow::Result<()> {
+    if hash.len() != 52 {
+        anyhow::bail!(
+            "runner hash must be 32 characters long, it is {} for `{hash}`",
+            hash.len()
+        );
+    }
+
+    for c in hash.chars() {
+        if !c.is_ascii_lowercase() && !c.is_ascii_digit() {
+            anyhow::bail!("runner hash must be lowercase alphanumeric, found {c:?}");
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_builtin_runner_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("runner name cannot be empty");
+    }
+    if name == "custom" {
+        anyhow::bail!("runner name cannot be `custom`");
+    }
+    for c in name.chars() {
+        if !c.is_ascii_alphanumeric() && !['-', '_', '.'].contains(&c) {
+            anyhow::bail!("runner name must be alphanumeric or \"._-\", found {c:?}");
+        }
+    }
+
+    if name.chars().all(|c| ['-', '_', '.'].contains(&c)) {
+        anyhow::bail!("runner name cannot consist solely of \"._-\"");
+    }
+
+    Ok(())
+}
+
+pub trait RegistryPayload: serde::de::DeserializeOwned {
+    fn validate(&self) -> anyhow::Result<()>;
+}
+
+impl RegistryPayload for String {
+    fn validate(&self) -> anyhow::Result<()> {
+        validate_builtin_runner_hash(self.as_ref())
+    }
+}
+
+impl RegistryPayload for StrSymbol {
+    fn validate(&self) -> anyhow::Result<()> {
+        validate_builtin_runner_hash(self.as_ref())
+    }
+}
+
+impl<T: RegistryPayload> RegistryPayload for Vec<T> {
+    fn validate(&self) -> anyhow::Result<()> {
+        for item in self {
+            item.validate()?;
+        }
+        Ok(())
+    }
+}
+
+pub fn read_registry<K: Ord + serde::de::DeserializeOwned + AsRef<str>, V: RegistryPayload>(
+    path: &std::path::Path,
+) -> anyhow::Result<BTreeMap<K, V>> {
+    let res: BTreeMap<K, V> = serde_json::from_reader(
+        std::fs::File::open(path).with_ctx(|| format!("opening {path:?}"))?,
+    )?;
+
+    (|| {
+        for (k, v) in &res {
+            validate_builtin_runner_name(k.as_ref())?;
+            v.validate()?;
+        }
+        Ok::<(), anyhow::Error>(())
+    })()
+    .with_context(|| format!("validating {path:?}"))?;
+
+    Ok(res)
+}
+
 impl Reader {
     pub fn new(
         path: &std::path::Path,
@@ -273,19 +361,13 @@ impl Reader {
             )));
         }
 
-        let mut all: BTreeMap<_, Vec<_>> = serde_json::from_reader(
-            std::fs::File::open(registry_path.join("all.json"))
-                .with_ctx(|| format!("opening {registry_path:?}/all.json"))?,
-        )?;
+        let mut all: BTreeMap<_, Vec<_>> = read_registry(&registry_path.join("all.json"))?;
         for b in all.values_mut() {
             b.sort();
         }
 
         let latest = if debug_mode {
-            serde_json::from_reader(
-                std::fs::File::open(registry_path.join("latest.json"))
-                    .with_ctx(|| format!("opening {registry_path:?}/latest.json"))?,
-            )?
+            read_registry(&registry_path.join("latest.json"))?
         } else {
             BTreeMap::new()
         };
