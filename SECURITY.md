@@ -8,8 +8,8 @@ This repository is a component of [genvm-manager]; the canonical security policy
 ## Reporting a vulnerability
 
 **Do not open a public issue.** Report privately via GitHub's
-[private vulnerability reporting](https://github.com/genlayerlabs/genvm-executor/security/advisories/new),
-or email kira@yeager.ai
+[private vulnerability reporting](https://github.com/genlayerlabs/genvm-manager/security/advisories/new),
+or email kira@genlayerlabs.com
 
 Include a description, affected component/version, and a reproduction (a contract, calldata,
 or test case) where possible. We aim to acknowledge within a few business days.

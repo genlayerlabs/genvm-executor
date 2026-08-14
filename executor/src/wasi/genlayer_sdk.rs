@@ -77,6 +77,14 @@ fn nested_run_ok(
         genvm_modules_interfaces::ResultCode::InternalError => {
             anyhow::bail!("nested executor returned an internal error");
         }
+        // This line has no fatal VM error to raise, and handing the caller an
+        // ordinary one would let it swallow an outcome the callee marked as not
+        // catchable. Refuse the reply instead.
+        genvm_modules_interfaces::ResultCode::FatalVmError => {
+            anyhow::bail!(
+                "nested executor returned a fatal VM error, which this line cannot raise"
+            );
+        }
     };
 
     Ok((run_ok, reply.small_hash))

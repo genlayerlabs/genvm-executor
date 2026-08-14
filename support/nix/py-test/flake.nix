@@ -43,9 +43,9 @@
           # caches the CPU (unfree-free) torch for stable, so this is a plain
           # fetch — no multi-hour source compile, no unfree CUDA wheel.
           ps.torch
-          # NB: python-afl (the old `py_fuzz` plugin's `py-afl-fuzz`) is not
-          # packaged in this nixpkgs and the fuzz collector is disabled, so it
-          # is intentionally omitted. Add it back here if fuzzing is revived.
+          # NB: python-afl is intentionally omitted — this line carries no fuzz
+          # targets. The v0.3.x flake packages it (from PyPI, it is not in
+          # nixpkgs) next to AFL++; copy that if a target lands here.
         ]);
       in
       {

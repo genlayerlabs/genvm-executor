@@ -2,7 +2,7 @@ local simple = import 'templates/simple_deploy.jsonnet';
 local msg = import 'templates/message.json';
 local s = simple.run('${jsonnetDir}/send_message_on.py');
 local util = import 'templates/util.jsonnet';
-{entry: util.addPaths([util.chain([
+{tags: ["feature-message-send", "python"], entry: util.addPaths([util.chain([
 	s {
 		"calldata": |||
 			{

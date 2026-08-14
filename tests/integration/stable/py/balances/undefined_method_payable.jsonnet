@@ -2,7 +2,7 @@ local simple = import 'templates/simple_deploy.jsonnet';
 local msg = import 'templates/message.json';
 local s = simple.run('${jsonnetDir}/undefined_method_payable.py');
 local util = import 'templates/util.jsonnet';
-{entry: util.addPaths([util.chain([
+{tags: ["feature-balance", "feature-message-external", "feature-message-payable", "python"], entry: util.addPaths([util.chain([
 	s {
 		"calldata": |||
 			{

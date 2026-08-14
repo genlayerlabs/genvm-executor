@@ -101,6 +101,7 @@ impl MessageAllocationNode {
         abi::encode(roots)
     }
 
+    #[allow(clippy::if_same_then_else)]
     pub fn matches_internal(
         &self,
         on: On,
@@ -121,6 +122,7 @@ impl MessageAllocationNode {
         }
     }
 
+    #[allow(clippy::if_same_then_else)]
     pub fn matches_external(
         &self,
         recipient: genlayer_sdk::calldata::Address,

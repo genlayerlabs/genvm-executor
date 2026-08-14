@@ -7,7 +7,7 @@ pub mod vm;
 use std::sync::Arc;
 
 enum SpawnErrorState {
-    Spawned(vm::VMBase),
+    Spawned(Box<vm::VMBase>),
     Unspawned(Box<wasi::genlayer_sdk::SingleVMData>),
 }
 

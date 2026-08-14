@@ -409,7 +409,7 @@ pub async fn spawn(
     ) {
         return Err(rt::SpawnError {
             error: e,
-            state: Box::new(rt::SpawnErrorState::Spawned(vm_base)),
+            state: Box::new(rt::SpawnErrorState::Spawned(Box::new(vm_base))),
         });
     }
 
@@ -431,7 +431,7 @@ pub async fn apply_contract_actions(
         }),
         Err(e) => Err(rt::SpawnError {
             error: e,
-            state: Box::new(rt::SpawnErrorState::Spawned(vm.vm_base)),
+            state: Box::new(rt::SpawnErrorState::Spawned(Box::new(vm.vm_base))),
         }),
     }
 }

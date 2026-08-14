@@ -246,7 +246,7 @@ impl VM<wasmtime::Instance> {
             }
             Err(e) => Err(rt::SpawnError {
                 error: e,
-                state: Box::new(rt::SpawnErrorState::Spawned(self.vm_base)),
+                state: Box::new(rt::SpawnErrorState::Spawned(Box::new(self.vm_base))),
             }),
         }
     }

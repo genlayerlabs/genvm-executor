@@ -16,6 +16,11 @@
   ...
 }@args:
 let
+  release-src = get-root-subtree [
+    "${exec-prefix}/executor/install"
+    "${exec-prefix}/executor/registry"
+  ];
+
   # v0.2.x is a frozen legacy line, so its runner registry never changes: rather
   # than run it through the umbrella's accumulate-and-filter machinery (which is
   # built for forward-rolling lines and whose `latest` would pick the wrong hash
@@ -26,8 +31,8 @@ let
   # consulted to accept a requested runner hash; `latest.json` resolves an id to
   # its newest runner in debug mode (used by e.g. `Depends: py-genlayer:test`).
   manifests-data = {
-    all = ./registry/all.json;
-    latest = ./registry/latest.json;
+    all = release-src + "/${exec-prefix}/executor/registry/all.json";
+    latest = release-src + "/${exec-prefix}/executor/registry/latest.json";
   };
 
   lib = pkgs.lib;
@@ -66,7 +71,7 @@ let
 
       srcs = [
         exe
-        ./install
+        (release-src + "/${exec-prefix}/executor/install")
       ];
 
       dontUnpack = true;

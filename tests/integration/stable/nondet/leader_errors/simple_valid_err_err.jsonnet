@@ -1,6 +1,6 @@
 local simple = import 'templates/simple_deploy_then_write.jsonnet';
 local util = import 'templates/util.jsonnet';
-{entry: util.addPaths([simple.run('${jsonnetDir}/simple.py', 'foo') {
+{tags: ['python', 'feature-nondet-consensus-validator'], entry: util.addPaths([simple.run('${jsonnetDir}/simple.py', 'foo') {
 	next: [super.next[0] {
 		leader_nondet: [
 			{

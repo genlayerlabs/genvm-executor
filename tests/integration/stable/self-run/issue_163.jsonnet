@@ -1,3 +1,3 @@
 local simple = import 'templates/simple_deploy.jsonnet';
 local util = import 'templates/util.jsonnet';
-{entry: util.addPaths([simple.run('${jsonnetDir}/issue_163.py')])}
+{tags: ['python', 'feature-storage-tree-map'], entry: util.addPaths([simple.run('${jsonnetDir}/issue_163.py')])}

@@ -9,9 +9,11 @@ use super::value::{BinOp, EvalError, Expr, StrSeg, Thunk, Value};
 // It is only used for trusted, operator-supplied fee config expressions,
 // never for contract-supplied or user-supplied input.
 
+type GetVarFn = dyn Fn(&str) -> Result<Value, EvalError> + Send + Sync;
+
 #[derive(Clone)]
 struct EvalContext {
-    get_var: Arc<dyn Fn(&str) -> Result<Value, EvalError> + Send + Sync>,
+    get_var: Arc<GetVarFn>,
     let_bindings: rpds::RedBlackTreeMap<String, Thunk, archery::ArcK>,
 }
 

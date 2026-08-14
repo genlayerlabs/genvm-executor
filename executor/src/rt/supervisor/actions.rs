@@ -76,8 +76,8 @@ impl From<runners::Id> for Resolved {
     fn from(id: runners::Id) -> Self {
         let kind = match &id {
             runners::Id::Builtin { name, hash } => ResolvedKind::Disk {
-                name: name.clone(),
-                hash: hash.clone(),
+                name: *name,
+                hash: *hash,
             },
             runners::Id::Chain { address, on, slot } => ResolvedKind::Chain {
                 address: *address,
@@ -644,7 +644,7 @@ impl Ctx<'_, '_> {
                     return Ok(None);
                 }
 
-                let uid = resolved.id.clone();
+                let uid = resolved.id;
                 log_trace!(uid = uid; "adding dependency");
 
                 let (uid, new_arch) = self
