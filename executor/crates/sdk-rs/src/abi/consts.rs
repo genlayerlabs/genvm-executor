@@ -70,24 +70,32 @@ impl TryFrom<u8> for ResultCode {
 #[repr(u8)]
 pub enum StorageType {
     Default = 0,
-    LatestFinal = 1,
-    LatestNonFinal = 2,
+    #[serde(alias = "LatestFinal")]
+    LatestFinalized = 1,
+    #[serde(alias = "LatestNonFinal")]
+    LatestDecided = 2,
 }
 
 impl StorageType {
     pub const SIZE: usize = 3;
+    #[deprecated(note = "use `StorageType::LatestFinalized`")]
+    #[allow(non_upper_case_globals)]
+    pub const LatestFinal: Self = Self::LatestFinalized;
+    #[deprecated(note = "use `StorageType::LatestDecided`")]
+    #[allow(non_upper_case_globals)]
+    pub const LatestNonFinal: Self = Self::LatestDecided;
     pub fn value(self) -> u8 {
         match self {
             StorageType::Default => 0,
-            StorageType::LatestFinal => 1,
-            StorageType::LatestNonFinal => 2,
+            StorageType::LatestFinalized => 1,
+            StorageType::LatestDecided => 2,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
         match self {
             StorageType::Default => "default",
-            StorageType::LatestFinal => "latest_final",
-            StorageType::LatestNonFinal => "latest_non_final",
+            StorageType::LatestFinalized => "latest_finalized",
+            StorageType::LatestDecided => "latest_decided",
         }
     }
 }
@@ -98,8 +106,8 @@ impl TryFrom<u8> for StorageType {
     fn try_from(value: u8) -> Result<Self, ()> {
         match value {
             0 => Ok(StorageType::Default),
-            1 => Ok(StorageType::LatestFinal),
-            2 => Ok(StorageType::LatestNonFinal),
+            1 => Ok(StorageType::LatestFinalized),
+            2 => Ok(StorageType::LatestDecided),
             _ => Err(()),
         }
     }

@@ -308,7 +308,7 @@ impl ContextVFS<'_> {
                     state_mode: state,
                     topmost_runner_id: runners::Id::Chain {
                         address,
-                        on: if state == public_abi::StorageType::LatestFinal {
+                        on: if state == public_abi::StorageType::LatestFinalized {
                             runners::ChainState::Finalized
                         } else {
                             runners::ChainState::Accepted
@@ -395,8 +395,8 @@ impl ContextVFS<'_> {
 
         let state_mode = match vm_data.conf.execution.state_mode {
             public_abi::StorageType::Default => NestedStorageType::Default,
-            public_abi::StorageType::LatestFinal => NestedStorageType::LatestFinal,
-            public_abi::StorageType::LatestNonFinal => NestedStorageType::LatestNonFinal,
+            public_abi::StorageType::LatestFinalized => NestedStorageType::LatestFinalized,
+            public_abi::StorageType::LatestDecided => NestedStorageType::LatestDecided,
         };
         let message = &vm_data.message_data.message;
         let envelope = NestedRunEnvelope {

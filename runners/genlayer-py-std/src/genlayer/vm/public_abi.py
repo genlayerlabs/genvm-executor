@@ -16,8 +16,10 @@ class ResultCode(IntEnum):
 
 class StorageType(IntEnum):
 	DEFAULT = 0
-	LATEST_FINAL = 1
-	LATEST_NON_FINAL = 2
+	LATEST_FINALIZED = 1
+	LATEST_DECIDED = 2
+	LATEST_FINAL = LATEST_FINALIZED  # Deprecated alias
+	LATEST_NON_FINAL = LATEST_DECIDED  # Deprecated alias
 
 
 class EntryKind(IntEnum):

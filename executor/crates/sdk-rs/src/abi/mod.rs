@@ -40,6 +40,38 @@ pub struct CallKey(
     pub [u8; 32],
 );
 
+#[cfg(test)]
+mod storage_type_tests {
+    use super::consts::StorageType;
+    use serde::Deserialize;
+
+    #[test]
+    #[allow(deprecated)]
+    fn decided_names_preserve_wire_values_and_legacy_aliases() {
+        fn legacy_match(value: StorageType) -> u8 {
+            match value {
+                StorageType::Default => 0,
+                StorageType::LatestFinal => 1,
+                StorageType::LatestNonFinal => 2,
+            }
+        }
+
+        assert_eq!(StorageType::LatestFinalized.value(), 1);
+        assert_eq!(StorageType::LatestDecided.value(), 2);
+        assert_eq!(StorageType::try_from(1), Ok(StorageType::LatestFinalized));
+        assert_eq!(StorageType::try_from(2), Ok(StorageType::LatestDecided));
+        assert_eq!(StorageType::LatestFinal, StorageType::LatestFinalized);
+        assert_eq!(StorageType::LatestNonFinal, StorageType::LatestDecided);
+        assert_eq!(legacy_match(StorageType::LatestDecided), 2);
+        let legacy_name =
+            serde::de::value::StrDeserializer::<serde::de::value::Error>::new("LatestNonFinal");
+        assert_eq!(
+            StorageType::deserialize(legacy_name).unwrap(),
+            StorageType::LatestDecided
+        );
+    }
+}
+
 impl CallKey {
     pub const DEPLOY: CallKey = CallKey([0u8; 32]);
     pub const UNNAMED: CallKey = CallKey([0u8; 32]);

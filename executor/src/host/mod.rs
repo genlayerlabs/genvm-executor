@@ -866,7 +866,7 @@ mod tests {
                 host_fns::Methods::ResolveCallcontractExecutor as u8
             );
             assert_eq!(&request[1..21], &[7; 20]);
-            assert_eq!(request[21], StorageType::LatestFinal as u8);
+            assert_eq!(request[21], StorageType::LatestFinalized as u8);
             assert_eq!(request[22], 3);
 
             let encoded = calldata::encode_obj(&reply);
@@ -883,7 +883,7 @@ mod tests {
         let result = host
             .resolve_callcontract_executor(
                 calldata::Address::from([7; 20]),
-                StorageType::LatestFinal,
+                StorageType::LatestFinalized,
                 3,
             )
             .expect("resolve executor");
@@ -954,7 +954,7 @@ mod tests {
             },
             stack: Vec::new(),
             permissions: genvm_modules_interfaces::NestedPermissions::DETERMINISTIC,
-            state_mode: genvm_modules_interfaces::NestedStorageType::LatestNonFinal,
+            state_mode: genvm_modules_interfaces::NestedStorageType::LatestDecided,
             topmost_runner_id: genvm_modules_interfaces::NestedRunnerId("contract".to_owned()),
             remaining_recursion: 4,
             remaining_det_fuel: primitive_types::U256::from(10),
