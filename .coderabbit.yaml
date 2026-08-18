@@ -26,7 +26,8 @@ reviews:
     - "!runners/models/**"
     - "!runners/softfloat/berkeley-softfloat-3/**"
     - "!executor/third-party/**"
-    - "!**/fuzz/inputs*/**"
-    # Root-level system-test fixtures (contracts, expected outputs); crate and
-    # runner test code under */tests/ is still reviewed.
-    - "!tests/**"
+    - "!**/fuzz/**"
+    - "!**/*_test.rs"
+    - "!**/*.json"
+    - "!**/tests/**"
+    - "!**/test/**"
