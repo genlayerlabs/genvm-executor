@@ -1,0 +1,10 @@
+{
+  "Seq": [
+    {
+      "Depends": "softfloat:test"
+    },
+    {
+      "StartWasm": "softfloat_trunc_trap.wasm"
+    }
+  ]
+}

@@ -27,3 +27,8 @@ def test_calldata_corpus_decode_roundtrip():
 		assert calldata.decode(bytes.fromhex(expected)) == value, (
 			f'roundtrip mismatch for {value!r}'
 		)
+
+
+def test_memoryview_roundtrip_as_bytes():
+	value = memoryview(b'abc')
+	assert calldata.decode(calldata.encode(value)) == value.tobytes()
