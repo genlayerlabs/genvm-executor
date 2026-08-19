@@ -3,24 +3,39 @@ use crate::rt::errors::Error;
 use genlayer_sdk::abi;
 use genvm_common::*;
 
-fn detect_version_from_wasm(code: &[u8]) -> rt::errors::Result<String> {
-    let parser = wasmparser::Parser::new(0);
+/// What a raw wasm module may say about itself, in custom sections. Both are
+/// optional and both fall back to a default: the current major, and a runner
+/// that just starts this module.
+#[derive(Default)]
+struct WasmSelfDescription {
+    version: Option<String>,
+    runner_json: Option<bytes::Bytes>,
+}
 
-    for payload in parser.parse_all(code) {
-        match payload? {
-            wasmparser::Payload::CustomSection(section) if section.name() == "genvm.version" => {
-                let version = section.data().to_vec();
-                if let Ok(version_str) = std::str::from_utf8(&version) {
-                    return Ok(version_str.to_string());
-                } else {
-                    return Err(Error::internal("Invalid UTF-8 in version section"));
-                }
+const DEFAULT_RUNNER_JSON: &[u8] = b"{ \"StartWasm\": \"file\" }";
+
+fn describe_wasm(code: &[u8]) -> rt::errors::Result<WasmSelfDescription> {
+    let mut res = WasmSelfDescription::default();
+
+    for payload in wasmparser::Parser::new(0).parse_all(code) {
+        let wasmparser::Payload::CustomSection(section) = payload? else {
+            continue;
+        };
+        match section.name() {
+            // an unreadable section is treated as absent rather than as a
+            // parse failure, so it cannot take the other section down with it
+            "genvm.version" => match std::str::from_utf8(section.data()) {
+                Ok(version) => res.version = Some(version.to_owned()),
+                Err(e) => log_warn!(error:err = e; "invalid utf-8 in the version section"),
+            },
+            "genvm.runner.json" => {
+                res.runner_json = Some(bytes::Bytes::copy_from_slice(section.data()));
             }
             _ => {}
         }
     }
 
-    Err(Error::internal("version section not found"))
+    Ok(res)
 }
 
 pub fn parse(code: bytes::Bytes) -> rt::errors::Result<super::Archive> {
@@ -29,17 +44,23 @@ pub fn parse(code: bytes::Bytes) -> rt::errors::Result<super::Archive> {
     }
 
     if wasmparser::Parser::is_core_wasm(code.as_ref()) {
-        let version = match detect_version_from_wasm(code.as_ref()) {
+        let described = match describe_wasm(code.as_ref()) {
             Ok(v) => v,
             Err(e) => {
-                log_warn!(default = host_fns::CURRENT_MAJOR_STR, error = e; "could not detect version from wasm");
-                host_fns::CURRENT_MAJOR_STR.to_string()
+                log_warn!(default = host_fns::CURRENT_MAJOR_STR, error = e; "could not read wasm custom sections");
+                WasmSelfDescription::default()
             }
         };
+        let version = described
+            .version
+            .unwrap_or_else(|| host_fns::CURRENT_MAJOR_STR.to_owned());
+        let runner_json = described
+            .runner_json
+            .unwrap_or_else(|| bytes::Bytes::from_static(DEFAULT_RUNNER_JSON));
         return Ok(super::Archive::from_file_and_runner(
             code,
             bytes::Bytes::copy_from_slice(version.as_bytes()),
-            bytes::Bytes::from_static(b"{ \"StartWasm\": \"file\" }"),
+            runner_json,
         ));
     }
 

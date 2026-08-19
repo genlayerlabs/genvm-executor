@@ -1,3 +1,5 @@
+import collections.abc
+import dataclasses
 import typing
 
 import genlayer._internal.reflect as reflect
@@ -5,29 +7,63 @@ import genlayer._internal.reflect as reflect
 from ..core import CopyAction, Slot, TypeDesc, _WithStorageSlot, actions_apply_copy
 
 
-class RecordExtraFields(_WithStorageSlot, typing.Protocol):
-	__type_desc__: '_RecordDesc'
+@dataclasses.dataclass(frozen=True, slots=True)
+class RecordField:
+	desc: TypeDesc
+	offset: int
 
 
-class _RecordDesc[T: RecordExtraFields](TypeDesc):
-	props: dict[str, tuple[TypeDesc, int]]
+class _FrozenFields(collections.abc.Mapping[str, RecordField]):
+	__slots__ = ('_data',)
 
-	__slots__ = ('props', 'hsh', 'cls')
+	def __init__(self, fields: typing.Mapping[str, RecordField]):
+		self._data = dict(fields)
+
+	def __getitem__(self, key: str) -> RecordField:
+		return self._data[key]
+
+	def __iter__(self) -> typing.Iterator[str]:
+		return iter(self._data)
+
+	def __len__(self) -> int:
+		return len(self._data)
+
+	def __reduce__(self):
+		return type(self), (self._data,)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RecordLayout:
+	size: int
+	copy_actions: tuple[CopyAction, ...]
+	fields: typing.Mapping[str, RecordField]
 
 	def __init__(
 		self,
 		size: int,
-		copy_actions: list[CopyAction],
-		props: dict[str, tuple[TypeDesc, int]],
-		cls: typing.Type[T],
+		copy_actions: tuple[CopyAction, ...],
+		fields: dict[str, RecordField],
 	):
-		TypeDesc.__init__(self, size, copy_actions)
-		self.props = props
-		self.cls = cls
+		object.__setattr__(self, 'size', size)
+		object.__setattr__(self, 'copy_actions', copy_actions)
+		object.__setattr__(self, 'fields', _FrozenFields(fields))
 
-		it = list(props.items())
-		it.sort(key=lambda x: x[0])
-		self.hsh = hash((('_RecordDesc', self.size), *it))
+
+class RecordExtraFields(_WithStorageSlot, typing.Protocol):
+	__type_desc__: '_RecordDesc'
+
+
+class _RecordDesc[T: RecordExtraFields](TypeDesc[T]):
+	__slots__ = ('props', 'hsh', 'cls', 'layout')
+
+	def __init__(self, layout: RecordLayout, cls: typing.Type[T]):
+		TypeDesc.__init__(self, layout.size, list(layout.copy_actions))
+		self.layout = layout
+		self.props = {
+			name: (field.desc, field.offset) for name, field in layout.fields.items()
+		}
+		self.cls = cls
+		self.hsh = hash((('_RecordDesc', self.size), *sorted(self.props.items())))
 
 	def get(self, slot: Slot, off: int) -> T:
 		slf = self.cls.__new__(self.cls)
@@ -45,14 +81,14 @@ class _RecordDesc[T: RecordExtraFields](TypeDesc):
 		)
 		actions_apply_copy(self.copy_actions, slot, off, val._storage_slot, val._off)
 
-	def __eq__(self, r):
-		if not isinstance(r, _RecordDesc):
+	def __eq__(self, other: object) -> bool:
+		if not isinstance(other, _RecordDesc):
 			return False
-		if r is self:
+		if other is self:
 			return True
-		if r.hsh != self.hsh:
-			return False
-		return self.size == r.size and self.props == r.props
+		return (
+			other.hsh == self.hsh and other.size == self.size and other.props == self.props
+		)
 
-	def __hash__(self):
+	def __hash__(self) -> int:
 		return self.hsh

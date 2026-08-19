@@ -13,4 +13,4 @@ class Contract(gl.contract.Contract):
 
 	@gl.public.write
 	def map(self, addr: Address):
-		gl.vm.map_file(f'chain:{addr.as_hex}:a', 'file', '/mapped.txt')
+		gl.vm.map_file(gl.vm.RunnerIDOps.new_chain(addr, 'd'), 'file', '/mapped.txt')

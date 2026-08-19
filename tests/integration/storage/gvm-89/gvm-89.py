@@ -17,5 +17,5 @@ class Main(gl.contract.Contract):
 
 	@gl.public.write
 	def main(self):
-		self.f.append(Foo(['123']))
+		self.f.append(Foo(['123']))  # type: ignore
 		return [i for i in self.f]

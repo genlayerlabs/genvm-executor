@@ -2,7 +2,7 @@
 Virtual Machine execution and sandbox module.
 
 This module provides:
-- Sandbox execution with ``spawn_sandbox``
+- Sandbox execution with ``spawn_sandbox`` and ``spawn_runner``
 - Non-deterministic execution with ``run_nondet_default`` and ``run_nondet``
 - Result types: ``Return``, ``VMError``, ``UserError``, ``Result``
 - Event emission with ``Event``
@@ -10,6 +10,7 @@ This module provides:
 
 __all__ = (
 	# vm
+	'spawn_runner',
 	'spawn_sandbox',
 	'run_nondet',
 	'run_nondet_default',
@@ -25,6 +26,8 @@ __all__ = (
 	'register_runner',
 	'map_file',
 	'ABI',
+	'SandboxChangesOnError',
+	'RunnerID',
 )
 
 import typing
@@ -43,13 +46,65 @@ import dataclasses
 import datetime
 import typing
 
+import genlayer as gl
 import genlayer._internal.on_chain.gl_call as gl_call
 import genlayer.calldata as calldata
 from genlayer._internal import _lazy_api
-from genlayer.types import Lazy
+from genlayer.types import Address, Lazy
 
 from . import public_abi as ABI
 from .public_abi import ResultCode
+
+RunnerID = typing.NewType('RunnerID', str)
+"""
+Id of a runner: ``name:hash``, ``custom:<hash>``, ``chain:<address>``, or
+``contract`` for this contract's own one
+"""
+
+
+class RunnerIDOps:
+	CONTRACT = RunnerID('contract')
+
+	@typing.overload
+	@staticmethod
+	def new_chain(
+		addr: Address, state: typing.Literal['d', 'f'] | None = None, slot_id: None = None
+	) -> RunnerID: ...
+
+	@typing.overload
+	@staticmethod
+	def new_chain(
+		addr: Address, state: typing.Literal['d', 'f'], slot_id: bytes
+	) -> RunnerID: ...
+
+	@staticmethod
+	def new_chain(
+		addr: Address,
+		state: typing.Literal['d', 'f'] | None = None,
+		slot_id: bytes | None = None,
+	) -> RunnerID:
+		"""
+		Creates a new runner id for the given contract address.
+
+		:param addr: contract address in hex
+		:return: runner id
+		"""
+
+		components = ['chain', addr.as_hex]
+
+		if state is not None:
+			if state not in ('d', 'f'):
+				raise ValueError(f'state must be "d" or "f", got {state}')
+			components.append(state)
+
+		if slot_id is not None:
+			if state is None:
+				raise TypeError('state must be provided if slot_id is provided')
+			if len(slot_id) != 32:
+				raise ValueError(f'slot_id must be 32 bytes, got {len(slot_id)} bytes')
+			components.append(gl.gvm32.encode(slot_id))
+
+		return RunnerID(':'.join(components))
 
 
 @dataclasses.dataclass
@@ -162,7 +217,7 @@ def unpack_result[T: calldata.Decoded](res: Result[T], /) -> T:
 
 	Example:
 		>>> result = gl.vm.spawn_sandbox(lambda: 42)
-		>>> value = unpack_result(result)  # Returns 42 or raises on error
+		>>> value = unpack_result(result)  # Returns 42 or re-raises on error
 	"""
 	if isinstance(res, UserError):
 		raise res
@@ -177,17 +232,74 @@ def _decode_sub_vm_result(
 	return unpack_result(_decode_sub_vm_result_retn(data))
 
 
+type SandboxChangesOnError = typing.Literal['inherit']
+"""
+Defines what happens to storage changes and emissions on non-return result of a sandbox
+"""
+
+
+@_lazy_api
+def spawn_runner(
+	runner: RunnerID,
+	data: collections.abc.Buffer,
+	/,
+	*,
+	allow_write_storage: bool = False,
+	allow_send_messages: bool = False,
+	custom_runners: list[RunnerID] | None = None,
+	changes_on_error: SandboxChangesOnError = 'inherit',
+) -> Lazy[Return[calldata.Decoded] | VMError | UserError]:
+	"""
+	Runs another runner in an isolated sub-VM, handing it ``data`` verbatim.
+
+	This is the general form of :py:func:`spawn_sandbox`: the child is whatever
+	``runner`` names, so it need not be Python, and ``data`` is its entry payload
+	rather than a pickled callable. Determinism of the spawned VM matches the
+	determinism of the current VM.
+
+	Each ``allow_*`` flag grants the corresponding permission, but only if the
+	current VM holds it as well.
+
+	:param runner: runner id to execute: a ``custom:<hash>``/``name:hash``/``chain:`` id, or ``contract`` for this contract's own runner
+	:param data: entry payload, passed to the child untouched
+	:param allow_write_storage: Whether to allow storage writes in the child
+	:param allow_send_messages: Whether to allow sending messages in the child
+	:param custom_runners: ``custom:<hash>`` ids visible to the child; ``None`` grants this VM's entire set, a list grants exactly that subset of it
+	:param changes_on_error: see :py:obj:`SandboxChangesOnError`
+
+	Both sides have to agree on what ``data`` means. Use
+	:py:mod:`genlayer.calldata` for it unless the runner documents otherwise:
+
+	Example:
+		>>> answer = spawn_runner(rid, calldata.encode(30))
+		>>> calldata.decode(unpack_result(answer))
+	"""
+	return gl_call.gl_call_generic(
+		{
+			'Sandbox': {
+				'data': data,
+				'runner': runner,
+				'allow_write_storage': allow_write_storage,
+				'allow_send_messages': allow_send_messages,
+				'custom_runners': custom_runners,
+				'changes_on_error': changes_on_error,
+			}
+		},
+		_decode_sub_vm_result_retn,
+	)
+
+
 @_lazy_api
 def spawn_sandbox[T: calldata.Decoded](
 	fn: typing.Callable[[], T],
 	*,
-	runner: str = 'contract',
 	allow_write_storage: bool = False,
 	allow_send_messages: bool = False,
-	allow_register_runners: bool = False,
+	custom_runners: list[RunnerID] | None = None,
+	changes_on_error: SandboxChangesOnError = 'inherit',
 ) -> Lazy[Return[T] | VMError | UserError]:
 	"""
-	Runs a function in an isolated sandbox environment.
+	Runs a function of *this* contract in an isolated sandbox environment.
 
 	The function is executed in a separate VM instance with controlled permissions.
 	This provides isolation and security for potentially unsafe operations.
@@ -196,11 +308,14 @@ def spawn_sandbox[T: calldata.Decoded](
 	Each ``allow_*`` flag grants the corresponding permission to the sandbox, but
 	only if the current VM holds it as well.
 
+	To run a *different* runner -- one that may not even be Python -- use
+	:py:func:`spawn_runner`, which this is a thin wrapper over.
+
 	:param fn: Function to execute in the sandbox (must be serializable with cloudpickle)
-	:param runner: runner id the sandbox loads instead of this contract's code; ``contract`` (default) reuses this contract's runner, a ``custom:<hash>``/``name:hash``/``chain:`` id runs that runner
 	:param allow_write_storage: Whether to allow storage writes in the sandbox
 	:param allow_send_messages: Whether to allow sending messages in the sandbox
-	:param allow_register_runners: Whether to allow registering runners in the sandbox
+	:param custom_runners: ``custom:<hash>`` ids visible to the sandbox; ``None`` grants this VM's entire set, a list grants exactly that subset of it
+	:param changes_on_error: see :py:obj:`SandboxChangesOnError`
 
 	Example:
 		>>> result = spawn_sandbox(lambda: risky_computation())
@@ -208,23 +323,27 @@ def spawn_sandbox[T: calldata.Decoded](
 	"""
 	import cloudpickle
 
-	return gl_call.gl_call_generic(
-		{
-			'Sandbox': {
-				'data': cloudpickle.dumps(fn),
-				'runner': runner,
-				'allow_write_storage': allow_write_storage,
-				'allow_send_messages': allow_send_messages,
-				'allow_register_runners': allow_register_runners,
-			}
-		},
-		_decode_sub_vm_result_retn,
+	return typing.cast(
+		Lazy[Return[T] | VMError | UserError],
+		spawn_runner.lazy(
+			RunnerID('contract'),
+			cloudpickle.dumps(fn),
+			allow_write_storage=allow_write_storage,
+			allow_send_messages=allow_send_messages,
+			custom_runners=custom_runners,
+			changes_on_error=changes_on_error,
+		),
 	)
 
 
 @_lazy_api
 def run_nondet[T: calldata.Decoded](
-	leader_fn: typing.Callable[[], T], validator_fn: typing.Callable[[Result], bool], /
+	leader_fn: typing.Callable[[], T],
+	validator_fn: typing.Callable[[Result], bool],
+	/,
+	*,
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: bool = False,
 ) -> Lazy[T]:
 	"""
 	Executes a non-deterministic block with leader-validator consensus.
@@ -234,6 +353,8 @@ def run_nondet[T: calldata.Decoded](
 
 	:param leader_fn: Function executed by the leader node (must be serializable)
 	:param validator_fn: Function that validates the leader's result and returns bool
+	:param custom_runners: ``custom:<hash>`` ids visible to the block; ``None`` grants this VM's entire set, a list grants exactly that subset of it
+	:param catch_vm_error: return the block's VM error instead of re-raising it; a fatal one is never caught
 	:return: The result from the leader (iff validation passes, otherwise VM will be terminated)
 
 	.. warning::
@@ -258,17 +379,19 @@ def run_nondet[T: calldata.Decoded](
 		leaders_result = _decode_sub_vm_result_retn(stage_data['leaders_result'])
 		return validator_fn(leaders_result)
 
-	ret = gl_call.gl_call_generic(
+	res = gl_call.gl_call_generic(
 		{
 			'RunNondet': {
 				'data_leader': cloudpickle.dumps(lambda _: leader_fn()),
 				'data_validator': cloudpickle.dumps(validator_fn_mapped),
+				'custom_runners': custom_runners,
+				'catch_vm_error': catch_vm_error,
 			}
 		},
 		_decode_sub_vm_result,
 	)
 
-	return ret
+	return typing.cast(Lazy[T], res)
 
 
 @_lazy_api
@@ -283,6 +406,8 @@ def run_nondet_default[T: calldata.Decoded](
 	compare_vm_errors: typing.Callable[[VMError, VMError], bool] = lambda a, b: (
 		a.public_code == b.public_code
 	),
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: bool = False,
 ) -> Lazy[T]:
 	"""
 	Executes a non-deterministic block with comprehensive error handling.
@@ -295,6 +420,8 @@ def run_nondet_default[T: calldata.Decoded](
 	:param validator_fn: Function that validates the leader's result, is ran in a sandbox
 	:param compare_user_errors: Function to compare UserError instances for equality
 	:param compare_vm_errors: Function to compare VMError instances for equality; the default compares only the public code (the part before the first `` # `` detail suffix), ignoring implementation-specific diagnostics
+	:param custom_runners: ``custom:<hash>`` ids visible to the block; ``None`` grants this VM's entire set, a list grants exactly that subset of it
+	:param catch_vm_error: return the block's VM error instead of re-raising it; a fatal one is never caught
 	:return: The result from the leader if validation passes
 
 	Error handling:
@@ -331,28 +458,31 @@ def run_nondet_default[T: calldata.Decoded](
 			allow_send_messages=True,
 		)
 
-		if type(answer) is not type(leaders_result):
-			return False
-		if isinstance(answer, Return):
+		if isinstance(answer, Return) and isinstance(leaders_result, Return):
 			if not isinstance(answer.calldata, bool):
 				raise TypeError(f'validator function returned non-bool `{answer.calldata}`')
 			return answer.calldata
-		elif isinstance(answer, UserError):
+		if isinstance(answer, UserError) and isinstance(leaders_result, UserError):
 			return compare_user_errors(leaders_result, answer)
-
-		return compare_vm_errors(leaders_result, answer)
+		if isinstance(answer, VMError) and isinstance(leaders_result, VMError):
+			return compare_vm_errors(leaders_result, answer)
+		raise TypeError(
+			f'validator function returned `{answer!r:20}` while leader returned `{leaders_result!r:20}`'
+		)
 
 	res = gl_call.gl_call_generic(
 		{
 			'RunNondet': {
 				'data_leader': cloudpickle.dumps(real_leader_fn),
 				'data_validator': cloudpickle.dumps(real_validator_fn),
+				'custom_runners': custom_runners,
+				'catch_vm_error': catch_vm_error,
 			}
 		},
 		_decode_sub_vm_result,
 	)
 
-	return res
+	return typing.cast(Lazy[T], res)
 
 
 def trace(*objs: typing.Any, sep: str = ' '):
@@ -402,14 +532,14 @@ def get_timestamp() -> datetime.datetime:
 	).get()
 
 
-def register_runner(code: collections.abc.Buffer) -> str:
+def register_runner(code: collections.abc.Buffer) -> RunnerID:
 	"""
 	Registers a runner archive at runtime and returns its ``custom:<hash>`` id.
 
 	The returned id can be referenced from ``Depends``/``With`` actions of other
-	runners. Requires deterministic mode and the ``register_runners`` permission.
+	runners. Requires deterministic mode.
 
-	:param code: runner archive bytes (ustar/zip or commented text)
+	:param code: runner archive bytes (zip, raw wasm or commented text)
 	:return: the ``custom:<hash>`` runner id
 	"""
 	return gl_call.gl_call_generic(
@@ -418,11 +548,11 @@ def register_runner(code: collections.abc.Buffer) -> str:
 				'code': code,
 			},
 		},
-		lambda x: typing.cast(str, calldata.decode(x)),
+		lambda x: typing.cast(RunnerID, calldata.decode(x)),
 	).get()
 
 
-def map_file(runner: str, path_in_runner: str, path_in_vfs: str) -> None:
+def map_file(runner: RunnerID, path_in_runner: str, path_in_vfs: str) -> None:
 	"""
 	Maps a file from a runner into the VM filesystem at runtime.
 

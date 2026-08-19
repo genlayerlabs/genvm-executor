@@ -157,54 +157,68 @@ f64_max(float64_t a, float64_t b)
 
 /* ========================================================================
  * Truncations (WASM trapping float-to-int, minMag rounding, non-exact)
+ *
+ * `iN.trunc_fM_sx` is a partial operator: it has no result for a NaN, an
+ * infinity, or a value out of range, and the execution rule turns "no result"
+ * into a trap. softfloat instead returns a sentinel and raises `invalid`, and
+ * it raises `invalid` for exactly those inputs (with `exact` false it raises
+ * nothing else), so the flag is the boundary. `__builtin_trap` is the wasm
+ * `unreachable` instruction, the only trap reachable from here.
  * ======================================================================== */
+
+#define TRUNC_OR_TRAP(type, call)                                              \
+	softfloat_exceptionFlags = 0;                                                \
+	type z                   = (type)(call);                                     \
+	if (softfloat_exceptionFlags & softfloat_flag_invalid)                       \
+		__builtin_trap();                                                          \
+	return z;
 
 export int32_t
 f32_to_i32_trunc(float32_t a)
 {
-	return f32_to_i32(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(int32_t, f32_to_i32(a, softfloat_round_minMag, false))
 }
 
 export uint32_t
 f32_to_ui32_trunc(float32_t a)
 {
-	return f32_to_ui32(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(uint32_t, f32_to_ui32(a, softfloat_round_minMag, false))
 }
 
 export int64_t
 f32_to_i64_trunc(float32_t a)
 {
-	return f32_to_i64(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(int64_t, f32_to_i64(a, softfloat_round_minMag, false))
 }
 
 export uint64_t
 f32_to_ui64_trunc(float32_t a)
 {
-	return f32_to_ui64(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(uint64_t, f32_to_ui64(a, softfloat_round_minMag, false))
 }
 
 export int32_t
 f64_to_i32_trunc(float64_t a)
 {
-	return f64_to_i32(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(int32_t, f64_to_i32(a, softfloat_round_minMag, false))
 }
 
 export uint32_t
 f64_to_ui32_trunc(float64_t a)
 {
-	return f64_to_ui32(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(uint32_t, f64_to_ui32(a, softfloat_round_minMag, false))
 }
 
 export int64_t
 f64_to_i64_trunc(float64_t a)
 {
-	return f64_to_i64(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(int64_t, f64_to_i64(a, softfloat_round_minMag, false))
 }
 
 export uint64_t
 f64_to_ui64_trunc(float64_t a)
 {
-	return f64_to_ui64(a, softfloat_round_minMag, false);
+	TRUNC_OR_TRAP(uint64_t, f64_to_ui64(a, softfloat_round_minMag, false))
 }
 
 /* ========================================================================

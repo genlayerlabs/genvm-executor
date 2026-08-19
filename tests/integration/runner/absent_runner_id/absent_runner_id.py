@@ -5,10 +5,14 @@ import genlayer as gl
 # gets past the format and gvm32 checks and only fails the registry lookup, so
 # it is the one shape that used to abort the transaction internally instead of
 # producing a canonical result.
-_ABSENT = 'py-genlayer:8b8kjyda2ycxyq4ea6g4yfpnydxhd52gqba5rb8dw7krkh5mn9p0'
+_ABSENT = gl.vm.RunnerID(
+	'py-genlayer:8b8kjyda2ycxyq4ea6g4yfpnydxhd52gqba5rb8dw7krkh5mn9p0'
+)
 # Same shape, but the trailing character carries non-zero padding bits, so it
 # is rejected earlier, by the gvm32 decoder.
-_MALFORMED = 'py-genlayer:9b8kjyda2ycxyq4ea6g4yfpnydxhd52gqba5rb8dw7krkh5mn9p1'
+_MALFORMED = gl.vm.RunnerID(
+	'py-genlayer:9b8kjyda2ycxyq4ea6g4yfpnydxhd52gqba5rb8dw7krkh5mn9p1'
+)
 
 
 class Contract(gl.contract.Contract):
@@ -17,7 +21,7 @@ class Contract(gl.contract.Contract):
 
 	@gl.public.write
 	def spawn_absent(self):
-		gl.vm.spawn_sandbox(lambda: 1, runner=_ABSENT)
+		gl.vm.spawn_runner(_ABSENT, b'')
 
 	@gl.public.write
 	def map_absent(self):
@@ -25,4 +29,4 @@ class Contract(gl.contract.Contract):
 
 	@gl.public.write
 	def spawn_malformed(self):
-		gl.vm.spawn_sandbox(lambda: 1, runner=_MALFORMED)
+		gl.vm.spawn_runner(_MALFORMED, b'')

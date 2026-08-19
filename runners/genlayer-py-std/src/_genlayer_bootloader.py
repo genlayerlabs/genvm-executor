@@ -4,6 +4,7 @@ Module that is used to run python contracts in the default way
 
 __all__ = ()
 
+import functools
 import os
 import sys
 
@@ -55,12 +56,6 @@ import genlayer.vm as _vm
 from genlayer.vm.public_abi import EntryKind
 
 
-class CalldataSchema(typing.TypedDict, total=False):
-	method: str
-	args: list[calldata.Decoded]
-	kwargs: dict[str, calldata.Decoded]
-
-
 def _give_result(res_fn: typing.Callable[[], typing.Any]) -> typing.NoReturn:
 	try:
 		res = res_fn()
@@ -79,7 +74,7 @@ def _handle_main() -> typing.NoReturn:
 
 	@dataclasses.dataclass
 	class MethodResolverInfo:
-		cd: CalldataSchema
+		cd: dict
 		msg: gl_message.MessageRawType
 		contract_type: type[Contract]
 
@@ -142,7 +137,7 @@ def _handle_main() -> typing.NoReturn:
 				)
 
 	# load contract, it should set __known_contact__
-	import contract as _user_contract_module  # noqa
+	import contract as _user_contract_module  # noqa # pyright: ignore[reportMissingImports]
 	from genlayer.contract import __known_contract__
 
 	if __known_contract__ is None:
@@ -157,14 +152,21 @@ def _handle_main() -> typing.NoReturn:
 	if gl_message.raw.get('is_init'):
 		root_slot.lock_default()
 
-	cd = typing.cast(CalldataSchema, cd_raw)
-	ctx = MethodResolverInfo(cd, gl_message.raw, __known_contract__)
+	ctx = MethodResolverInfo(cd_raw, gl_message.raw, __known_contract__)
 	meth2call = resolve_method(ctx)
 
 	contract_instance = root_slot.get_contract_instance(__known_contract__)
-	_give_result(
-		lambda: meth2call(contract_instance, *cd.get('args', []), **cd.get('kwargs', {}))
-	)
+	args = cd_raw.get('args', [])
+	if not isinstance(args, list):
+		raise TypeError(
+			f'invalid calldata, expected `args` to be list, got `{reflect.repr_type(args)}`'
+		)
+	kwargs = cd_raw.get('kwargs', {})
+	if not isinstance(kwargs, dict):
+		raise TypeError(
+			f'invalid calldata, expected `kwargs` to be dict, got `{reflect.repr_type(kwargs)}`'
+		)
+	_give_result(functools.partial(meth2call, contract_instance, *args, **kwargs))
 
 
 if os.getenv('GENERATING_DOCS', 'false') != 'true':

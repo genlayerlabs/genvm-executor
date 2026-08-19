@@ -24,13 +24,13 @@ def _populate_np_descs():
 
 		def __init__(self, typ: TypeDesc, shape: tuple[int, ...]):
 			assert isinstance(typ, _NumpyDesc)
-			type = typ._type
+			numpy_type = typ._type
 			dims = 1
 			self.shape = shape
-			for i in shape:
-				dims *= i
-			TypeDesc.__init__(self, type.itemsize * dims, [type.itemsize * dims])
-			self._type = type
+			for dim in shape:
+				dims *= dim
+			TypeDesc.__init__(self, numpy_type.itemsize * dims, [numpy_type.itemsize * dims])
+			self._type = numpy_type
 
 		def get(self, slot: Slot, off: int) -> np.ndarray:
 			dat = slot.read(off, self.size)
@@ -46,9 +46,9 @@ def _populate_np_descs():
 		__slots__ = ('_type', '_typ')
 
 		def __init__(self, typ: np.number):
-			type = np.dtype(typ)
-			TypeDesc.__init__(self, type.itemsize, [type.itemsize])
-			self._type = type
+			numpy_type = np.dtype(typ)
+			TypeDesc.__init__(self, numpy_type.itemsize, [numpy_type.itemsize])
+			self._type = numpy_type
 			self._typ = typ
 
 		def get(self, slot: Slot, off: int):
@@ -90,20 +90,32 @@ def _populate_np_descs():
 			raise ctx.type_err(f'Expected tuple for ndarray shape, got {shape_type}')
 
 		shape_args = typing.get_args(shape_type)
-		shape = []
+		shape: list[int] = []
 		for dim in shape_args:
 			if typing.get_origin(dim) is not typing.Literal:
 				raise ctx.type_err(f'Expected Literal for ndarray dimension, got {dim}')
 			lit_args = typing.get_args(dim)
-			if len(lit_args) != 1 or not isinstance(lit_args[0], int):
+			if len(lit_args) != 1 or type(lit_args[0]) is not int:
 				raise ctx.type_err(
 					f'Expected single int Literal for ndarray dimension, got {lit_args}'
 				)
-			shape.append(lit_args[0])
+			dim_size = lit_args[0]
+			if dim_size <= 0:
+				raise ctx.type_err(
+					f'ndarray dimensions must be strictly positive, got {dim_size}'
+				)
+			shape.append(dim_size)
 
 		typ = _storage_build(
 			ctx.with_trace('during processing ndarray element type'), dtype_type
 		)
+		dims = 1
+		for dim_size in shape:
+			if dims > (2**32 - 1) // dim_size:
+				raise ctx.type_err('ndarray size exceeds the 32-bit storage address space')
+			dims *= dim_size
+		if typ.size != 0 and dims > (2**32 - 1) // typ.size:
+			raise ctx.type_err('ndarray size exceeds the 32-bit storage address space')
 		return _NumpyNDDesc(typ, tuple(shape))
 
 	global _imp

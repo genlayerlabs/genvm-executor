@@ -18,7 +18,9 @@ class ScriptRemover(HTMLParser):
 		if tag.lower() in fcf:
 			self.in_script = True
 		elif not self.in_script:
-			self.result.append(self.get_starttag_text())
+			txt = self.get_starttag_text()
+			if txt is not None:
+				self.result.append(txt)
 
 	def handle_endtag(self, tag):
 		if tag.lower() in fcf:
@@ -35,9 +37,10 @@ class Contract(gl.contract.Contract):
 	@gl.public.write
 	def main(self, mode: str):
 		def run() -> str:
+			assert mode in ('html', 'text'), f'Invalid mode value: {mode}'
 			res = gl.nondet.web.render(
 				'https://test-server.genlayer.com/static/genvm/hello.html', mode=mode
-			)  # type: ignore
+			)
 			if mode == 'html':
 				parser = ScriptRemover()
 				parser.feed(res)

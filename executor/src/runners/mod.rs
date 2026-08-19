@@ -3,7 +3,6 @@ pub mod cache;
 
 mod archive;
 mod parse;
-pub(crate) mod ustar;
 use genvm_common::*;
 use itertools::Itertools;
 
@@ -35,7 +34,7 @@ pub fn append_runner_subpath(id: &str, hash: &str, path: &mut std::path::PathBuf
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, genlayer_calldata::Encode)]
 pub enum ChainState {
-    Accepted,
+    Decided,
     Finalized,
     Deploy,
 }
@@ -46,25 +45,25 @@ impl ChainState {
             ChainState::Deploy
         } else {
             match state {
-                crate::public_abi::StorageType::LatestFinal => ChainState::Finalized,
-                _ => ChainState::Accepted,
+                crate::public_abi::StorageType::LatestFinalized => ChainState::Finalized,
+                _ => ChainState::Decided,
             }
         }
     }
 
     pub fn host_storage_type(self) -> Option<crate::public_abi::StorageType> {
         match self {
-            ChainState::Accepted => Some(crate::public_abi::StorageType::LatestNonFinal),
-            ChainState::Finalized => Some(crate::public_abi::StorageType::LatestFinal),
+            ChainState::Decided => Some(crate::public_abi::StorageType::LatestDecided),
+            ChainState::Finalized => Some(crate::public_abi::StorageType::LatestFinalized),
             ChainState::Deploy => None,
         }
     }
 
     fn canonical_char(self) -> char {
         match self {
-            ChainState::Accepted => 'a',
+            ChainState::Decided => 'd',
             ChainState::Finalized => 'f',
-            ChainState::Deploy => 'd',
+            ChainState::Deploy => 'i',
         }
     }
 }
@@ -74,13 +73,13 @@ impl ChainState {
 /// - `name:hash` -- a packaged runner identified by its human readable name and
 ///   content hash (in debug mode `hash` may also be `test`/`latest`).
 /// - `contract` -- the runner of the contract that is currently being executed.
-/// - `chain:<address>:<a|f>:<slot>` -- read the runner code blob from a storage
+/// - `chain:<address>:<d|f>:<slot>` -- read the runner code blob from a storage
 ///   slot of an arbitrary contract. `address` is a `0x`-prefixed 20 byte hex
-///   address, `a`/`f` selects accepted (latest non final) / finalized state and
+///   address, `d`/`f` selects decided (latest decided) / finalized state and
 ///   `slot` is a 32 byte slot id encoded with GVM32 (Crockford Base32).
-///   Both `<a|f>` and `<slot>` are optional: `<a|f>` defaults to `a` and
+///   Both `<d|f>` and `<slot>` are optional: `<d|f>` defaults to `d` and
 ///   `<slot>` defaults to reading the target contract's root slot during
-///   resolution (i.e. `chain:<address>` and `chain:<address>:a` are valid).
+///   resolution (i.e. `chain:<address>` and `chain:<address>:d` are valid).
 /// - `custom:<hash>` -- a runner registered at runtime, looked up by its hash.
 #[derive(Debug)]
 pub enum IdUnresolved {
@@ -222,7 +221,7 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
 
         let address = calldata::Address::from(parse_safe_address(address)?);
         let on = match on_str {
-            Some("a") | None => Some(ChainState::Accepted),
+            Some("d") | None => Some(ChainState::Decided),
             Some("f") => Some(ChainState::Finalized),
             _ => return None,
         };

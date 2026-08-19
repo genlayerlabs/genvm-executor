@@ -24,6 +24,10 @@ class LazyApi[T, **R](typing.Protocol):
 
 
 def _lazy_api[T, **R](fn: typing.Callable[R, Lazy[T]]) -> LazyApi[T, R]:
+	"""
+	Reuses a function for better docs
+	"""
+
 	def eager(*args: R.args, **kwargs: R.kwargs) -> T:
 		return fn(*args, **kwargs).get()
 
@@ -35,14 +39,14 @@ def _lazy_api[T, **R](fn: typing.Callable[R, Lazy[T]]) -> LazyApi[T, R]:
 		import inspect
 		import textwrap
 
-		eager.__signature__ = inspect.signature(fn)
+		eager.__signature__ = inspect.signature(fn)  # pyright: ignore[reportFunctionMemberAccess]
 		eager.__doc__ = (
 			textwrap.dedent(fn.__doc__ or '')
 			+ '\n\n.. note::\n\tsupports ``.lazy()`` version, which will return :py:class:`~genlayer.types.Lazy`'
 		)
 	eager.__name__ = fn.__name__
-	eager.lazy = fn
-	return eager
+	eager.lazy = fn  # pyright: ignore[reportFunctionMemberAccess]
+	return typing.cast(LazyApi[T, R], eager)
 
 
 def create2_address(

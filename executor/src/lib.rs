@@ -240,11 +240,11 @@ fn convert_nested_storage_type(
 ) -> public_abi::StorageType {
     match state_mode {
         genvm_modules_interfaces::NestedStorageType::Default => public_abi::StorageType::Default,
-        genvm_modules_interfaces::NestedStorageType::LatestFinal => {
-            public_abi::StorageType::LatestFinal
+        genvm_modules_interfaces::NestedStorageType::LatestFinalized => {
+            public_abi::StorageType::LatestFinalized
         }
-        genvm_modules_interfaces::NestedStorageType::LatestNonFinal => {
-            public_abi::StorageType::LatestNonFinal
+        genvm_modules_interfaces::NestedStorageType::LatestDecided => {
+            public_abi::StorageType::LatestDecided
         }
     }
 }
@@ -260,7 +260,6 @@ fn convert_nested_permissions(
         send_messages: permissions.contains(P::SEND_MESSAGES),
         call_others: permissions.contains(P::CALL_OTHERS),
         spawn_nondet: permissions.contains(P::SPAWN_NONDET),
-        register_runners: permissions.contains(P::REGISTER_RUNNERS),
         can_use_balance_for_message_fees: permissions.contains(P::USE_BALANCE_FOR_MESSAGE_FEES),
     }
 }
@@ -317,7 +316,7 @@ pub async fn run_with_impl(
             ),
             None => (None, None, None, Vec::new()),
         };
-    let storage_read_mode = imported_state_mode.unwrap_or(public_abi::StorageType::LatestNonFinal);
+    let storage_read_mode = imported_state_mode.unwrap_or(public_abi::StorageType::LatestDecided);
 
     let mut topmost_storage = rt::vm::storage::Storage::new(
         entry_data.message.contract_address,
@@ -446,7 +445,6 @@ pub async fn run_with_impl(
             send_messages: permissions.contains("s"),
             call_others: permissions.contains("c"),
             spawn_nondet: permissions.contains("n"),
-            register_runners: true,
             can_use_balance_for_message_fees,
         },
     };

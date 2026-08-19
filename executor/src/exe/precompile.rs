@@ -117,8 +117,8 @@ fn compile_single_file(
         std::fs::read(zip_path).with_context(|| format!("reading {zip_path:?}"))?,
     );
 
-    let arch = genvm::runners::Archive::from_ustar_bytes(data)
-        .with_context(|| format!("parsing ustar archive {zip_path:?}"))?;
+    let arch = genvm::runners::Archive::from_zip_bytes(data)
+        .with_context(|| format!("parsing zip archive {zip_path:?}"))?;
 
     for (entry_name, contents) in arch
         .data
@@ -206,7 +206,7 @@ pub fn run(config: &config::Config) -> anyhow::Result<()> {
         for hash in hashes {
             let mut runner_path = runners_dir.to_owned();
             runners::append_runner_subpath(&runner_id, &hash, &mut runner_path);
-            runner_path.set_extension("tar");
+            runner_path.set_extension("zip");
 
             compile_single_file(&precompile_dir, &engines, runners_dir, &runner_path)
                 .with_context(|| format!("processing {runner_path:?}"))?;

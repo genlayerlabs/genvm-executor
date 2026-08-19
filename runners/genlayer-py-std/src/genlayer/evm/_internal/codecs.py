@@ -184,7 +184,7 @@ class BytesNCodec(Codec):
 		state.result.extend(val)
 		state.result.extend(b'\x00' * (32 - self.bytes))
 
-	def decode(self, state: DecoderState):
+	def decode(self, state: DecoderState) -> memoryview:
 		res = state.fetch_head(self.bytes)
 		state.fetch_head(32 - self.bytes)
 		return res

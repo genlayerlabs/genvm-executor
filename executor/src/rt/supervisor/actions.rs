@@ -90,7 +90,7 @@ pub(crate) enum ResolvedKind {
         name: symbol_table::GlobalSymbol,
         hash: Bytes32Hash,
     },
-    /// `chain:<address>:<a|f>:<slot>` -- code blob read from a storage slot. The
+    /// `chain:<address>:<d|f>:<slot>` -- code blob read from a storage slot. The
     /// current contract (`contract`) also resolves here, pointing at its own
     /// address/state/`code_slot`.
     Chain {
@@ -193,7 +193,7 @@ pub(crate) async fn resolve_runner_id(
             }
         }
         runners::IdUnresolved::Chain { address, on, slot } => {
-            let on = on.unwrap_or(runners::ChainState::Accepted);
+            let on = on.unwrap_or(runners::ChainState::Decided);
             let slot = match slot {
                 Some(s) => s,
                 None => {
@@ -476,7 +476,7 @@ pub(crate) async fn load_action(
             // charge precedes the resident copy).
             let mut path = supervisor.runner_cache.runners_path().to_owned();
             runners::append_runner_subpath(name.as_str(), &hash.to_gvm32(), &mut path);
-            path.set_extension("tar");
+            path.set_extension("zip");
             if !path.exists() {
                 return Err(rt::errors::Error::internal(format!("runner {id} not found")).into());
             }
@@ -489,8 +489,8 @@ pub(crate) async fn load_action(
                 let data = bytes::Bytes::from(
                     std::fs::read(&path).with_ctx(|| format!("reading runner archive for {id}"))?,
                 );
-                let arch = runners::Archive::from_ustar_bytes(data)
-                    .with_ctx(|| format!("parsing ustar archive for {id}"))?;
+                let arch = runners::Archive::from_zip_bytes(data)
+                    .with_ctx(|| format!("parsing zip archive for {id}"))?;
                 Ok::<_, rt::errors::Error>(runners::ArchiveCache::new(id, arch))
             })
             .await?;

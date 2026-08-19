@@ -1,3 +1,4 @@
+import functools
 import typing
 
 import genlayer._internal.reflect as reflect
@@ -7,6 +8,7 @@ from .codecs import ArrayCodec, Codec, DynArrayCodec, TupleCodec
 from .type_dicts import primitive_types_dict
 
 
+@functools.cache
 def build[T](typ: typing.Type[T]) -> Codec[T]:
 	assert not isinstance(typ, tuple)
 

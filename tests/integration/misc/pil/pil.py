@@ -9,7 +9,7 @@ img = Image.open(io.BytesIO(im_data))
 if img.mode != 'RGB':
 	img = img.convert('RGB')
 
-pixels = list(img.getdata())
+pixels = list(img.getdata())  # type: ignore
 
 res = set()
 

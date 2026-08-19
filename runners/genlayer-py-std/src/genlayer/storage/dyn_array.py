@@ -71,10 +71,10 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 	@typing.overload
 	def __setitem__(self, idx: typing.SupportsIndex, val: T) -> None: ...
 	@typing.overload
-	def __setitem__(self, idx: slice, val: collections.abc.Sequence[T]) -> None: ...
+	def __setitem__(self, idx: slice, val: collections.abc.Iterable[T]) -> None: ...
 
 	def __setitem__(
-		self, idx: typing.SupportsIndex | slice, val: T | collections.abc.Sequence[T]
+		self, idx: typing.SupportsIndex | slice, val: T | collections.abc.Iterable[T]
 	) -> None:
 		"""
 		Set element by index or replace a range by slice.
@@ -90,10 +90,11 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 			return
 		else:
 			start, stop, step = self._slice_to_idx(idx)
-			new_val = typing.cast(collections.abc.Sequence[T], val)
+			# materialized: the algorithm below needs `len` and reversal
+			new_val = list(typing.cast(collections.abc.Iterable[T], val))
 			left_in_new = len(new_val)
 			if isinstance(idx.step, int) and idx.step < 0:
-				new_val = reversed(new_val)
+				new_val.reverse()
 			left_in_range = (stop - start) // step
 			new_it = iter(new_val)
 

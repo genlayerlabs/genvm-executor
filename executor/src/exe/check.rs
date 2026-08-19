@@ -42,7 +42,7 @@ pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
         for hash in hashes {
             let mut runner_path = runners_dir.to_owned();
             runners::append_runner_subpath(id, hash, &mut runner_path);
-            runner_path.set_extension("tar");
+            runner_path.set_extension("zip");
 
             let data = std::fs::read(&runner_path)
                 .with_context(|| format!("reading runner {id}:{hash} at {runner_path:?}"))?;

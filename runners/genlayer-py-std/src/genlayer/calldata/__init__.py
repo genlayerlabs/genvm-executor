@@ -33,6 +33,7 @@ __all__ = (
 	'Decoded',
 	'CalldataEncodable',
 	'DecodingError',
+	'Raw',
 )
 
 import abc
@@ -78,7 +79,48 @@ class CalldataEncodable(metaclass=abc.ABCMeta):
 		raise NotImplementedError()
 
 
-type Decoded = None | int | str | bytes | list[Decoded] | dict[str, Decoded]
+class DataclassMixin(CalldataEncodable):
+	"""
+	Mixin for dataclasses: encodes as a map of field name to field value
+	"""
+
+	def __to_calldata__(self) -> 'Encodable':
+		if not dataclasses.is_dataclass(self):
+			raise TypeError(f'expected dataclass instance, got {self!r:.20}')
+		return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
+
+
+class Raw:
+	"""
+	Already encoded calldata, spliced into the output verbatim
+
+	Deliberately not a dataclass: the default ``encode`` parameter transform
+	expands any dataclass instance into a map, which is the one thing this
+	wrapper must not become
+
+	.. warning::
+		nothing checks that ``data`` is well formed; a malformed blob produces
+		calldata that fails to decode
+	"""
+
+	__slots__ = ('data',)
+
+	def __init__(self, data: bytes):
+		self.data = data
+
+	def __repr__(self) -> str:
+		return f'Raw({self.data!r})'
+
+	def __eq__(self, other) -> bool:
+		return isinstance(other, Raw) and self.data == other.data
+
+	def __hash__(self) -> int:
+		return hash(self.data)
+
+
+type Decoded = (
+	None | int | Address | bool | str | bytes | list[Decoded] | dict[str, Decoded]
+)
 """
 Type that represents what type is coerced to after ``decode . encode``
 """
@@ -90,6 +132,8 @@ type Encodable = (
 	| Address
 	| bool
 	| bytes
+	| collections.abc.Buffer
+	| Raw
 	| collections.abc.Sequence[Encodable]
 	| collections.abc.Mapping[str, Encodable]
 	| CalldataEncodable
@@ -104,7 +148,7 @@ Type that can be encoded into calldata, provided ``default`` function ``T -> Enc
 """
 
 
-def encode_default_parameter(b):
+def encode_default_parameter(b, /):
 	if not dataclasses.is_dataclass(b):
 		return b
 	if isinstance(b, type):
@@ -183,13 +227,15 @@ def encode[T](
 		elif isinstance(b, Address):
 			mem.append(SPECIAL_ADDR)
 			mem.extend(b.as_bytes)
-		elif isinstance(b, (bytes, bytearray)):
+		elif isinstance(b, Raw):
+			mem.extend(b.data)
+		elif isinstance(b, (bytes, bytearray, memoryview)):
+			# a memoryview may be cast to a wider format, where `len` counts items
+			b = bytes(b)
 			lb = len(b)
 			lb = (lb << 3) | TYPE_BYTES
 			append_uleb128(lb)
 			mem.extend(b)
-		elif isinstance(b, memoryview):
-			mem.extend(b.tolist())
 		elif isinstance(b, str):
 			b = b.encode('utf-8')
 			lb = len(b)
@@ -316,12 +362,12 @@ def to_str(d: Encodable, /) -> str:
 			buf.append('false')
 		elif isinstance(d, str):
 			buf.append(json.dumps(d))
-		elif isinstance(d, (bytes, bytearray)):
+		elif isinstance(d, Raw):
+			buf.append('raw#')
+			buf.append(d.data.hex())
+		elif isinstance(d, (bytes, bytearray, memoryview)):
 			buf.append('b#')
-			buf.append(d.hex())
-		elif isinstance(d, memoryview):
-			buf.append('b#')
-			buf.append(d.hex())
+			buf.append(bytes(d).hex())
 		elif isinstance(d, int):
 			buf.append(str(d))
 		elif isinstance(d, Address):

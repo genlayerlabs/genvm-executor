@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Automatically fill in runner hashes in ``current.nix``.
+"""
+Automatically fill in runner hashes in ``current.nix``.
 
 Runner archives are content-addressed. A runner's hash also depends on the
 *resolved uids* of its dependencies, so the hashes must be discovered in
@@ -26,7 +27,8 @@ CURRENT_NIX = HERE / 'current.nix'
 
 
 def _find_repo_root(start: Path) -> Path:
-	"""The umbrella root: the nearest ancestor with ``.genvm-monorepo-root``.
+	"""
+	The umbrella root: the nearest ancestor with ``.genvm-monorepo-root``.
 
 	This executor is a submodule under the umbrella, whose flake owns the runner
 	build; walk up to find it rather than assuming a fixed depth.
@@ -76,7 +78,8 @@ def id_to_attr(runner_id: str) -> str:
 
 
 def parse_mismatches(output: str) -> dict[str, str]:
-	"""Return ``{attr_name: got_hash}`` for every reported hash mismatch.
+	"""
+	Return ``{attr_name: got_hash}`` for every reported hash mismatch.
 
 	Walks the log attaching each ``got:`` line to the most recent
 	``hash mismatch ... .drv`` line, so the two are never paired across
@@ -103,7 +106,8 @@ def parse_null_requests(output: str) -> set[str]:
 
 
 def map_attr_to_hash_line(lines: list[str]) -> dict[str, int]:
-	"""Map each runner attr to the index of its ``hash = ...;`` line.
+	"""
+	Map each runner attr to the index of its ``hash = ...;`` line.
 
 	Only the ``src`` block is scanned; parsing stops once the helper functions
 	(which also contain ``hash = ...`` expressions) begin.
@@ -134,7 +138,8 @@ def set_hash(lines: list[str], line_idx: int, value: str) -> None:
 
 
 def run_build() -> tuple[int, str]:
-	"""Run the build, teeing its output live while also capturing it.
+	"""
+	Run the build, teeing its output live while also capturing it.
 
 	``-L`` makes Nix emit full build logs; buffering them silently (as
 	``subprocess.run`` would) leaves the script looking hung for minutes and, if

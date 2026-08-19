@@ -93,7 +93,7 @@ def _repr_type(t: typing.Any, permissive: bool) -> typing.Any:
 				raise TypeError(f'dictionary keys must be str, got {args[0]!r}')
 			return {'$dict': _repr_type(args[1], permissive)}
 		if origin is typing.Annotated:
-			return _repr_type(t.__origin__, permissive)
+			return _repr_type(args[0], permissive)
 		if origin is tuple:
 			if len(args) == 2 and args[1] == ...:
 				return [{'$rep': _repr_type(args[0], permissive)}]

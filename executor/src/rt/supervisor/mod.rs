@@ -263,6 +263,15 @@ pub async fn submit_nondet_vm_task(zelf: &Arc<Supervisor>, task: NonDetVMTask) {
     log_debug!(call_no = call_no; "nondet vm task submitted");
 }
 
+/// Disagree with block `call_no` without running a comparison stage for it
+pub fn mark_nondet_disagreement(zelf: &Arc<Supervisor>, call_no: u32) {
+    zelf.queue
+        .nondet_call_disagree
+        .fetch_min(call_no, std::sync::atomic::Ordering::SeqCst);
+
+    log_debug!(call_no = call_no; "nondet block disagreed without a comparison stage");
+}
+
 impl Supervisor {
     pub async fn push_nondet_result(&self, call_no: u32, result: rt::vm::ContractResultBytes) {
         let mut vec = self.nondet_results.lock().await;
@@ -661,13 +670,16 @@ async fn nondet_vm_processor(
                     task_done.notify_one();
                 });
 
-                if zelf.queue.nondet_call_disagree.load(std::sync::atomic::Ordering::SeqCst) != u32::MAX {
-                    log_info!("skipped nondet block due to disagreement in previous one");
+                let call_no = task.call_no;
+                let disagreed_at = zelf
+                    .queue
+                    .nondet_call_disagree
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                if disagreed_at <= call_no {
+                    log_info!("skipped nondet block due to disagreement in this or previous one");
 
                     continue;
                 }
-
-                let call_no = task.call_no;
 
                 let (task, tok) = task.deconstruct();
                 let res = run_single_nondet(&zelf, task).await;

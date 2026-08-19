@@ -294,7 +294,7 @@ impl DataLimit {
             prelude,
             &fees.message_receipt,
             &node,
-            abi::consts::VmError::out_of().receipt().message(),
+            abi::consts::VmError::out_of().receipt().message().val(),
         )?;
         let nondet_output = build_bucket(
             prelude,
@@ -306,7 +306,7 @@ impl DataLimit {
             prelude,
             &fees.message_fee,
             &node,
-            abi::consts::VmError::out_of().message_fee().total(),
+            abi::consts::VmError::out_of().message_fee().total().val(),
         )?;
         let event = build_bucket(
             prelude,
@@ -519,7 +519,7 @@ impl DataLimit {
             &self.message_fee,
             &[
                 ("isInternal", true.into()),
-                ("onAcceptance", (on == abi::gl_call::On::Accepted).into()),
+                ("onAcceptance", (on == abi::gl_call::On::Decided).into()),
                 ("balanceFunded", balance_funded.into()),
                 (
                     "matchedFeeParams",

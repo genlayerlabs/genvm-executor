@@ -33,8 +33,8 @@ if typing.TYPE_CHECKING or IS_IN_VM:
 
 from genlayer._internal.on_chain.gl_call import gl_call_generic
 
-type ON = typing.Literal['accepted', 'finalized']
-"""When the transaction message should be applied: ``'accepted'`` or ``'finalized'``"""
+type ON = typing.Literal['decided', 'finalized']
+"""When the transaction message should be applied: ``'decided'`` or ``'finalized'``"""
 
 
 def _make_calldata_obj(method, args, kwargs) -> calldata.Encodable:
@@ -52,12 +52,19 @@ from genlayer.vm.public_abi import StorageType  # noqa: E402
 
 
 class _ContractAtViewMethod:
-	__slots__ = ('_addr', '_name', '_state')
+	__slots__ = ('_addr', '_name', '_state', '_catch_vm_error')
 
-	def __init__(self, name: str, addr: Address, state: StorageType):
+	def __init__(
+		self,
+		name: str,
+		addr: Address,
+		state: StorageType,
+		catch_vm_error: bool = False,
+	):
 		self._addr = addr
 		self._name = name
 		self._state = state
+		self._catch_vm_error = catch_vm_error
 
 	def __call__(self, *args, **kwargs) -> typing.Any:
 		return self.lazy(*args, **kwargs).get()
@@ -71,6 +78,7 @@ class _ContractAtViewMethod:
 					'address': self._addr,
 					'calldata': _make_calldata_obj(self._name, args, kwargs),
 					'state': self._state.value,
+					'catch_vm_error': self._catch_vm_error,
 				}
 			},
 			_decode_sub_vm_result,
@@ -122,11 +130,18 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 	:param TSend: Type representing available write methods
 	"""
 
-	def view(self, *, state: StorageType = StorageType.LATEST_NON_FINAL) -> TView:
+	def view(
+		self,
+		*,
+		state: StorageType = StorageType.LATEST_DECIDED,
+		catch_vm_error: bool = False,
+	) -> TView:
 		"""
 		Get a namespace for calling view methods.
 
 		:param state: Storage state to query against
+		:param catch_vm_error: return the callee's VM error instead of re-raising
+			it. A fatal one is never caught.
 		:returns: Object providing access to view methods
 		"""
 		...
@@ -152,7 +167,7 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 		:returns: Object providing access to write methods
 
 		.. warning::
-			Emitting transactions, especially with value transfers on ``accepted``
+			Emitting transactions, especially with value transfers on ``decided``
 			may lead to undesired results. Prefer to use ``finalized`` (default)
 		"""
 		...
@@ -209,8 +224,19 @@ class _ContractAt(Proxy[ErasedMethods, ErasedMethods]):
 	def address(self) -> Address:
 		return self._address
 
-	def view(self, *, state: StorageType = StorageType.LATEST_NON_FINAL) -> ErasedMethods:
-		return _ContractAtGetter(_ContractAtViewMethod, self._address, state)
+	def view(
+		self,
+		*,
+		state: StorageType = StorageType.LATEST_DECIDED,
+		catch_vm_error: bool = False,
+	) -> ErasedMethods:
+		"""
+		:param catch_vm_error: return the callee's VM error instead of re-raising
+			it. A fatal one is never caught.
+		"""
+		return _ContractAtGetter(
+			_ContractAtViewMethod, self._address, state, catch_vm_error
+		)
 
 	def emit(
 		self,
@@ -383,7 +409,7 @@ def deploy(
 	args: collections.abc.Sequence[calldata.Encodable] = [],
 	kwargs: collections.abc.Mapping[str, calldata.Encodable] = {},
 	salt_nonce: u256,
-	value: u256,
+	value: u256 = 0,
 	on: ON = 'finalized',
 	use_balance: bool = False,
 	fee_params: InternalMessageParams | None = None,
@@ -413,7 +439,7 @@ def deploy(
 	:param kwargs: Keyword arguments for the contract constructor
 	:param salt_nonce: Salt for deterministic deployment. Use 0 for non-deterministic.
 	:param value: Amount of native tokens to send to the contract during deployment
-	:param on: When to execute the deployment ('accepted' or 'finalized')
+	:param on: When to execute the deployment ('decided' or 'finalized')
 	:param use_balance: Fund the deploy message fee from this contract's balance; see :py:meth:`Proxy.emit`
 	:param fee_params: Fee parameters for the balance-funded fee; required when ``use_balance`` is set
 	:returns: Contract address if salt_nonce != 0, None otherwise

@@ -104,7 +104,7 @@ fn nested_internal_flattens_with_parent_pointers() {
     // root (internal, accepted) with a single external child.
     let child = external_node(Some([0x22u8; 20]), None, 1, 100, 200, vec![]);
     let root = internal_node(
-        genvm_modules_interfaces::On::Accepted,
+        genvm_modules_interfaces::On::Decided,
         10,
         &[2, 3],
         vec![child],

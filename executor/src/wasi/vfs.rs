@@ -136,6 +136,8 @@ pub(crate) struct VFS {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Fd(u32);
 
+pub const ROOT_PREOPEN_FD: Fd = Fd(3);
+
 impl From<Fd> for u32 {
     fn from(value: Fd) -> Self {
         value.0
@@ -175,7 +177,7 @@ impl VFS {
             ),
             (Fd::new(1), FileDescriptor::Stdout),
             (Fd::new(2), FileDescriptor::Stderr),
-            (Fd::new(3), FileDescriptor::Dir { path: Vec::new() }),
+            (ROOT_PREOPEN_FD, FileDescriptor::Dir { path: Vec::new() }),
         ]);
         let next_free_descriptor = fds.last_key_value().map(|x| *x.0).unwrap_or(Fd::default());
         Ok(Self {

@@ -170,7 +170,7 @@ let
       }
       {
         When = {
-          cond = "nondet";
+          cond = "!det";
           action = {
             StartWasm = "cpython.wasm";
           };

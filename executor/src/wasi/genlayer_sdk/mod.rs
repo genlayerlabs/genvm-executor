@@ -398,29 +398,42 @@ impl ContextVFS<'_> {
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))
     }
 
-    fn set_vm_run_result(
+    /// Hand a sub-VM's outcome back to the caller. `catch_vm_error` decides
+    /// whether an ordinary VM error becomes a value the caller reads or an
+    /// error it inherits; a fatal one is never catchable either way.
+    fn publish_sub_vm_result(
         &mut self,
         data: rt::vm::RunOk,
-    ) -> Result<(generated::types::Fd, usize), generated::types::Error> {
-        let data = match data {
-            rt::vm::RunOk::VMError(e, cause) => {
-                return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                    rt::errors::Error::vm_cause(e, cause).into(),
-                )));
-            }
-            rt::vm::RunOk::FatalVMError(e, cause) => {
-                return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
-                    rt::errors::Error::fatal_vm_cause(e, cause).into(),
-                )));
-            }
-            data => data,
-        };
-        let data = data
-            .into_contract_observable_bytes()
-            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
-        let len = data.len();
-        self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
-            .map(|fd| (fd, len))
+        catch_vm_error: bool,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        let encoded = catchable_sub_vm_outcome(data, catch_vm_error)?.encode();
+        self.place_content(vfs::FileContents::from(encoded.into_bytes()))
+    }
+
+    /// [`Self::publish_sub_vm_result`] for a caller that already holds the
+    /// outcome's encoding; `encoded` must be exactly that.
+    fn publish_sub_vm_result_encoded(
+        &mut self,
+        data: rt::vm::RunOk,
+        encoded: bytes::Bytes,
+        catch_vm_error: bool,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        catchable_sub_vm_outcome(data, catch_vm_error)?;
+        self.place_content(vfs::FileContents::from(encoded))
+    }
+}
+
+/// The outcome the caller may read, or the error it inherits instead
+fn catchable_sub_vm_outcome(
+    data: rt::vm::RunOk,
+    catch_vm_error: bool,
+) -> Result<rt::vm::ContractOutcome, generated::types::Error> {
+    match data {
+        rt::vm::RunOk::VMError(e, cause) if !catch_vm_error => Err(generated::types::Error::trap(
+            crate::anyhow_to_wasmtime(rt::errors::Error::vm_cause(e, cause).into()),
+        )),
+        data => rt::vm::ContractOutcome::try_from(data)
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into()))),
     }
 }
 
@@ -528,7 +541,11 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 address,
                 calldata,
                 state,
-            } => self.gl_call_contract(address, calldata, state).await,
+                catch_vm_error,
+            } => {
+                self.gl_call_contract(address, calldata, state, catch_vm_error)
+                    .await
+            }
             gl_call::Message::EmitEvent { topics, blob } => {
                 self.gl_call_emit_event(topics, blob).await
             }
@@ -589,24 +606,30 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 data_validator,
                 runner,
                 custom_runners,
+                catch_vm_error,
             } => {
-                self.run_nondet(data_leader, data_validator, runner, custom_runners)
-                    .await
+                self.run_nondet(
+                    data_leader,
+                    data_validator,
+                    runner,
+                    custom_runners,
+                    catch_vm_error,
+                )
+                .await
             }
             gl_call::Message::Sandbox {
                 data,
                 runner,
                 allow_write_storage,
                 allow_send_messages,
-                allow_register_runners,
                 custom_runners,
+                changes_on_error: gl_call::ChangesOnError::Inherit,
             } => {
                 self.sandbox(
                     data,
                     runner,
                     allow_write_storage,
                     allow_send_messages,
-                    allow_register_runners,
                     custom_runners,
                 )
                 .await
@@ -1121,10 +1144,6 @@ impl ContextVFS<'_> {
         if !self.context.data.conf.permissions.deterministic {
             return Err(generated::types::Errno::Forbidden.into());
         }
-        if !self.context.data.conf.permissions.register_runners {
-            return Err(generated::types::Errno::Forbidden.into());
-        }
-
         // The load action registers the content (weak registry, dedup while
         // alive), charges `RUNNER_LOAD_COST + code.len()` to this VM before parsing, and
         // pins it into this VM's loaded set -- scoping it to this execution and its

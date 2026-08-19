@@ -1,5 +1,7 @@
 # ruff: noqa: F405
 
+import typing
+
 from genlayer.types import *  # noqa: F403
 from genlayer.types import Address
 
@@ -42,10 +44,13 @@ from .codecs import (
 	BoolCodec,
 	BytesNCodec,
 	BytesStrCodec,
+	Codec,
 	IntCodec,
 )
 
-primitive_types_dict = {
+# keys are a mix of plain types and `Annotated` aliases, so they have no common
+# static type
+primitive_types_dict: dict[typing.Any, Codec] = {
 	u8: IntCodec(bits=8, signed=False),
 	u16: IntCodec(bits=16, signed=False),
 	u24: IntCodec(bits=24, signed=False),

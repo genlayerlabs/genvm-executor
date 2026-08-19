@@ -84,7 +84,7 @@ fn post_message_old_encoding_defaults() {
         address: calldata::Address::zero(),
         calldata: Maybe::Materialized(Value::Map(Default::default())),
         value: U256::from(1u64),
-        on: On::Accepted,
+        on: On::Decided,
     };
 
     let decoded: Message = Decode::decode(BinaryDeserializer::new(&encode!(old))).unwrap();

@@ -18,4 +18,4 @@ class Contract(gl.contract.Contract):
 
 	def __init__(self):
 		self.x.insert(np.array([1, 2, 3, 4, 5], dtype=np.float32), '123')
-		print(list(self.x.knn(np.ones(5, dtype=np.float32), 1)))
+		print(list(self.x.knn(np.array([1, 1, 1, 1, 1], dtype=np.float32), 1)))

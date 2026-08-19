@@ -84,12 +84,9 @@ fn bang_det_selects_nondeterministic_wasm() {
 }
 
 #[test]
-fn old_nondet_spelling_is_accepted() {
+fn old_nondet_spelling_is_rejected() {
     let actual = when_mode(r#"{"When":{"cond":"nondet","action":{"StartWasm":"main.wasm"}}}"#);
-    assert!(
-        matches!(actual, Ok(WasmMode::Nondet)),
-        "unexpected parse result: {actual:?}"
-    );
+    assert!(actual.is_err(), "old spelling was accepted: {actual:?}");
 }
 
 #[tokio::test]

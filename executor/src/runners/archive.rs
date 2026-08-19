@@ -152,17 +152,6 @@ fn check_local_header_agrees(
 }
 
 impl Archive {
-    /// Open `bytes` as the ustar the runner registry ships. Every caller that
-    /// reads a registry runner goes through here, so the loader and the
-    /// out-of-band tools cannot disagree about the format.
-    pub fn from_ustar_bytes(bytes: bytes::Bytes) -> errors::Result<Self> {
-        let legacy = super::ustar::LegacyArchive::from_ustar(bytes)?;
-        Ok(Self {
-            data: legacy.data,
-            total_size: legacy.total_size,
-        })
-    }
-
     /// Open `bytes` as a zip and read it. Entry offsets are resolved against the
     /// very buffer the central directory was read from, which is why the caller
     /// never gets to supply the two separately.

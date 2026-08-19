@@ -8,13 +8,13 @@ import genlayer.calldata as calldata
 from genlayer import IS_IN_VM
 from genlayer.types import Address, u256
 
-type ON = typing.Literal['accepted', 'finalized']
-"""When the transaction message should be applied: ``'accepted'`` or ``'finalized'``"""
+type ON = typing.Literal['decided', 'finalized']
+"""When the transaction message should be applied: ``'decided'`` or ``'finalized'``"""
 
 
 @typing.final
 @dataclasses.dataclass(frozen=True)
-class InternalMessageParams:
+class InternalMessageParams(calldata.DataclassMixin):
 	"""
 	Fee parameters for a balance-funded internal message (``use_balance``). GenVM
 	meters the fee from these params (against the emitting contract's balance) and
@@ -130,11 +130,11 @@ class Event:
 	"""
 	.. code-block:: python
 
-	        class TransferOccurredEvent(gl.Event):
+	        class TransferOccurredEvent(gl.chain.Event):
 	          def __init__(self, sender: Address, to: Address, /): ...
 
 
-	        class TransferOccurredEvent(gl.Event):
+	        class TransferOccurredEvent(gl.chain.Event):
 	          def __init__(self, sender: Address, to: Address, /, **blob): ...
 	"""
 

@@ -1,0 +1,4 @@
+registered custom
+fib(20) = 6765
+fib(30) = 832040
+executed with `Return(null)`

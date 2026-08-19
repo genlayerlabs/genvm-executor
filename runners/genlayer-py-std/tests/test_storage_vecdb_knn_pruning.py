@@ -19,7 +19,8 @@ def _brute_nearest(coords: list[int], q: int) -> int:
 
 
 def test_knn_does_not_prune_true_nearest():
-	"""Regression test for KNN pruning skipping the true nearest neighbor.
+	"""
+	Regression test for KNN pruning skipping the true nearest neighbor.
 
 	``knn`` prunes a child subtree when ``child_dist - _max_descendant_dist >
 	best_kth_dist``. That bound is only valid for a metric, but the default

@@ -138,18 +138,30 @@ pub(super) fn leader_outcome_for_publication(
     }
 }
 
-pub(super) fn leader_outcome_for_validation(
-    data: &[u8],
-) -> (rt::vm::ContractOutcome, rt::vm::RunOk) {
-    match parse_leader_result(data) {
-        Ok(outcome) => {
-            let result_to_return = outcome.duplicate().into();
-            (outcome, result_to_return)
+/// What a validator makes of the leader's proposal for one nondet block
+pub(super) enum LeaderProposal {
+    Accepted(rt::vm::ContractOutcome),
+    /// No honest leader could have produced these bytes
+    Rejected(public_abi::VmError),
+}
+
+impl LeaderProposal {
+    /// The outcome the caller receives and the bytes the block is charged for
+    pub fn into_result_and_encoding(self) -> (rt::vm::RunOk, rt::vm::ContractResultBytes) {
+        match self {
+            Self::Accepted(outcome) => (outcome.duplicate().into(), outcome.encode()),
+            Self::Rejected(vm_error) => (
+                rt::vm::RunOk::FatalVMError(vm_error.clone(), None),
+                rt::vm::ContractOutcome::VMError(vm_error, None).encode(),
+            ),
         }
-        Err(vm_error) => (
-            rt::vm::ContractOutcome::VMError(vm_error.clone(), None),
-            rt::vm::RunOk::FatalVMError(vm_error, None),
-        ),
+    }
+}
+
+pub(super) fn leader_proposal_for_validation(data: &[u8]) -> LeaderProposal {
+    match parse_leader_result(data) {
+        Ok(outcome) => LeaderProposal::Accepted(outcome),
+        Err(vm_error) => LeaderProposal::Rejected(vm_error),
     }
 }
 
@@ -194,7 +206,6 @@ pub(super) fn derive_call_contract_permissions(parent: &base::Permissions) -> ba
         spawn_nondet: false,
         call_others: parent.call_others,
         send_messages: false,
-        register_runners: parent.register_runners,
         can_use_balance_for_message_fees: false,
     }
 }
@@ -305,7 +316,6 @@ impl ContextVFS<'_> {
                     send_messages: false,
                     call_others: false,
                     spawn_nondet: false,
-                    register_runners: false,
                     can_use_balance_for_message_fees: false,
                 },
                 execution: base::Execution {
@@ -360,10 +370,10 @@ impl ContextVFS<'_> {
                     state_mode: state,
                     topmost_runner_id: runners::Id::Chain {
                         address,
-                        on: if state == public_abi::StorageType::LatestFinal {
+                        on: if state == public_abi::StorageType::LatestFinalized {
                             runners::ChainState::Finalized
                         } else {
-                            runners::ChainState::Accepted
+                            runners::ChainState::Decided
                         },
                         slot: code_slot,
                     },
@@ -404,6 +414,7 @@ impl ContextVFS<'_> {
         &mut self,
         routing_payload: bytes::Bytes,
         vm_data: Box<SingleVMData>,
+        catch_vm_error: bool,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         use genvm_modules_interfaces::{
             NestedPermissions as P, NestedRunEnvelope, NestedRunnerId, NestedStorageType,
@@ -438,17 +449,17 @@ impl ContextVFS<'_> {
         if vm_data.conf.permissions.spawn_nondet {
             permissions |= P::SPAWN_NONDET;
         }
-        if vm_data.conf.permissions.register_runners {
-            permissions |= P::REGISTER_RUNNERS;
-        }
+        // This line does not gate runner registration, and the bit only
+        // widens what a peer line may do with a set it could rebuild anyway.
+        permissions |= P::REGISTER_RUNNERS;
         if vm_data.conf.permissions.can_use_balance_for_message_fees {
             permissions |= P::USE_BALANCE_FOR_MESSAGE_FEES;
         }
 
         let state_mode = match vm_data.conf.execution.state_mode {
             public_abi::StorageType::Default => NestedStorageType::Default,
-            public_abi::StorageType::LatestFinal => NestedStorageType::LatestFinal,
-            public_abi::StorageType::LatestNonFinal => NestedStorageType::LatestNonFinal,
+            public_abi::StorageType::LatestFinalized => NestedStorageType::LatestFinalized,
+            public_abi::StorageType::LatestDecided => NestedStorageType::LatestDecided,
         };
         let message = &vm_data.message_data.message;
         let envelope = NestedRunEnvelope {
@@ -484,7 +495,7 @@ impl ContextVFS<'_> {
             nested_run_ok(reply).map_err(|e| cross_major_internal("reading nested result", e))?;
 
         self.context.data.det_subvm_hashes.update(&small_hash);
-        self.set_vm_run_result(run_ok).map(|x| x.0)
+        self.publish_sub_vm_result(run_ok, catch_vm_error)
     }
 
     pub(super) async fn gl_call_contract(
@@ -492,6 +503,7 @@ impl ContextVFS<'_> {
         address: calldata::Address,
         calldata: abi::entry::MainCallData,
         mut state: public_abi::StorageType,
+        catch_vm_error: bool,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         if !self.context.data.conf.permissions.deterministic {
             return Err(generated::types::Errno::Forbidden.into());
@@ -555,7 +567,7 @@ impl ContextVFS<'_> {
                 if !vm_data.granted_custom.is_empty() {
                     return Err(generated::types::Errno::Inval.into());
                 }
-                self.run_nested_call_contract(routing_payload, vm_data)
+                self.run_nested_call_contract(routing_payload, vm_data, catch_vm_error)
                     .await
             }
             CallContractRoute::InProcess => {
@@ -578,7 +590,7 @@ impl ContextVFS<'_> {
                 let hash = res.small_hash();
                 self.context.data.det_subvm_hashes.update(&hash);
 
-                self.set_vm_run_result(res.run_ok).map(|x| x.0)
+                self.publish_sub_vm_result(res.run_ok, catch_vm_error)
             }
         }
     }
@@ -589,6 +601,7 @@ impl ContextVFS<'_> {
         data_validator: bytes::Bytes,
         runner: Option<String>,
         custom_runners: Option<Vec<String>>,
+        catch_vm_error: bool,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         if !self.context.data.conf.permissions.spawn_nondet {
             return Err(generated::types::Errno::Forbidden.into());
@@ -684,23 +697,37 @@ impl ContextVFS<'_> {
             // A leader fault is fatal: it says this node's whole run is built on
             // a result no honest leader could have produced, so a caller must
             // not be able to carry on as if the block had merely failed.
-            let (leaders_res, result_to_return) =
-                leader_outcome_for_validation(&leaders_res_bytes.unwrap_or_default());
+            let proposal = leader_proposal_for_validation(&leaders_res_bytes.unwrap_or_default());
 
-            if self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Validator {
-                let vm_ext_msg = self.context.data.message_data.fork_leader(
-                    public_abi::EntryKind::ConsensusStage,
-                    data_validator,
-                    Some(leaders_res.duplicate()),
-                );
+            match &proposal {
+                // Rejecting is already the disagreement; putting it to the
+                // contract's principle would let a `True` vote it away
+                LeaderProposal::Rejected(_)
+                    if self.context.data.supervisor.shared_data.run_mode
+                        == rt::RunMode::Validator =>
+                {
+                    rt::supervisor::mark_nondet_disagreement(&self.context.data.supervisor, call_no)
+                }
+                LeaderProposal::Rejected(_) => {}
+                LeaderProposal::Accepted(leaders_res)
+                    if self.context.data.supervisor.shared_data.run_mode
+                        == rt::RunMode::Validator =>
+                {
+                    let vm_ext_msg = self.context.data.message_data.fork_leader(
+                        public_abi::EntryKind::ConsensusStage,
+                        data_validator,
+                        Some(leaders_res.duplicate()),
+                    );
 
-                let task = self.run_nondet_get_vm_task(vm_ext_msg, run_nondet_get_vm_task_args);
+                    let task = self.run_nondet_get_vm_task(vm_ext_msg, run_nondet_get_vm_task_args);
 
-                rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task).await;
+                    rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task)
+                        .await;
+                }
+                LeaderProposal::Accepted(_) => {}
             }
 
-            let encoded = leaders_res.encode();
-            (result_to_return, encoded)
+            proposal.into_result_and_encoding()
         };
 
         // Retention precedes the charge, so a validator replaying a run that
@@ -719,7 +746,7 @@ impl ContextVFS<'_> {
         )
         .await?;
 
-        self.set_vm_run_result(result_to_return).map(|x| x.0)
+        self.publish_sub_vm_result_encoded(result_to_return, encoded.into_bytes(), catch_vm_error)
     }
 
     pub(super) async fn sandbox(
@@ -728,7 +755,6 @@ impl ContextVFS<'_> {
         runner: String,
         allow_write_storage: bool,
         allow_send_messages: bool,
-        allow_register_runners: bool,
         custom_runners: Option<Vec<String>>,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         let supervisor = self.context.data.supervisor.clone();
@@ -794,8 +820,6 @@ impl ContextVFS<'_> {
                     send_messages: zelf_conf.permissions.send_messages & allow_send_messages,
                     call_others: false,
                     spawn_nondet: false,
-                    register_runners: zelf_conf.permissions.register_runners
-                        & allow_register_runners,
                     can_use_balance_for_message_fees: zelf_conf
                         .permissions
                         .can_use_balance_for_message_fees

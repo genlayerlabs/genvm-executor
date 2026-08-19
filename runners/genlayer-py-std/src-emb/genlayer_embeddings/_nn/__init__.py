@@ -19,16 +19,21 @@ import numpy as np  # noqa: E402
 from google.protobuf.internal.containers import (  # noqa: E402
 	RepeatedCompositeFieldContainer,
 )
+
+# the vendored onnx subset re-exports these from generated protobuf modules,
+# which carry no type information
 from onnx import (  # noqa: E402
-	AttributeProto,
-	ModelProto,
-	NodeProto,
-	TensorProto,
-	TypeProto,
+	AttributeProto,  # pyright: ignore[reportAttributeAccessIssue]
+	ModelProto,  # pyright: ignore[reportAttributeAccessIssue]
+	NodeProto,  # pyright: ignore[reportAttributeAccessIssue]
+	TensorProto,  # pyright: ignore[reportAttributeAccessIssue]
+	TypeProto,  # pyright: ignore[reportAttributeAccessIssue]
 )
 
 try:
-	from onnx.helper import tensor_dtype_to_np_dtype
+	from onnx.helper import (  # pyright: ignore[reportMissingImports]
+		tensor_dtype_to_np_dtype,
+	)
 except ImportError:
 	from onnx.mapping import TENSOR_TYPE_TO_NP_TYPE
 
@@ -42,7 +47,8 @@ import typing  # noqa: E402
 
 
 def prod[T](x: typing.Iterable[T]) -> Union[T, int]:
-	return functools.reduce(operator.mul, x, 1)
+	# typeshed cannot match operator.mul's overloads against reduce's signature
+	return functools.reduce(operator.mul, x, 1)  # pyright: ignore[reportArgumentType]
 
 
 # src: onnx/mapping.py
@@ -285,9 +291,14 @@ def get_run_onnx(
 		elif hasattr(onnx_ops, n.op_type):
 			fxn = getattr(onnx_ops, n.op_type)
 			if isinstance(fxn, dict):
+				real_fxn = None
 				for k in sorted(fxn.keys()):
 					if k <= onnx_model_version:
 						real_fxn = fxn[k]
+				if real_fxn is None:
+					raise Exception(
+						f'op_type {n.op_type} not supported for opset {onnx_model_version}'
+					)
 			else:
 				real_fxn = fxn
 

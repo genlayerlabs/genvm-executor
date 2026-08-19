@@ -1,8 +1,8 @@
 use super::message::{validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE_BITS};
 use super::run::{
     call_contract_route, derive_call_contract_permissions, leader_outcome_for_publication,
-    leader_outcome_for_validation, nested_run_ok, parse_leader_result, strip_vm_error_detail,
-    CallContractRoute,
+    leader_proposal_for_validation, nested_run_ok, parse_leader_result, strip_vm_error_detail,
+    CallContractRoute, LeaderProposal,
 };
 use super::*;
 use primitive_types::U256;
@@ -155,14 +155,12 @@ fn call_contract_child_is_deterministic_only() {
         send_messages: true,
         call_others: true,
         spawn_nondet: true,
-        register_runners: true,
         can_use_balance_for_message_fees: true,
     };
     let child = derive_call_contract_permissions(&parent);
 
     assert!(child.deterministic);
     assert!(child.call_others);
-    assert!(child.register_runners);
     assert!(!child.spawn_nondet);
     assert!(!child.write_storage);
     assert!(!child.send_messages);
@@ -240,16 +238,16 @@ fn fatal_leader_outcome_cannot_be_published() {
 }
 
 #[test]
-fn malformed_leader_outcome_is_visible_as_vm_error_but_remains_fatal() {
-    let (visible, returned) =
-        leader_outcome_for_validation(&[crate::host::host_fns::ResultCode::FatalVmError as u8]);
+fn malformed_leader_outcome_is_rejected_and_charged_as_a_vm_error() {
+    let proposal =
+        leader_proposal_for_validation(&[crate::host::host_fns::ResultCode::FatalVmError as u8]);
 
-    assert!(matches!(&visible, rt::vm::ContractOutcome::VMError(..)));
+    assert!(matches!(proposal, LeaderProposal::Rejected(..)));
+
+    let (returned, encoded) = proposal.into_result_and_encoding();
+
     assert!(matches!(returned, rt::vm::RunOk::FatalVMError(..)));
-    assert_eq!(
-        visible.encode().as_slice()[0],
-        public_abi::ResultCode::VmError as u8
-    );
+    assert_eq!(encoded.as_slice()[0], public_abi::ResultCode::VmError as u8);
 }
 
 #[test]
@@ -543,7 +541,7 @@ fn every_generated_trie_code_is_accepted() {
         public_abi::VmError::out_of().memory().val(),
         public_abi::VmError::out_of().memory().wasm_memory(),
         public_abi::VmError::out_of().receipt().nondet_output(),
-        public_abi::VmError::out_of().message_fee().total(),
+        public_abi::VmError::out_of().message_fee().total().val(),
         public_abi::VmError::fee().below_minimum(),
         public_abi::VmError::evm().reverted(),
         public_abi::VmError::invalid_contract().val(),

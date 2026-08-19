@@ -9,7 +9,6 @@ pub struct Permissions {
     pub send_messages: bool,
     pub call_others: bool,
     pub spawn_nondet: bool,
-    pub register_runners: bool,
     pub can_use_balance_for_message_fees: bool,
 }
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Pre-commit guard: keep source text plain and citation-free.
+"""
+Pre-commit guard: keep source text plain and citation-free.
 
 Comments should read on their own terms and stay ASCII. Rejected anywhere in a
 scanned file: ADR references (`ADR-012`, `ADR 12`) and issue references
@@ -50,7 +51,8 @@ def _violations(path: str):
 
 
 def main(argv: list[str]) -> int:
-	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+	assert __doc__ is not None
+	parser = argparse.ArgumentParser(description=__doc__.splitlines()[1])
 	parser.add_argument('files', nargs='*', help='files to check')
 	args = parser.parse_args(argv)
 

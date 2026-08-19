@@ -49,6 +49,24 @@
             numpy
           ]
         );
+        # Third-party packages the checked sources import: the wasm build ships
+        # its own numpy/pillow (runners/cpython/modules) and the pure-python
+        # libs come from runners/py-libs, but pyright needs an importable copy
+        # to resolve them. `_genlayer_wasi` is covered by its in-tree stub.
+        pyright-python = pkgs.python313.withPackages (
+          ps: with ps; [
+            numpy
+            pillow
+            eth-abi
+          ]
+        );
+        # Scope, extra import roots and vendored-tree exclusions live in
+        # pyrightconfig.json; only the interpreter is wired up here.
+        pyright-run = pkgs.writeShellScript "pyright-run" ''
+          exec ${pkgs.pyright}/bin/pyright \
+            --pythonpath ${pyright-python}/bin/python3 \
+            --level error
+        '';
         # cargo fmt per crate: each Cargo.toml picks up its own edition.
         cargo-fmt-all = pkgs.writeShellScript "cargo-fmt-all" ''
           set -euo pipefail
@@ -105,6 +123,15 @@
             };
             # --- executor-owned languages: python, c/c++, rust, nix ---
             ruff-format.enable = true;
+            ruff.enable = true;
+            pyright = {
+              enable = true;
+              name = "pyright";
+              entry = toString pyright-run;
+              files = "\\.py$";
+              # Whole-project check: the file list is pyrightconfig.json's.
+              pass_filenames = false;
+            };
             clang-format = {
               enable = true;
               # v19 to match the executor's historical clang-format pin.

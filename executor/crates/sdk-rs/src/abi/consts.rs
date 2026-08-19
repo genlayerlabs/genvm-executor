@@ -66,8 +66,8 @@ impl TryFrom<u8> for ResultCode {
 #[repr(u8)]
 pub enum StorageType {
     Default = 0,
-    LatestFinal = 1,
-    LatestNonFinal = 2,
+    LatestFinalized = 1,
+    LatestDecided = 2,
 }
 
 impl StorageType {
@@ -75,15 +75,15 @@ impl StorageType {
     pub fn value(self) -> u8 {
         match self {
             StorageType::Default => 0,
-            StorageType::LatestFinal => 1,
-            StorageType::LatestNonFinal => 2,
+            StorageType::LatestFinalized => 1,
+            StorageType::LatestDecided => 2,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
         match self {
             StorageType::Default => "default",
-            StorageType::LatestFinal => "latest_final",
-            StorageType::LatestNonFinal => "latest_non_final",
+            StorageType::LatestFinalized => "latest_finalized",
+            StorageType::LatestDecided => "latest_decided",
         }
     }
 }
@@ -94,8 +94,8 @@ impl TryFrom<u8> for StorageType {
     fn try_from(value: u8) -> Result<Self, ()> {
         match value {
             0 => Ok(StorageType::Default),
-            1 => Ok(StorageType::LatestFinal),
-            2 => Ok(StorageType::LatestNonFinal),
+            1 => Ok(StorageType::LatestFinalized),
+            2 => Ok(StorageType::LatestDecided),
             _ => Err(()),
         }
     }
@@ -316,6 +316,16 @@ pub mod __VmError {
         pub const fn wasm_table(&self) -> VmError { VmError(Cow::Borrowed("out_of memory wasm_table")) }
     }
 
+    pub struct OutOfReceiptMessage;
+
+    impl OutOfReceiptMessage {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt message")) }
+        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt message # internal")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "out_of receipt message"
+        }
+    }
+
     pub struct OutOfReceipt;
 
     impl OutOfReceipt {
@@ -323,8 +333,30 @@ pub mod __VmError {
             "out_of receipt"
         }
         pub const fn nondet_output(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt nondet_output")) }
-        pub const fn message(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt message")) }
         pub const fn event(&self) -> VmError { VmError(Cow::Borrowed("out_of receipt event")) }
+        pub const fn message(&self) -> OutOfReceiptMessage { OutOfReceiptMessage }
+    }
+
+    pub struct OutOfMessageFeeTotal;
+
+    impl OutOfMessageFeeTotal {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee total")) }
+        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee total # internal")) }
+        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee total # external")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "out_of message_fee total"
+        }
+    }
+
+    pub struct OutOfMessageFeeNode;
+
+    impl OutOfMessageFeeNode {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node")) }
+        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node # internal")) }
+        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node # external")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "out_of message_fee node"
+        }
     }
 
     pub struct OutOfMessageFee;
@@ -333,8 +365,8 @@ pub mod __VmError {
         pub const fn prefix_(&self) -> &'static str {
             "out_of message_fee"
         }
-        pub const fn total(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee total")) }
-        pub const fn node(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node")) }
+        pub const fn total(&self) -> OutOfMessageFeeTotal { OutOfMessageFeeTotal }
+        pub const fn node(&self) -> OutOfMessageFeeNode { OutOfMessageFeeNode }
     }
 
     pub struct OutOf;
@@ -354,15 +386,26 @@ pub mod __VmError {
         pub const fn message_fee(&self) -> OutOfMessageFee { OutOfMessageFee }
     }
 
+    pub struct FeeNoMatchingNode;
+
+    impl FeeNoMatchingNode {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node")) }
+        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node # internal")) }
+        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node # external")) }
+        pub const fn prefix_(&self) -> &'static str {
+            "fee no_matching_node"
+        }
+    }
+
     pub struct Fee;
 
     impl Fee {
         pub const fn prefix_(&self) -> &'static str {
             "fee"
         }
-        pub const fn no_matching_node(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node")) }
         pub const fn below_minimum(&self) -> VmError { VmError(Cow::Borrowed("fee below_minimum")) }
         pub const fn too_many_rounds(&self) -> VmError { VmError(Cow::Borrowed("fee too_many_rounds")) }
+        pub const fn no_matching_node(&self) -> FeeNoMatchingNode { FeeNoMatchingNode }
     }
 
     pub struct Evm;
@@ -438,12 +481,6 @@ impl VmError {
     pub const fn fee() -> __VmError::Fee { __VmError::Fee }
     pub const fn evm() -> __VmError::Evm { __VmError::Evm }
     pub const fn invalid_contract() -> __VmError::InvalidContract { __VmError::InvalidContract }
-}
-
-#[rustfmt::skip]
-impl VmError {
-    pub fn internal(self) -> Self { assert!(!self.0.contains(" # "), "a value carries at most one detail"); Self(Cow::Owned(format!("{} # internal", self.0))) }
-    pub fn external(self) -> Self { assert!(!self.0.contains(" # "), "a value carries at most one detail"); Self(Cow::Owned(format!("{} # external", self.0))) }
 }
 
 #[rustfmt::skip]

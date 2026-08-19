@@ -19,17 +19,45 @@ fn chain_canonical_uses_checksum_address() {
 
     let id = Id::Chain {
         address,
-        on: ChainState::Accepted,
+        on: ChainState::Decided,
         slot: SlotID::ZERO,
     };
 
     let expected = format!(
-        "chain:0x{}:a:{}",
+        "chain:0x{}:d:{}",
         std::str::from_utf8(&address.checksum_hex()).unwrap(),
         "0".repeat(52),
     );
     assert_eq!(id.canonical().as_str(), expected.as_str());
     assert!(expected.contains("5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"));
+}
+
+#[test]
+fn chain_canonical_chars_are_distinct() {
+    let chars: Vec<char> = [
+        ChainState::Decided,
+        ChainState::Finalized,
+        ChainState::Deploy,
+    ]
+    .into_iter()
+    .map(|on| {
+        let id = Id::Chain {
+            address: Address::from([0u8; 20]),
+            on,
+            slot: SlotID::ZERO,
+        };
+        id.canonical()
+            .as_str()
+            .split(':')
+            .nth(2)
+            .unwrap()
+            .chars()
+            .next()
+            .unwrap()
+    })
+    .collect();
+
+    assert_eq!(chars, vec!['d', 'f', 'i']);
 }
 
 #[test]
@@ -54,9 +82,9 @@ fn parse_runner_id_forms() {
         }
         other => panic!("expected Chain, got {other:?}"),
     }
-    match runners::parse_runner_id(&format!("chain:{}:a:{}", test_addr(), test_slot())) {
+    match runners::parse_runner_id(&format!("chain:{}:d:{}", test_addr(), test_slot())) {
         Some(IdUnresolved::Chain { on, slot, .. }) => {
-            assert_eq!(on, Some(ChainState::Accepted));
+            assert_eq!(on, Some(ChainState::Decided));
             assert!(slot.is_some());
         }
         other => panic!("expected Chain, got {other:?}"),
@@ -79,6 +107,10 @@ fn parse_runner_id_rejects_malformed() {
     assert!(
         runners::parse_runner_id(&format!("chain:{}:x:{}", test_addr(), test_slot())).is_none()
     );
+    // `a` was the pre-rename spelling of the decided state and must not resolve.
+    assert!(
+        runners::parse_runner_id(&format!("chain:{}:a:{}", test_addr(), test_slot())).is_none()
+    );
     assert!(
         runners::parse_runner_id(&format!("chain:{}:f:{}:extra", test_addr(), test_slot()))
             .is_none()
@@ -91,9 +123,9 @@ fn parse_runner_id_rejects_malformed() {
 
 #[test]
 fn chain_without_slot_id() {
-    match runners::parse_runner_id(&format!("chain:{}:a", test_addr())) {
+    match runners::parse_runner_id(&format!("chain:{}:d", test_addr())) {
         Some(IdUnresolved::Chain { on, slot, .. }) => {
-            assert_eq!(on, Some(ChainState::Accepted));
+            assert_eq!(on, Some(ChainState::Decided));
             assert!(slot.is_none(), "slot must be None when omitted");
         }
         other => panic!("expected Chain, got {other:?}"),
@@ -104,7 +136,7 @@ fn chain_without_slot_id() {
 fn chain_without_on_or_slot() {
     match runners::parse_runner_id(&format!("chain:{}", test_addr())) {
         Some(IdUnresolved::Chain { on, slot, .. }) => {
-            assert_eq!(on, Some(ChainState::Accepted));
+            assert_eq!(on, Some(ChainState::Decided));
             assert!(slot.is_none(), "slot must be None when omitted");
         }
         other => panic!("expected Chain, got {other:?}"),

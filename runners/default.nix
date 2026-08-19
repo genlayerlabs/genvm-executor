@@ -3,7 +3,7 @@
 #   id
 #   hash
 #   uid
-#   derivation # tar file
+#   derivation # zip file
 # }]
 # all args are optional
 {

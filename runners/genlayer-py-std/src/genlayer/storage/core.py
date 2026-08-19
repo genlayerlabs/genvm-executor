@@ -412,7 +412,7 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 		)
 		self._storage_slot.write(self._off, (le + 1).to_bytes(4, 'little'))
 
-	def extend(self, val: PseudoSequence[T], /):
+	def extend(self, val: collections.abc.Iterable[T], /):
 		"""
 		Add all elements from ``val``, truncating first.
 
@@ -430,7 +430,7 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 		for v in val:
 			self.append(v)
 
-	def assign(self, val: PseudoSequence[T], /):
+	def assign(self, val: collections.abc.Iterable[T], /):
 		"""
 		Replace contents with elements from ``val``, truncating first.
 

@@ -17,7 +17,8 @@ def get_as_const(x: Tensor) -> np.ndarray:
 
 
 def prod[T](x: typing.Iterable[T]) -> Union[T, int]:
-	return functools.reduce(operator.mul, x, 1)
+	# typeshed cannot match operator.mul's overloads against reduce's signature
+	return functools.reduce(operator.mul, x, 1)  # pyright: ignore[reportArgumentType]
 
 
 def flatten[T](l: typing.Iterable[typing.Iterable[T]]):

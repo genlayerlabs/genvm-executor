@@ -106,7 +106,8 @@ class CommitPart:
 
 
 def parse_commit(message: str) -> list[CommitPart]:
-	"""Split a commit message into parts to validate independently.
+	"""
+	Split a commit message into parts to validate independently.
 
 	A squash/PR-merge commit (GitHub style) has bullet lines in the body that
 	are themselves conventional commit subjects.  Each becomes its own CommitPart;

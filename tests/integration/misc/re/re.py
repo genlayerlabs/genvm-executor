@@ -2,14 +2,21 @@
 
 import re
 
-assert re.match('(ab|ba)', 'ab').span() == (0, 2)
-assert re.match('(ab|ba)', 'ba').span() == (0, 2)
-assert re.match('(abc|bac|ca|cb)', 'abc').span() == (0, 3)
-assert re.match('(abc|bac|ca|cb)', 'bac').span() == (0, 3)
-assert re.match('(abc|bac|ca|cb)', 'ca').span() == (0, 2)
-assert re.match('(abc|bac|ca|cb)', 'cb').span() == (0, 2)
-assert re.match('((a)|(b)|(c))', 'a').span() == (0, 1)
-assert re.match('((a)|(b)|(c))', 'b').span() == (0, 1)
-assert re.match('((a)|(b)|(c))', 'c').span() == (0, 1)
+
+def m(pat: str, st: str):
+	val = re.match(pat, st)
+	assert val is not None, f'Failed to match {st} with {pat}'
+	return val.span()
+
+
+assert m('(ab|ba)', 'ab') == (0, 2)
+assert m('(ab|ba)', 'ba') == (0, 2)
+assert m('(abc|bac|ca|cb)', 'abc') == (0, 3)
+assert m('(abc|bac|ca|cb)', 'bac') == (0, 3)
+assert m('(abc|bac|ca|cb)', 'ca') == (0, 2)
+assert m('(abc|bac|ca|cb)', 'cb') == (0, 2)
+assert m('((a)|(b)|(c))', 'a') == (0, 1)
+assert m('((a)|(b)|(c))', 'b') == (0, 1)
+assert m('((a)|(b)|(c))', 'c') == (0, 1)
 
 exit(0)

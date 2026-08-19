@@ -66,11 +66,11 @@ rec {
           nativeBuildInputs = with pkgs-host; [ python313 ];
 
           buildPhase = ''
-            out="$(readlink -f ./scripts)/debug-out.tar" ${pkgs-host.python313}/bin/python3 ./scripts/make-tar.py
+            out="$(readlink -f ./scripts)/debug-out.zip" ${pkgs-host.python313}/bin/python3 ./scripts/make-zip.py
           '';
 
           installPhase = ''
-            ${pkgs-host.python313}/bin/python3 ./scripts/make-tar.py
+            ${pkgs-host.python313}/bin/python3 ./scripts/make-zip.py
           '';
 
           outputHashMode = "flat";

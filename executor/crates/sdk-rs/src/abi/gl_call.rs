@@ -34,7 +34,7 @@ pub mod web_iface {
 
     /// Render mode for WebRender operations.
     #[derive(Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub enum RenderMode {
         #[serde(rename = "text")]
         #[calldata(rename = "text")]
@@ -49,7 +49,7 @@ pub mod web_iface {
 
     /// Duration to wait after page load before capturing content.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub enum WaitAfterLoaded {
         Seconds(u64),
         Millis(u64),
@@ -172,7 +172,7 @@ pub mod web_iface {
 
     /// Payload for WebRender operations.
     #[derive(Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub struct RenderPayload {
         pub mode: RenderMode,
         pub url: String,
@@ -185,7 +185,7 @@ pub mod web_iface {
 
     /// HTTP request method for WebRequest operations.
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize, Encode, Decode)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub enum RequestMethod {
         GET,
         POST,
@@ -198,10 +198,10 @@ pub mod web_iface {
 
     /// HTTP response from WebRequest or WebRender operations.
     #[derive(Clone, PartialEq, Debug, Serialize, Deserialize, Encode, Decode)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub struct Response {
         pub status: u16,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_btreemap_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_btreemap_bytes))]
         pub headers: BTreeMap<String, bytes::Bytes>,
 
         #[serde(with = "serde_bytes")]
@@ -214,11 +214,11 @@ pub mod web_iface {
 
     /// Payload for WebRequest operations.
     #[derive(Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub struct RequestPayload {
         pub method: RequestMethod,
         pub url: String,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_btreemap_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_btreemap_bytes))]
         pub headers: BTreeMap<String, bytes::Bytes>,
 
         #[serde(with = "serde_bytes", default = "default_none")]
@@ -241,7 +241,7 @@ pub mod llm_iface {
 
     /// Output format for LLM prompt responses.
     #[derive(Clone, Deserialize, Serialize, Encode, Decode, Copy, PartialEq, Eq, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub enum OutputFormat {
         #[serde(rename = "text")]
         #[calldata(rename = "text")]
@@ -257,18 +257,18 @@ pub mod llm_iface {
 
     /// Payload for ExecPrompt operations.
     #[derive(Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub struct PromptPayload {
         #[serde(default = "default_text")]
         #[calldata(default = default_text)]
         pub response_format: OutputFormat,
         pub prompt: String,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_vec_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_vec_bytes))]
         pub images: Vec<bytes::Bytes>,
     }
 
     #[derive(Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub struct PromptEqComparativePayload {
         pub leader_answer: String,
         pub validator_answer: String,
@@ -276,7 +276,7 @@ pub mod llm_iface {
     }
 
     #[derive(Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub struct PromptEqNonComparativeValidatorPayload {
         pub task: String,
         pub criteria: String,
@@ -285,7 +285,7 @@ pub mod llm_iface {
     }
 
     #[derive(Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     pub struct PromptEqNonComparativeLeaderPayload {
         pub task: String,
         pub criteria: String,
@@ -294,7 +294,7 @@ pub mod llm_iface {
 
     /// Payload for ExecPromptTemplate operations.
     #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
-    #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+    #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
     #[serde(tag = "template")]
     pub enum PromptTemplatePayload {
         EqComparative(PromptEqComparativePayload),
@@ -475,21 +475,21 @@ pub mod llm_iface {
 
 /// When to execute a posted message or deploy a contract.
 #[derive(Clone, Deserialize, Serialize, Encode, Decode, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub enum On {
     #[serde(rename = "finalized")]
     #[calldata(rename = "finalized")]
     Finalized,
-    #[serde(rename = "accepted")]
-    #[calldata(rename = "accepted")]
-    Accepted,
+    #[serde(rename = "decided")]
+    #[calldata(rename = "decided")]
+    Decided,
 }
 
 fn encode_storage_type<W: calldata::Writer>(
     st: &public_abi::StorageType,
     enc: &mut calldata::Encoder<W>,
 ) -> Result<(), W::Error> {
-    enc.push_u64(st.value() as u64)
+    enc.push_u64(st.value().into())
 }
 
 fn decode_storage_type(
@@ -510,9 +510,19 @@ fn decode_storage_type(
     })
 }
 
+/// What happens to the changes a sandbox child made when it does not return.
+#[derive(Clone, Deserialize, Serialize, Encode, Decode, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
+pub enum ChangesOnError {
+    /// The caller keeps them, exactly as it keeps the ones it made itself
+    #[serde(rename = "inherit")]
+    #[calldata(rename = "inherit")]
+    Inherit,
+}
+
 /// Payload for Trace operations.
 #[derive(Clone, PartialEq, Deserialize, Serialize, calldata::Encode, calldata::Decode, Debug)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub enum TracePayload {
     /// Log a debug message with timing information.
     Message(String),
@@ -526,11 +536,11 @@ pub enum TracePayload {
 /// invoked via the [`super::wasi::gl_call`] function.
 #[allow(clippy::enum_variant_names, deprecated)]
 #[derive(PartialEq, Debug, calldata::Encode, calldata::Decode)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub enum Message {
     EthCall {
         address: calldata::Address,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         calldata: Bytes,
     },
     CallContract {
@@ -541,19 +551,24 @@ pub enum Message {
             deserialize_with = decode_storage_type
         )]
         state: public_abi::StorageType,
+        /// Take a VM error from the callee as a result instead of re-raising
+        /// it. Never applies to a fatal one: that is precisely an outcome the
+        /// callee marked as not catchable.
+        #[calldata(default = default_false)]
+        catch_vm_error: bool,
     },
 
     EthSend {
         address: calldata::Address,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         calldata: Bytes,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
         value: primitive_types::U256,
     },
     PostMessage {
         address: calldata::Address,
         calldata: abi::entry::MainCallData,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
         value: primitive_types::U256,
         on: On,
         /// Chain `useBalance`: fund this message's fee from the emitting
@@ -568,12 +583,12 @@ pub enum Message {
     },
     DeployContract {
         calldata: abi::entry::MainDeployData,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         code: Bytes,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
         value: primitive_types::U256,
         on: On,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
         salt_nonce: primitive_types::U256,
         /// Chain `useBalance` for the deploy message; see `PostMessage::use_balance`.
         #[calldata(default = default_false)]
@@ -583,15 +598,15 @@ pub enum Message {
         fee_params: Option<fees::InternalMessageParams>,
     },
     EmitEvent {
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_vec_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_vec_bytes))]
         topics: Vec<Bytes>,
         blob: calldata::unparsed::Maybe<calldata::Map<calldata::Value>>,
     },
 
     RunNondet {
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         data_leader: Bytes,
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         data_validator: Bytes,
         /// Runner to execute in the nondet block, as a full runner id. `None`
         /// (old SDKs) runs the parent's `contract`; a `custom:<hash>` must be
@@ -603,26 +618,32 @@ pub enum Message {
         /// blocks used to start empty); `Some(list)` grants exactly that subset.
         #[calldata(default = default_none)]
         custom_runners: Option<Vec<String>>,
+        /// Take a VM error from the callee as a result instead of re-raising
+        /// it. Never applies to a fatal one: that is precisely an outcome the
+        /// callee marked as not catchable.
+        #[calldata(default = default_false)]
+        catch_vm_error: bool,
     },
 
     Sandbox {
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         data: Bytes,
 
         runner: String,
 
         allow_write_storage: bool,
         allow_send_messages: bool,
-        allow_register_runners: bool,
         /// Custom runners visible to the sandbox child, each a full `custom:<hash>`
         /// id. `None` inherits the parent's entire set; `Some(list)` grants exactly
         /// that subset (every element must be in the parent's set).
         #[calldata(default = default_none)]
         custom_runners: Option<Vec<String>>,
+        /// Fate of the changes the child made when it ends in an error.
+        changes_on_error: ChangesOnError,
     },
 
     RegisterRunner {
-        #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         code: Bytes,
     },
 

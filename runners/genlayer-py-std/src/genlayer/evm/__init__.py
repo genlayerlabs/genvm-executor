@@ -240,11 +240,11 @@ import genlayer.chain
 
 
 class IAccount(genlayer.chain.IAccount, typing.Protocol):
-	def emit_call(self, value: u256, data: bytes) -> None: ...
+	def emit_call(self, value: u256, data: bytes, /) -> None: ...
 
 
 class Account(IAccount, genlayer.chain.Account):
-	def emit_value(self, value: u256, data: bytes, /) -> None:
+	def emit_call(self, value: u256, data: bytes, /) -> None:
 		from genlayer._internal.on_chain.eth import perform_send
 
 		perform_send(self.address, data, value)

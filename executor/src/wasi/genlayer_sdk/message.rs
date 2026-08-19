@@ -30,7 +30,7 @@ enum FeeFunding<'a> {
 fn convert_on_to_modules(on: gl_call::On) -> genvm_modules_interfaces::On {
     match on {
         gl_call::On::Finalized => genvm_modules_interfaces::On::Finalized,
-        gl_call::On::Accepted => genvm_modules_interfaces::On::Accepted,
+        gl_call::On::Decided => genvm_modules_interfaces::On::Decided,
     }
 }
 

@@ -15,8 +15,8 @@ class Contract(gl.contract.Contract):
 			# runs in the sandbox child; registers into the child's own set
 			return register_runner(code)
 
-		res = spawn_sandbox(inner, allow_register_runners=True)
-		rid = res.calldata
+		res = spawn_sandbox(inner)
+		rid = gl.vm.unpack_result(res)
 		print('sandbox registered', rid)
 
 		# The parent never loaded `rid`; resolving it must fail deterministically.

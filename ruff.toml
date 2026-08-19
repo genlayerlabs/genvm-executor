@@ -16,6 +16,13 @@ skip-magic-trailing-comma = false
 [lint]
 ignore = ["E741"]
 
-extend-select = ["I"]
+extend-select = [
+    "E9",
+    "F",
+    "ASYNC",
+    "RUF006",
+    "D213", # docstring summary on next line
+    "I", # sort imports
+]
 
 exclude = ["runners/cpython/modules/**"]

@@ -2,8 +2,8 @@ from pathlib import Path
 
 src_dir = Path(__file__).parent.parent.joinpath('fuzz', 'src')
 
-for test in sorted(src_dir.iterdir()):
-	name = test.name[:-3]
+for test in sorted(src_dir.glob('*.py')):
+	name = test.stem
 	print(test, name)
 
 	src_py = test.read_text()
@@ -13,7 +13,9 @@ for test in sorted(src_dir.iterdir()):
 	exec(src_compile, new_globs)
 	fun = new_globs[name]
 
-	for testcase in src_dir.parent.joinpath('inputs', name).iterdir():
+	for testcase in src_dir.parent.joinpath('inputs', name).glob('**/*'):
+		if not testcase.is_file():
+			continue
 
 		def cur_test(testcase=testcase):
 			fun(testcase.read_bytes())

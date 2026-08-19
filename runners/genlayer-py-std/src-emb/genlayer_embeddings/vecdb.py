@@ -72,7 +72,7 @@ Id = typing.NewType('Id', int)
 _Id = Id
 
 NO_PARENT: u32 = 0xFFFFFFFF  # Constant for no parent node
-MIN_LEVEL: i32 = -64  # Sentinel for coincident points in level calculation
+MIN_LEVEL: i32 = -1075  # One level below the smallest positive float64
 MAX_LEVEL: i32 = 65535  # Cap for root level
 
 
@@ -84,6 +84,7 @@ class CoverTreeNode:
 	level: i32
 	children: DynArray[u32]  # Indices of child nodes
 	parent: u32  # Index of parent node, NO_PARENT if root
+	duplicates: DynArray[u32]  # Other elements at the same metric point
 
 	def __init__(self, element_id: u32, level: i32):
 		self.element_id = element_id
@@ -98,7 +99,7 @@ class VecDBElement[T: np.number, S: int, V, Dist]:
 
 	__slots__ = ('_idx', '_db', 'distance')
 
-	def __init__(self, db: VecDB[T, S, V], idx: u32, distance: Dist):
+	def __init__(self, db: VecDB[T, S, V, typing.Any], idx: u32, distance: Dist):
 		self._idx = idx
 		self._db = db
 		self.distance = distance
@@ -172,26 +173,49 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 	_free_nodes: TreeMap[u32, None]
 	_elem_to_node: TreeMap[u32, u32]  # element_id -> highest-level node_idx
 	_root_idx: u32
-	_base: float  # Base for cover tree levels (typically 1.3)
+	_base: float
 	_max_level: i32
 	_min_level: i32
 	_dist_func: D
 
 	_initialized: bool = False
+	_level_counts: TreeMap[i32, u32]
+	_tree_version: u32
+	_duplicate_pos: TreeMap[u32, u32]
 
 	def __init__(self):
 		self._do_init()
 
 	def _do_init(self):
-		if self._initialized:
+		if not self._initialized:
+			self._initialized = True
+			self._root_idx = NO_PARENT
+			self._base = 2.0
+			self._max_level = 0
+			self._min_level = 0
+			self._tree_version = 1
 			return
-		self._initialized = True
+		if self._tree_version == 1:
+			return
+		self._rebuild_legacy_tree()
+
+	def _rebuild_legacy_tree(self) -> None:
+		element_ids = [i for i in range(len(self._keys)) if i not in self._free_idx]
+		self._nodes.clear()
+		self._free_nodes.clear()
+		self._elem_to_node.clear()
+		self._level_counts.clear()
+		self._duplicate_pos.clear()
 		self._root_idx = NO_PARENT
-		self._base = 1.3
+		self._base = 2.0
 		self._max_level = 0
 		self._min_level = 0
+		self._tree_version = 1
+		for element_id in element_ids:
+			self._insert_into_tree(element_id)
 
 	def __len__(self) -> int:
+		self._do_init()
 		return len(self._keys) - len(self._free_idx)
 
 	def get_by_id(self, id: Id) -> VecDBElement[T, S, V, None]:
@@ -201,6 +225,7 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 		return res
 
 	def get_by_id_or_none(self, id: Id) -> VecDBElement[T, S, V, None] | None:
+		self._do_init()
 		if id < 0 or id >= len(self._keys):
 			return None
 		if id in self._free_idx:
@@ -230,6 +255,43 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 		"""Mark a node as free"""
 		self._free_nodes[node_idx] = None
 
+	def _radius(self, level: int) -> float:
+		try:
+			return self._base**level
+		except OverflowError:
+			return float('inf')
+
+	def _add_level(self, level: i32) -> None:
+		if level in self._level_counts:
+			self._level_counts[level] += 1
+		else:
+			self._level_counts[level] = 1
+		if len(self._level_counts) == 1 or level < self._min_level:
+			self._min_level = level
+		if level > self._max_level:
+			self._max_level = level
+
+	def _remove_level(self, level: i32) -> None:
+		count = self._level_counts[level]
+		if count > 1:
+			self._level_counts[level] = count - 1
+			return
+		del self._level_counts[level]
+		if len(self._level_counts) == 0:
+			self._min_level = 0
+			self._max_level = 0
+		else:
+			self._min_level = next(iter(self._level_counts))
+			self._max_level = max(self._level_counts)
+
+	def _set_node_level(self, node_idx: u32, level: i32) -> None:
+		node = self._nodes[node_idx]
+		if node.level == level:
+			return
+		self._remove_level(node.level)
+		node.level = level
+		self._add_level(level)
+
 	def insert(self, key: np.ndarray[tuple[S], np.dtype[T]], val: V) -> Id:
 		self._do_init()
 		# Add to storage arrays
@@ -248,179 +310,243 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 		return Id(idx)
 
 	def _level_for_dist(self, dist: float) -> i32:
-		"""Compute the cover tree level for a given distance.
+		"""
+		Compute the cover tree level for a given distance.
 
 		Returns largest L such that base^L < dist (i.e. dist > base^L).
 		This ensures the separating invariant: points at level L are > base^L apart.
 		"""
 		if dist <= 0:
-			return MIN_LEVEL  # coincident points: clamp to deepest level
+			return MIN_LEVEL
 		return int(math.ceil(math.log(dist) / math.log(self._base))) - 1
 
 	def _insert_into_tree(self, new_idx: u32) -> None:
-		"""Insert element into cover tree structure using top-down descent"""
+		"""Insert an element using Algorithm 2 of the cover-tree paper"""
 		if self._root_idx == NO_PARENT:
-			# First element becomes root
-			self._root_idx = self._allocate_node(new_idx, 0)
+			self._root_idx = self._allocate_node(new_idx, MAX_LEVEL)
 			self._nodes[self._root_idx].parent = NO_PARENT
-			self._max_level = 0
-			self._min_level = 0
+			self._add_level(MAX_LEVEL)
 			self._elem_to_node[new_idx] = self._root_idx
 			return
 
-		# If new point is too far from root, make it the new root
 		root_node = self._nodes[self._root_idx]
 		root_dist = float(self._distance(new_idx, root_node.element_id))
-		if root_dist > self._base ** int(root_node.level):
-			needed_level = int(math.ceil(math.log(root_dist) / math.log(self._base)))
-			needed_level = max(needed_level, int(root_node.level) + 1)
-			needed_level = min(needed_level, MAX_LEVEL)
-
-			new_root_idx = self._allocate_node(new_idx, needed_level)
-			self._nodes[new_root_idx].parent = NO_PARENT
-			self._nodes[new_root_idx].children.append(self._root_idx)
-			self._nodes[self._root_idx].parent = new_root_idx
-
-			self._root_idx = new_root_idx
-			self._max_level = needed_level
-			self._elem_to_node[new_idx] = new_root_idx
+		if root_dist == 0:
+			root_node.duplicates.append(new_idx)
+			self._duplicate_pos[new_idx] = len(root_node.duplicates) - 1
+			self._elem_to_node[new_idx] = self._root_idx
 			return
 
-		# Candidate-set descent: track ALL covering nodes, not just one path.
-		# This ensures the insertion level satisfies the separating invariant
-		# against every covering ancestor, not just the immediate parent.
-		candidates: list[tuple[u32, float]] = [(self._root_idx, root_dist)]
-		min_cover_dist = root_dist
+		top_level = self._level_for_dist(root_dist) + 1
+		for i in range(len(root_node.children)):
+			top_level = max(top_level, int(self._nodes[root_node.children[i]].level) + 1)
+		top_level = min(top_level, MAX_LEVEL - 1)
 
-		while True:
-			next_covering: list[tuple[u32, float]] = []
-			for nidx, _ in candidates:
-				node = self._nodes[nidx]
-				for i in range(len(node.children)):
-					child_idx = node.children[i]
-					child_node = self._nodes[child_idx]
-					if int(child_node.level) <= MIN_LEVEL:
-						continue
-					dist = float(self._distance(new_idx, child_node.element_id))
-					if dist <= self._base ** int(child_node.level):
-						next_covering.append((child_idx, dist))
-						if dist < min_cover_dist:
-							min_cover_dist = dist
-
-			if not next_covering:
+		candidates: list[u32] = [self._root_idx]
+		frames: list[tuple[int, list[u32]]] = []
+		level = top_level
+		while level > MIN_LEVEL:
+			frames.append((level, candidates))
+			expanded = self._children_at_level(candidates, level - 1)
+			next_candidates: list[u32] = []
+			min_dist = float('inf')
+			duplicate_idx = NO_PARENT
+			for node_idx in expanded:
+				dist = float(self._distance(new_idx, self._nodes[node_idx].element_id))
+				if dist == 0:
+					duplicate_idx = node_idx
+					break
+				if dist < min_dist:
+					min_dist = dist
+				if dist <= self._radius(level):
+					next_candidates.append(node_idx)
+			if duplicate_idx != NO_PARENT:
+				duplicates = self._nodes[duplicate_idx].duplicates
+				duplicates.append(new_idx)
+				self._duplicate_pos[new_idx] = len(duplicates) - 1
+				self._elem_to_node[new_idx] = duplicate_idx
+				return
+			if min_dist > self._radius(level):
 				break
-			candidates = next_covering
+			candidates = next_candidates
+			level -= 1
 
-		# Insert as child of nearest deepest covering node
-		nearest_nidx = candidates[0][0]
-		nearest_dist = candidates[0][1]
-		for nidx, d in candidates:
-			if d < nearest_dist:
-				nearest_nidx = nidx
-				nearest_dist = d
+		for parent_level, parent_candidates in reversed(frames):
+			nearest_idx = NO_PARENT
+			nearest_dist = float('inf')
+			for node_idx in parent_candidates:
+				dist = float(self._distance(new_idx, self._nodes[node_idx].element_id))
+				if dist <= self._radius(parent_level) and dist < nearest_dist:
+					nearest_idx = node_idx
+					nearest_dist = dist
+			if nearest_idx == NO_PARENT:
+				continue
+			new_level = max(parent_level - 1, MIN_LEVEL)
+			new_node_idx = self._allocate_node(new_idx, new_level)
+			self._nodes[new_node_idx].parent = nearest_idx
+			self._nodes[nearest_idx].children.append(new_node_idx)
+			self._add_level(new_level)
+			self._elem_to_node[new_idx] = new_node_idx
+			return
 
-		new_level = self._level_for_dist(min_cover_dist)
-		new_level = min(new_level, int(self._nodes[nearest_nidx].level) - 1)
-		new_level = max(new_level, MIN_LEVEL)
-		new_node_idx = self._allocate_node(new_idx, new_level)
-		self._nodes[new_node_idx].parent = nearest_nidx
-		self._nodes[nearest_nidx].children.append(new_node_idx)
-		if new_level < self._min_level:
-			self._min_level = new_level
-		self._elem_to_node[new_idx] = new_node_idx
+		raise RuntimeError('cover tree could not find an insertion parent')
+
+	def _children_at_level(self, candidates: list[u32], level: int) -> list[u32]:
+		result: list[u32] = []
+		seen: set[u32] = set()
+		for node_idx in candidates:
+			if node_idx not in seen:
+				seen.add(node_idx)
+				result.append(node_idx)
+			node = self._nodes[node_idx]
+			for i in range(len(node.children)):
+				child_idx = node.children[i]
+				if self._nodes[child_idx].level == level and child_idx not in seen:
+					seen.add(child_idx)
+					result.append(child_idx)
+		return result
 
 	def _remove_from_tree(self, idx: u32) -> None:
-		"""Remove element from cover tree using swap-descent to a leaf.
-
-		Instead of reinserting all descendants, we greedily descend from the
-		deleted node to a leaf, swapping elements upward at each step.  Only
-		the leaf is physically removed.  After the descent we walk back up
-		and reinsert only the subtrees of children that violate the covering
-		invariant due to the element swap.
-		"""
+		"""Remove an element using Algorithm 3 of the cover-tree paper"""
 		if idx in self._elem_to_node:
 			node_idx = self._elem_to_node[idx]
-			del self._elem_to_node[idx]
 		else:
 			# Fallback for legacy data without _elem_to_node populated
 			node_idx = self._find_node_by_id(idx)
 			if node_idx == NO_PARENT:
 				return
 
-		# Phase 1: descend from node_idx to a leaf, swapping elements up
-		path: list[u32] = []  # nodes whose element was swapped (need violation check)
-		current = node_idx
+		node = self._nodes[node_idx]
+		if node.element_id != idx or len(node.duplicates) > 0:
+			self._remove_duplicate(node_idx, idx)
+			return
 
-		while len(self._nodes[current].children) > 0:
-			node = self._nodes[current]
-			# Find the child whose element is nearest to current element
-			nearest_child_idx = node.children[0]
-			nearest_dist = float(
-				self._distance(node.element_id, self._nodes[nearest_child_idx].element_id)
-			)
-			for i in range(1, len(node.children)):
-				child_idx = node.children[i]
-				d = float(self._distance(node.element_id, self._nodes[child_idx].element_id))
-				if d < nearest_dist:
-					nearest_dist = d
-					nearest_child_idx = child_idx
+		orphans = [node.children[i] for i in range(len(node.children))]
+		min_parent_level = int(node.level)
+		if len(orphans) > 0:
+			min_parent_level = min(int(self._nodes[x].level) + 1 for x in orphans)
+		cover_sets, top_level = self._removal_cover_sets(idx, min_parent_level)
 
-			# Swap: current node adopts the nearest child's element
-			replacement_elem = self._nodes[nearest_child_idx].element_id
-			node.element_id = replacement_elem
-			self._elem_to_node[replacement_elem] = current
+		if node.parent != NO_PARENT:
+			self._remove_child(node.parent, node_idx)
+		else:
+			if len(orphans) == 0:
+				self._root_idx = NO_PARENT
+			else:
+				new_root_idx = max(orphans, key=lambda x: int(self._nodes[x].level))
+				orphans.remove(new_root_idx)
+				self._nodes[new_root_idx].parent = NO_PARENT
+				self._set_node_level(new_root_idx, MAX_LEVEL)
+				self._root_idx = new_root_idx
+				for _, candidates in cover_sets:
+					if new_root_idx not in candidates:
+						candidates.append(new_root_idx)
 
-			path.append(current)
-			current = nearest_child_idx
+		for orphan_idx in orphans:
+			self._nodes[orphan_idx].parent = NO_PARENT
+		node.children[:] = []
+		del self._elem_to_node[idx]
+		self._remove_level(node.level)
+		self._free_node(node_idx)
 
-		# `current` is now a leaf — remove it
-		leaf = self._nodes[current]
-		parent_idx = leaf.parent
-		if parent_idx != NO_PARENT:
-			parent = self._nodes[parent_idx]
-			for i in range(len(parent.children)):
-				if parent.children[i] == current:
-					parent.children[i : i + 1] = []
-					break
-		elif current == self._root_idx:
-			self._root_idx = NO_PARENT
-			self._max_level = 0
-			self._min_level = 0
-		self._free_node(current)
+		for orphan_idx in sorted(
+			orphans, key=lambda x: int(self._nodes[x].level), reverse=True
+		):
+			self._adopt_orphan(orphan_idx, node_idx, idx, cover_sets, top_level)
 
-		# Phase 2: walk back up, fixing covering-invariant violations
-		for swap_idx in reversed(path):
-			node = self._nodes[swap_idx]
-			to_reinsert: list[u32] = []
-			i = 0
-			while i < len(node.children):
-				child_idx = node.children[i]
-				child_node = self._nodes[child_idx]
-				d = float(self._distance(node.element_id, child_node.element_id))
-				if d > self._base ** int(node.level):
-					to_reinsert.append(child_idx)
-					node.children[i : i + 1] = []
+	def _remove_duplicate(self, node_idx: u32, idx: u32) -> None:
+		node = self._nodes[node_idx]
+		if node.element_id == idx:
+			replacement = node.duplicates[-1]
+			node.duplicates.pop()
+			del self._duplicate_pos[replacement]
+			node.element_id = replacement
+		else:
+			position = self._duplicate_pos[idx]
+			last_position = len(node.duplicates) - 1
+			last_element = node.duplicates[last_position]
+			if position != last_position:
+				node.duplicates[position] = last_element
+				self._duplicate_pos[last_element] = position
+			node.duplicates.pop()
+			del self._duplicate_pos[idx]
+		del self._elem_to_node[idx]
+
+	def _remove_child(self, parent_idx: u32, child_idx: u32) -> None:
+		children = self._nodes[parent_idx].children
+		for i in range(len(children)):
+			if children[i] == child_idx:
+				children[i : i + 1] = []
+				return
+
+	def _removal_cover_sets(
+		self, element_id: u32, min_level: int
+	) -> tuple[list[tuple[int, list[u32]]], int]:
+		root = self._nodes[self._root_idx]
+		top_level = 0
+		for i in range(len(root.children)):
+			top_level = max(top_level, int(self._nodes[root.children[i]].level) + 1)
+		top_level = min(top_level, MAX_LEVEL - 1)
+		sets: list[tuple[int, list[u32]]] = []
+		candidates: list[u32] = [self._root_idx]
+		for level in range(top_level, min_level - 1, -1):
+			sets.append((level, candidates))
+			if level == min_level:
+				break
+			expanded = self._children_at_level(candidates, level - 1)
+			candidates = [
+				x
+				for x in expanded
+				if float(self._distance(element_id, self._nodes[x].element_id))
+				<= self._radius(level)
+			]
+		return sets, top_level
+
+	def _adopt_orphan(
+		self,
+		orphan_idx: u32,
+		removed_node_idx: u32,
+		removed_id: u32,
+		cover_sets: list[tuple[int, list[u32]]],
+		top_level: int,
+	) -> None:
+		parent_level = int(self._nodes[orphan_idx].level) + 1
+		while True:
+			if parent_level > top_level:
+				candidates = [self._root_idx]
+			else:
+				candidates = cover_sets[top_level - parent_level][1]
+			nearest_idx = NO_PARENT
+			nearest_dist = float('inf')
+			for candidate_idx in candidates:
+				if candidate_idx == removed_node_idx:
+					continue
+				dist = float(
+					self._distance(
+						self._nodes[orphan_idx].element_id,
+						self._nodes[candidate_idx].element_id,
+					)
+				)
+				if dist <= self._radius(parent_level) and dist < nearest_dist:
+					nearest_idx = candidate_idx
+					nearest_dist = dist
+			if nearest_idx != NO_PARENT:
+				self._nodes[orphan_idx].parent = nearest_idx
+				self._nodes[nearest_idx].children.append(orphan_idx)
+				return
+
+			self._set_node_level(orphan_idx, parent_level)
+			for level, level_candidates in cover_sets:
+				if level > parent_level:
+					continue
+				if float(
+					self._distance(removed_id, self._nodes[orphan_idx].element_id)
+				) <= self._radius(level + 1):
+					if orphan_idx not in level_candidates:
+						level_candidates.append(orphan_idx)
 				else:
-					i += 1
-			for v_idx in to_reinsert:
-				self._reinsert_subtree(v_idx)
-
-	def _reinsert_subtree(self, node_idx: u32) -> None:
-		"""Collect all elements from a detached subtree, free its nodes,
-		and reinsert the elements into the tree."""
-		elements: list[u32] = []
-		stack: list[u32] = [node_idx]
-		while len(stack) > 0:
-			nidx = stack.pop()
-			n = self._nodes[nidx]
-			elements.append(n.element_id)
-			for i in range(len(n.children)):
-				stack.append(n.children[i])
-			if n.element_id in self._elem_to_node:
-				del self._elem_to_node[n.element_id]
-			self._free_node(nidx)
-		for eid in elements:
-			self._insert_into_tree(eid)
+					break
+			parent_level += 1
 
 	def _find_node_by_id(self, element_id: u32) -> u32:
 		"""Find node index with given element ID"""
@@ -441,7 +567,8 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 		return NO_PARENT
 
 	def _max_descendant_dist(self, level: int) -> float:
-		"""Upper bound on distance from a node at `level` to any descendant.
+		"""
+		Upper bound on distance from a node at `level` to any descendant.
 
 		Each ancestor at level l covers its child within base^l. Summing
 		the geometric series from level down gives base^(level+1)/(base-1).
@@ -450,7 +577,7 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 
 	def knn(
 		self, v: np.ndarray[tuple[S], np.dtype[T]], k: int
-	) -> typing.Iterator[VecDBElement[T, S, V, T]]:
+	) -> typing.Iterator[VecDBElement[T, S, V, float]]:
 		"""Find k nearest neighbors using cover tree with pruning"""
 		self._do_init()
 
@@ -478,12 +605,15 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 				continue
 			node = self._nodes[node_idx]
 
-			# Add this node's element to best-k
-			if node.element_id not in self._free_idx and np.isfinite(node_dist):
-				if len(best) < k:
-					heapq.heappush(best, (-node_dist, node.element_id))
-				elif node_dist < -best[0][0]:
-					heapq.heapreplace(best, (-node_dist, node.element_id))
+			# Add every database element represented by this metric point
+			element_ids = [node.element_id]
+			element_ids.extend(node.duplicates[i] for i in range(len(node.duplicates)))
+			if np.isfinite(node_dist):
+				for element_id in element_ids:
+					if len(best) < k:
+						heapq.heappush(best, (-node_dist, element_id))
+					elif node_dist < -best[0][0]:
+						heapq.heapreplace(best, (-node_dist, element_id))
 
 			# Collect children with distances, then sort farthest-first
 			# so DFS pops the closest child first (better pruning)

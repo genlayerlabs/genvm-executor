@@ -60,6 +60,7 @@ __all__ = (
 	'calldata',
 	'storage',
 	'wasi',
+	'gvm32',
 	# Decorators (accessible via gl.public, gl.private)
 	'public',
 	'private',
@@ -149,6 +150,7 @@ if typing.TYPE_CHECKING or _gen_docs:
 		contract,
 		eq_principle,
 		evm,
+		gvm32,
 		message,
 		nondet,
 		storage,
@@ -168,6 +170,7 @@ else:
 		'calldata': 'genlayer.calldata',
 		'storage': 'genlayer.storage',
 		'chain': 'genlayer.chain',
+		'gvm32': 'genlayer.gvm32',
 	}
 
 	def __getattr__(name: str):

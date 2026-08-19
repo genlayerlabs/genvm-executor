@@ -1,6 +1,127 @@
 Migration Guide
 ===============
 
+This page covers 2 migrations:
+
+* :ref:`py-sdk-v03-rc` — a contract that already targets an earlier v0.3 release candidate
+* :ref:`py-sdk-v02-to-v03` — a contract written for v0.2
+
+The first is a subset of the second: a contract coming from v0.2 gets all of it as part of the move
+
+.. _py-sdk-v03-rc:
+
+Within v0.3: Release-Candidate Changes
+--------------------------------------
+
+.. warning::
+    v0.3 is not released yet, and these changes are breaking *within* v0.3: a contract that ran on an earlier release candidate needs them. They are also folded into the v0.2 sections below
+
+Pre-finalization State Is ``decided``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The state before finalization is named *decided* everywhere: the ``on`` argument of write calls and deploys takes ``'decided'`` instead of ``'accepted'``, and the storage states are renamed:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - before
+     - now
+   * - ``on='accepted'``
+     - ``on='decided'``
+   * - ``StorageType.LATEST_NON_FINAL``
+     - ``StorageType.LATEST_DECIDED``
+   * - ``StorageType.LATEST_FINAL``
+     - ``StorageType.LATEST_FINALIZED``
+
+Sandboxes and Runners
+~~~~~~~~~~~~~~~~~~~~~~
+
+``gl.vm.spawn_sandbox`` lost both the ``runner`` and the ``allow_register_runners`` parameters:
+
+.. code-block:: python
+
+    # before
+    gl.vm.spawn_sandbox(fn, runner=rid, allow_register_runners=True)
+
+    # now
+    gl.vm.spawn_runner(rid, calldata.encode(payload))
+
+* to run a runner other than this contract's own one, use ``gl.vm.spawn_runner(runner, data)``; it takes the entry payload as bytes rather than a pickled callable, so the child need not be Python
+* instead of a permission flag, the set of visible ``custom:<hash>`` runners is passed explicitly as ``custom_runners``: ``None`` (default) grants this VM's whole set, a list grants exactly that subset of it. It is accepted by ``spawn_runner``, ``spawn_sandbox``, ``run_nondet`` and ``run_nondet_default``
+* ``changes_on_error`` was added to the sandbox spawners; ``'inherit'`` is the only value for now
+
+Runner ids are typed as ``gl.vm.RunnerID``, and ``gl.vm.RunnerIDOps.new_chain(addr, state, slot_id)`` builds a ``chain:`` one. ``gl.vm.register_runner`` returns a ``RunnerID``, no longer requires a dedicated permission, and accepts a zip, a raw wasm module or commented text — a ustar archive is no longer a valid input.
+
+Catching VM Errors
+~~~~~~~~~~~~~~~~~~~
+
+A ``catch_vm_error`` flag makes the callee's VM error a value instead of a re-raise; a fatal error is never caught. It is accepted by ``Proxy.view``, ``gl.vm.run_nondet`` and ``gl.vm.run_nondet_default``:
+
+.. code-block:: python
+
+    res = gl.contract.get_at(addr).view(catch_vm_error=True).balance_of(owner)
+
+Calldata
+~~~~~~~~
+
+* ``calldata.Raw(data)`` splices an already encoded blob into the output verbatim; nothing validates it
+* ``calldata.DataclassMixin`` encodes a dataclass as a map of field name to value
+* a ``memoryview`` is now encoded as ``bytes``, like ``bytes``/``bytearray``. Previously its contents were spliced in as raw calldata — use ``calldata.Raw`` if that was the intent
+* ``calldata.to_str`` prints ``raw#<hex>`` for ``Raw`` and ``b#<hex>`` for any buffer
+* ``Decoded`` now also lists ``Address`` and ``bool``, which decoding could always produce
+
+VM Error Codes
+~~~~~~~~~~~~~~~
+
+``gl.vm.ABI`` error codes were restructured, and codes that carry a detail suffix are now nested:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - before
+     - now
+   * - ``absent_leader_nondet_output``
+     - ``leader_fault nondet_output absent``
+   * - ``host_forbidden``
+     - ``forbidden``
+   * - ``invalid_contract absent_runner_comment``
+     - ``invalid_contract runner absent``
+   * - ``invalid_contract malformed_runner``
+     - ``invalid_contract runner malformed``
+
+``malformed_entry`` is new, ``out_of receipt message``, ``out_of message_fee total``, ``out_of message_fee node`` and ``fee no_matching_node`` gained ``internal``/``external`` variants, and ``ResultCode.INTERNAL_ERROR`` is gone. The ``memory_limiter_consts`` and ``top_limits`` tables were removed from ``public_abi``.
+
+Storage
+~~~~~~~
+
+* ``DynArray`` slice assignment, ``VLA.extend`` and ``VLA.assign`` accept any iterable, not only a sequence
+* generic parameters are resolved through base classes, so a subclass of a generic storage class no longer fails to build
+* a recursive storage type is reported as an error instead of building an incomplete layout
+* an ``Array`` or ``ndarray`` dimension must be strictly positive, and the total size must fit the 32-bit storage address space
+
+Smaller Fixes
+~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - before
+     - now
+   * - ``gl.evm.Account.emit_value(value, data)``
+     - ``gl.evm.Account.emit_call(value, data)``
+   * - ``gl.nondet.exec_prompt(..., image=...)``
+     - ``gl.nondet.exec_prompt(..., images=...)``
+
+``value`` of ``gl.contract.deploy`` defaults to ``0``, a nested ``Annotated`` is unwrapped correctly during schema generation, and malformed ``args``/``kwargs`` in the entry calldata raise a ``TypeError`` instead of failing later
+
+.. _py-sdk-v02-to-v03:
+
+v0.2.x to v0.3.0
+----------------
+
 v0.3.0 introduces a major restructuring of the standard library. The ``genlayer.gl`` and ``genlayer.py`` intermediate packages are removed. All public API is now accessible directly under the ``genlayer`` namespace.
 
 Import Pattern
@@ -111,7 +232,7 @@ Contract proxies, ``Contract`` itself, and the new ``gl.chain.Account`` all impl
 Value Transfers and ``on=`` Parameter
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Write-call and deploy APIs now take an ``on`` keyword controlling when the message is applied, with values ``'accepted'`` or ``'finalized'`` (default ``'finalized'``):
+Write-call and deploy APIs now take an ``on`` keyword controlling when the message is applied, with values ``'decided'`` or ``'finalized'`` (default ``'finalized'``):
 
 .. code-block:: python
 
@@ -234,7 +355,7 @@ Non-deterministic Execution (``gl.vm``)
 
 The high-level equivalence principles (``gl.eq_principle.*``) are unaffected — they were updated internally.
 
-``gl.vm.spawn_sandbox`` replaced the single ``allow_write_ops`` flag with three granular permissions, each effective only if the current VM holds it:
+``gl.vm.spawn_sandbox`` replaced the single ``allow_write_ops`` flag with granular permissions, each effective only if the current VM holds it:
 
 .. code-block:: python
 
@@ -246,10 +367,18 @@ The high-level equivalence principles (``gl.eq_principle.*``) are unaffected —
         fn,
         allow_write_storage=True,
         allow_send_messages=True,
-        allow_register_runners=True,
     )
 
-Two runtime helpers were added: ``gl.vm.register_runner(code)`` registers a runner archive and returns its ``custom:<hash>`` id, and ``gl.vm.map_file(runner, path_in_runner, path_in_vfs)`` maps a file from a runner into the VM filesystem.
+``gl.vm.spawn_sandbox`` always runs this contract's own runner. To run a different one -- which need not be Python -- use ``gl.vm.spawn_runner(runner, data)``, which takes the entry payload as bytes instead of a pickled callable; ``spawn_sandbox`` is a wrapper over it.
+
+Three runtime helpers were added: ``gl.vm.register_runner(code)`` registers a runner archive and returns its ``custom:<hash>`` id, ``gl.vm.map_file(runner, path_in_runner, path_in_vfs)`` maps a file from a runner into the VM filesystem, and ``gl.vm.spawn_runner`` runs one in a sandbox.
+
+Which runners a child VM sees is controlled by ``custom_runners``, whether it may keep its changes by ``changes_on_error``, and whether a VM error of a callee becomes a value by ``catch_vm_error``; see :ref:`py-sdk-v03-rc`.
+
+Calldata
+~~~~~~~~
+
+``genlayer.py.calldata`` is now ``genlayer.calldata``, and it gained ``calldata.Raw`` for splicing an already encoded blob and ``calldata.DataclassMixin`` for encoding a dataclass as a map; see :ref:`py-sdk-v03-rc`.
 
 Storage
 ~~~~~~~
@@ -343,3 +472,5 @@ Summary of Renames
      - ``gl.storage.TreeMap``
    * - ``UserError(msg: str).message``
      - ``UserError(data: Encodable).data``
+
+Renames made between v0.3 release candidates are listed separately in :ref:`py-sdk-v03-rc`

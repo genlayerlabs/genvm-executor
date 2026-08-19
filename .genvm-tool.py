@@ -1,4 +1,5 @@
-"""Executor-root genvm-tool project config.
+"""
+Executor-root genvm-tool project config.
 
 Loaded by genvm-tool (``common.load_project``) for this executor submodule to
 provide its build ``configure``/``integration`` config. The umbrella test suite
@@ -13,7 +14,8 @@ if typing.TYPE_CHECKING:
 
 
 def integration():
-	"""Per-executor integration test configuration.
+	"""
+	Per-executor integration test configuration.
 
 	Returned dict is merged with the harness defaults; keys:
 		``save-hashes`` — track committed ``.hash`` goldens for this executor
@@ -31,7 +33,8 @@ def integration():
 
 
 def configure(line: 'genvm_tool_plugins.ninja.LineContext'):
-	"""Per-line build configuration for `genvm-tool configure`.
+	"""
+	Per-line build configuration for `genvm-tool configure`.
 
 	``line`` is a ``genvm_tool_plugins.ninja.LineContext`` the configure command
 	builds for this executor. This is a live line: its runner ``latest``/``all``

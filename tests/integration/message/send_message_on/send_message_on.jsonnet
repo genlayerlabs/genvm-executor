@@ -12,7 +12,7 @@ local util = import 'templates/util.jsonnet';
 		"calldata": |||
 			{
 				"": "main",
-				"args": ["accepted"],
+				"args": ["decided"],
 			}
 		|||
 	},

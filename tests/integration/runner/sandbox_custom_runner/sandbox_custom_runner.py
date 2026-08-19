@@ -1,6 +1,7 @@
 # { "Depends": "py-genlayer:test" }
 import json
 
+import cloudpickle
 import genlayer as gl
 from genlayer.vm import register_runner
 
@@ -28,5 +29,5 @@ class Contract(gl.contract.Contract):
 			"exec(open('/py/libs/_genlayer_bootloader.py').read())\n"
 		)
 		rid = register_runner(code.encode('utf-8'))
-		res = gl.vm.spawn_sandbox(lambda: 42, runner=rid)
+		res = gl.vm.spawn_runner(rid, cloudpickle.dumps(lambda: 42))
 		print('sandbox ->', res)

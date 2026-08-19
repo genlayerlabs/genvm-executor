@@ -1,9 +1,9 @@
 # { "Depends": "py-genlayer:test" }
 import json
 
+import cloudpickle
 import genlayer as gl
 from genlayer.vm import register_runner
-
 
 DEPTH = 64
 
@@ -50,5 +50,5 @@ class Contract(gl.contract.Contract):
 			)
 		)
 
-		res = gl.vm.spawn_sandbox(lambda: DEPTH, runner=top)
+		res = gl.vm.spawn_runner(top, cloudpickle.dumps(lambda: DEPTH))
 		print('sandbox ->', res)

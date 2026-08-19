@@ -40,7 +40,6 @@ path = "fuzz/gvm-gl-call-roundtrip.rs"
 required-features = ["fuzzing"]
 
 [features]
-arbitrary = ["fuzzing"]
 default = ["wasi", "storage"]
 dont_define_wasi_storage = []
 fuzzing = ["dep:arbitrary", "genlayer_calldata/fuzzing"]

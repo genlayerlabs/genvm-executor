@@ -91,7 +91,7 @@ def exec_prompt(
 	prompt: str,
 	*,
 	response_format: typing.Literal['json'],
-	image: bytes | Image | None = None,
+	images: bytes | Image | None = None,
 ) -> dict[str, typing.Any]: ...
 
 

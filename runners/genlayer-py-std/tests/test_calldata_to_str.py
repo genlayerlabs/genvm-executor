@@ -1,5 +1,5 @@
 import pytest
-from genlayer.calldata import CalldataEncodable, DecodingError, to_str
+from genlayer.calldata import CalldataEncodable, DecodingError, Raw, to_str
 from genlayer.types import Address
 
 
@@ -41,6 +41,10 @@ def test_bytearray():
 
 def test_memoryview():
 	assert to_str(memoryview(b'\xff')) == 'b#ff'
+
+
+def test_raw():
+	assert to_str(Raw(b'\x01')) == 'raw#01'
 
 
 def test_address():

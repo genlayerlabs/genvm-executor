@@ -173,8 +173,46 @@ mod implementation {
         let mut simd_uop_type: Option<u32> = None;
         let mut simd_ops: Option<SimdOps> = None;
 
-        'outer: while let Some(section) = next_section {
-            match section? {
+        let has_import_section = wasmparser::Parser::new(0)
+            .parse_all(data)
+            .any(|s| matches!(s, Ok(wasmparser::Payload::ImportSection(_))));
+        let mut imports_done = false;
+
+        // a module without an import section still needs one for the softfloat functions
+        fn follows_import_section(payload: &wasmparser::Payload) -> bool {
+            use wasmparser::Payload::*;
+            matches!(
+                payload,
+                FunctionSection(_)
+                    | TableSection(_)
+                    | MemorySection(_)
+                    | TagSection(_)
+                    | GlobalSection(_)
+                    | ExportSection(_)
+                    | StartSection { .. }
+                    | ElementSection(_)
+                    | DataCountSection { .. }
+                    | CodeSectionStart { .. }
+                    | DataSection(_)
+            )
+        }
+
+        'outer: while let Some(section) = next_section.take() {
+            let mut section = section?;
+            let mut synthetic_imports = false;
+            if !imports_done
+                && !has_import_section
+                && f32_types.is_some()
+                && follows_import_section(&section)
+            {
+                next_section = Some(Ok(section));
+                synthetic_imports = true;
+                section = wasmparser::Payload::ImportSection(wasmparser::ImportSectionReader::new(
+                    wasmparser::BinaryReader::new(&[0], 0, wasmparser::WasmFeatures::all()),
+                )?);
+            }
+
+            match section {
                 wasmparser::Payload::Version {
                     encoding: wasmparser::Encoding::Module,
                     ..
@@ -245,13 +283,24 @@ mod implementation {
                         &mut last_section,
                         Some(SectionId::Import),
                     )?;
+                    imports_done = true;
+
+                    // only function imports live in the function index space
+                    let mut func_import_count = 0;
+                    for import in section.clone() {
+                        if matches!(import?.ty, wasmparser::TypeRef::Func(_)) {
+                            func_import_count += 1;
+                        }
+                    }
+
                     let mut imports = ImportSection::new();
                     reencoder.parse_import_section(&mut imports, section)?;
 
-                    reencoder.start = imports.len();
+                    reencoder.start = func_import_count;
 
                     struct Adder {
                         imports: ImportSection,
+                        next_func: u32,
                         cnt: u32,
                     }
                     impl Adder {
@@ -260,13 +309,18 @@ mod implementation {
                         }
                         fn add_from(&mut self, module: &str, name: &str, fn_type: u32) -> u32 {
                             self.cnt += 1;
-                            let ret = self.imports.len();
+                            let ret = self.next_func;
+                            self.next_func += 1;
                             self.imports
                                 .import(module, name, EntityType::Function(fn_type));
                             ret
                         }
                     }
-                    let mut adder = Adder { cnt: 0, imports };
+                    let mut adder = Adder {
+                        cnt: 0,
+                        next_func: func_import_count,
+                        imports,
+                    };
                     f32_ops = Some(FOps {
                         add: adder.add("f32_add", f32_types.unwrap().bopf),
                         mul: adder.add("f32_mul", f32_types.unwrap().bopf),
@@ -1014,7 +1068,9 @@ mod implementation {
                 }
             }
 
-            next_section = sections.next();
+            if !synthetic_imports {
+                next_section = sections.next();
+            }
         }
 
         Ok(())

@@ -12,7 +12,6 @@ fn context() -> Context {
                 send_messages: false,
                 call_others: false,
                 spawn_nondet: false,
-                register_runners: false,
                 can_use_balance_for_message_fees: false,
             },
             execution: base::Execution {

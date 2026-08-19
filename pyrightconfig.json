@@ -1,0 +1,18 @@
+{
+  "include": [
+    "runners/genlayer-py-std/src",
+    "runners/genlayer-py-std/src-emb/",
+    "support/scripts",
+    "tests/integration"
+  ],
+  "extraPaths": [
+    "runners/genlayer-py-std/src",
+    "runners/genlayer-py-std/src-emb",
+    "runners/py-libs/pure-py"
+  ],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "standard",
+  "ignore": [
+    "runners/genlayer-py-std/src-emb/onnx"
+  ]
+}

@@ -10,7 +10,7 @@ use crate::rt;
 #[serde(rename_all = "kebab-case")]
 pub enum WasmMode {
     Det,
-    #[serde(rename = "!det", alias = "nondet")]
+    #[serde(rename = "!det")]
     Nondet,
 }
 
@@ -320,24 +320,5 @@ impl InitAction {
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_legacy_nondet_mode() {
-        let action = parse_runner_json(r#"{"When":{"cond":"nondet","action":{"SetArgs":[]}}}"#)
-            .expect("legacy nondet mode should parse");
-
-        assert!(matches!(
-            action,
-            InitAction::When {
-                cond: WasmMode::Nondet,
-                ..
-            }
-        ));
     }
 }
