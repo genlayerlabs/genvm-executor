@@ -181,10 +181,10 @@ fn convert_nested_storage_type(
 ) -> public_abi::StorageType {
     match state_mode {
         genvm_modules_interfaces::NestedStorageType::Default => public_abi::StorageType::Default,
-        genvm_modules_interfaces::NestedStorageType::LatestFinal => {
+        genvm_modules_interfaces::NestedStorageType::LatestFinalized => {
             public_abi::StorageType::LatestFinal
         }
-        genvm_modules_interfaces::NestedStorageType::LatestNonFinal => {
+        genvm_modules_interfaces::NestedStorageType::LatestDecided => {
             public_abi::StorageType::LatestNonFinal
         }
     }
@@ -214,7 +214,7 @@ fn convert_nested_permissions(
 fn convert_on(on: genvm_modules_interfaces::On) -> genlayer_sdk::abi::gl_call::On {
     match on {
         genvm_modules_interfaces::On::Finalized => genlayer_sdk::abi::gl_call::On::Finalized,
-        genvm_modules_interfaces::On::Accepted => genlayer_sdk::abi::gl_call::On::Accepted,
+        genvm_modules_interfaces::On::Decided => genlayer_sdk::abi::gl_call::On::Accepted,
     }
 }
 

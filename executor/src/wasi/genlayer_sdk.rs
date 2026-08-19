@@ -960,10 +960,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                     let state_mode = match vm_data.conf.state_mode {
                         public_abi::StorageType::Default => NestedStorageType::Default,
-                        public_abi::StorageType::LatestFinal => NestedStorageType::LatestFinal,
-                        public_abi::StorageType::LatestNonFinal => {
-                            NestedStorageType::LatestNonFinal
-                        }
+                        public_abi::StorageType::LatestFinal => NestedStorageType::LatestFinalized,
+                        public_abi::StorageType::LatestNonFinal => NestedStorageType::LatestDecided,
                     };
                     let message = &vm_data.message_data.message;
                     let envelope = NestedRunEnvelope {

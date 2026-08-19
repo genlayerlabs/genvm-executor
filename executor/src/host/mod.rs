@@ -379,7 +379,7 @@ fn convert_buckets_consumed(
 fn convert_on(on: genlayer_sdk::abi::gl_call::On) -> genvm_modules_interfaces::On {
     match on {
         genlayer_sdk::abi::gl_call::On::Finalized => genvm_modules_interfaces::On::Finalized,
-        genlayer_sdk::abi::gl_call::On::Accepted => genvm_modules_interfaces::On::Accepted,
+        genlayer_sdk::abi::gl_call::On::Accepted => genvm_modules_interfaces::On::Decided,
     }
 }
 
@@ -937,7 +937,7 @@ mod tests {
             },
             stack: Vec::new(),
             permissions: genvm_modules_interfaces::NestedPermissions::DETERMINISTIC,
-            state_mode: genvm_modules_interfaces::NestedStorageType::LatestNonFinal,
+            state_mode: genvm_modules_interfaces::NestedStorageType::LatestDecided,
             topmost_runner_id: genvm_modules_interfaces::NestedRunnerId("contract".to_owned()),
             remaining_recursion: 4,
             remaining_det_fuel: primitive_types::U256::from(10),
