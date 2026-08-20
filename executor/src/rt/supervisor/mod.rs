@@ -264,13 +264,13 @@ pub async fn submit_nondet_vm_task(zelf: &Arc<Supervisor>, task: NonDetVMTask) {
 }
 
 impl Supervisor {
-    pub async fn push_nondet_result(&self, call_no: u32, result: bytes::Bytes) {
+    pub async fn push_nondet_result(&self, call_no: u32, result: rt::vm::ContractResultBytes) {
         let mut vec = self.nondet_results.lock().await;
         let idx = u32_into_usize(call_no);
         while vec.len() <= idx {
             vec.push(bytes::Bytes::new());
         }
-        vec[idx] = result;
+        vec[idx] = result.into_bytes();
     }
 
     pub async fn take_nondet_results(&self) -> Vec<bytes::Bytes> {

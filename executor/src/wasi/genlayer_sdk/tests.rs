@@ -1,7 +1,8 @@
 use super::message::{validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE_BITS};
 use super::run::{
-    call_contract_route, derive_call_contract_permissions, nested_run_ok, parse_leader_result,
-    strip_vm_error_detail, CallContractRoute,
+    call_contract_route, derive_call_contract_permissions, leader_outcome_for_publication,
+    leader_outcome_for_validation, nested_run_ok, parse_leader_result, strip_vm_error_detail,
+    CallContractRoute,
 };
 use super::*;
 use primitive_types::U256;
@@ -232,6 +233,26 @@ fn leader_internal_error_code_is_malformed() {
 }
 
 #[test]
+fn fatal_leader_outcome_cannot_be_published() {
+    let result = rt::vm::RunOk::FatalVMError(public_abi::VmError::timeout(), None);
+
+    assert!(leader_outcome_for_publication(result).is_err());
+}
+
+#[test]
+fn malformed_leader_outcome_is_visible_as_vm_error_but_remains_fatal() {
+    let (visible, returned) =
+        leader_outcome_for_validation(&[crate::host::host_fns::ResultCode::FatalVmError as u8]);
+
+    assert!(matches!(&visible, rt::vm::ContractOutcome::VMError(..)));
+    assert!(matches!(returned, rt::vm::RunOk::FatalVMError(..)));
+    assert_eq!(
+        visible.encode().as_slice()[0],
+        public_abi::ResultCode::VmError as u8
+    );
+}
+
+#[test]
 fn leader_return_with_invalid_calldata_is_malformed() {
     // The hole this closes: the executor used to pass the `Return` payload
     // through undecoded, so bytes like these reached the execution hash before
@@ -269,7 +290,7 @@ fn leader_valid_return_is_preserved_bytewise() {
     // Validation must not re-encode: the accepted result has to round-trip to the
     // exact bytes the leader proposed, or validators would hash a different
     // value than the one they agreed to.
-    assert_eq!(got.as_bytes(), data);
+    assert_eq!(got.encode().into_bytes().as_ref(), data);
 }
 
 #[test]
@@ -282,7 +303,14 @@ fn leader_user_error_with_invalid_calldata_is_malformed() {
 fn leader_valid_user_error_passes() {
     let payload = calldata::encode(&calldata::Value::Str("boom".to_owned()));
     let data = leader_bytes(public_abi::ResultCode::UserError, &payload);
-    assert_eq!(parse_leader_result(&data).unwrap().as_bytes(), data);
+    assert_eq!(
+        parse_leader_result(&data)
+            .unwrap()
+            .encode()
+            .into_bytes()
+            .as_ref(),
+        data
+    );
 }
 
 #[test]
@@ -334,7 +362,7 @@ fn leader_vm_error_on_trie_code_passes() {
         let data = leader_bytes(public_abi::ResultCode::VmError, code.as_bytes());
         let got = parse_leader_result(&data)
             .unwrap_or_else(|e| panic!("code {code:?} should be accepted, got {e:?}"));
-        assert_eq!(got.as_bytes(), data);
+        assert_eq!(got.encode().into_bytes().as_ref(), data);
     }
 }
 
@@ -594,6 +622,6 @@ fn every_stripped_leader_error_round_trips_through_acceptance() {
 
         let accepted = parse_leader_result(&data)
             .unwrap_or_else(|e| panic!("honest leader code {code:?} rejected as {e:?}"));
-        assert_eq!(accepted.as_bytes(), data);
+        assert_eq!(accepted.encode().into_bytes().as_ref(), data);
     }
 }

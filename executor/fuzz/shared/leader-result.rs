@@ -1,4 +1,6 @@
-use genvm::{public_abi::VmError, rt::vm::RunOk, wasi::genlayer_sdk::parse_leader_result};
+use genvm::{
+    public_abi::VmError, rt::vm::ContractOutcome, wasi::genlayer_sdk::parse_leader_result,
+};
 
 fn is_derived_namespace(code: &str) -> bool {
     is_code_or_space_extension(code, "leader_fault nondet_output")
@@ -36,13 +38,13 @@ pub fn assert_parse_properties(data: &[u8]) {
     match parse_leader_result(data) {
         Ok(res) => {
             assert_eq!(
-                res.as_bytes(),
+                res.encode().into_bytes().as_ref(),
                 data,
                 "accepted leader result must serialize byte-identically"
             );
 
             match res {
-                RunOk::VMError(e, _) => {
+                ContractOutcome::VMError(e, _) => {
                     assert!(
                         VmError::is_valid_(&e.0),
                         "accepted vm_error must be a valid public ABI code: {:?}",
@@ -59,10 +61,7 @@ pub fn assert_parse_properties(data: &[u8]) {
                         e.0
                     );
                 }
-                RunOk::FatalVMError(..) => {
-                    panic!("leader result parsing must reject fatal VM errors")
-                }
-                RunOk::Return(_) | RunOk::UserError(_) => {
+                ContractOutcome::Return(_) | ContractOutcome::UserError(_) => {
                     assert!(
                         data.len() > 1 && genvm::calldata::decode(&data[1..]).is_ok(),
                         "validate-only and materializing calldata decode must agree"

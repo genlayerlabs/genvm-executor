@@ -1079,8 +1079,7 @@ mod tests {
         assert_ne!(one, execution_hash_with(Vec::new()));
     }
 
-    // Fatality reaches the host as its own code; only the payload is shared
-    // with an ordinary VM error.
+    // FullResult preserves nested fatality until the publication boundary
     #[test]
     fn fatal_run_ok_keeps_its_code_and_payload() {
         let code = crate::public_abi::VmError::timeout();
@@ -1089,5 +1088,30 @@ mod tests {
 
         assert_eq!(result.kind, host_fns::ResultCode::FatalVmError);
         assert_eq!(result.data, calldata::Value::Str(code.into()).into());
+    }
+
+    #[test]
+    fn top_level_fatal_is_framed_and_reported_as_vm_error() {
+        let mut rt_result = rt::vm::FullResult::empty_from(rt::vm::RunOk::FatalVMError(
+            crate::public_abi::VmError::timeout(),
+            None,
+        ));
+        rt_result.coalesce_fatal_for_top_level();
+        let result = FullResult::new(
+            rt_result,
+            Vec::new(),
+            None,
+            Vec::new(),
+            rt::fees::BucketsConsumed::default(),
+            primitive_types::U256::zero(),
+            Vec::new(),
+        );
+
+        let encoded = encode_result(&Ok(result)).unwrap();
+        let reported: genvm_modules_interfaces::ReportedResult =
+            calldata::decode_obj(&encoded[1..]).unwrap();
+
+        assert_eq!(encoded[0], host_fns::ResultCode::VmError as u8);
+        assert_eq!(reported.kind, genvm_modules_interfaces::ResultCode::VmError);
     }
 }

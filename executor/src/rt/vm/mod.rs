@@ -14,6 +14,93 @@ pub enum RunOk {
     FatalVMError(abi::consts::VmError, Option<anyhow::Error>),
 }
 
+#[derive(Debug)]
+pub enum ContractOutcome {
+    Return(calldata::unparsed::Maybe<calldata::Value>),
+    UserError(calldata::unparsed::Maybe<calldata::Value>),
+    VMError(abi::consts::VmError, Option<anyhow::Error>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractResultBytes(bytes::Bytes);
+
+impl ContractResultBytes {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn into_bytes(self) -> bytes::Bytes {
+        self.0
+    }
+}
+
+impl ContractOutcome {
+    pub fn duplicate(&self) -> Self {
+        match self {
+            Self::Return(buf) => Self::Return(buf.clone()),
+            Self::UserError(buf) => Self::UserError(buf.clone()),
+            Self::VMError(e, _) => Self::VMError(e.clone(), None),
+        }
+    }
+
+    pub fn encode(&self) -> ContractResultBytes {
+        use crate::public_abi::ResultCode;
+
+        let bytes = match self {
+            Self::Return(buf) => {
+                let encoded = calldata::encode_obj(buf);
+                let mut res = Vec::with_capacity(1 + encoded.len());
+                res.push(ResultCode::Return as u8);
+                res.extend_from_slice(&encoded);
+                res
+            }
+            Self::UserError(val) => {
+                let mut res = vec![ResultCode::UserError as u8];
+                match val {
+                    calldata::unparsed::Maybe::Materialized(value) => {
+                        res.extend_from_slice(&calldata::encode(value));
+                    }
+                    calldata::unparsed::Maybe::Checked(raw) => {
+                        res.extend_from_slice(&raw.0);
+                    }
+                }
+                res
+            }
+            Self::VMError(buf, _) => {
+                let mut res = Vec::with_capacity(1 + buf.0.len());
+                res.push(ResultCode::VmError as u8);
+                res.extend_from_slice(buf.0.as_bytes());
+                res
+            }
+        };
+
+        ContractResultBytes(bytes.into())
+    }
+}
+
+impl From<ContractOutcome> for RunOk {
+    fn from(value: ContractOutcome) -> Self {
+        match value {
+            ContractOutcome::Return(buf) => Self::Return(buf),
+            ContractOutcome::UserError(buf) => Self::UserError(buf),
+            ContractOutcome::VMError(e, cause) => Self::VMError(e, cause),
+        }
+    }
+}
+
+impl TryFrom<RunOk> for ContractOutcome {
+    type Error = rt::errors::Error;
+
+    fn try_from(value: RunOk) -> Result<Self, Self::Error> {
+        match value {
+            RunOk::Return(buf) => Ok(Self::Return(buf)),
+            RunOk::UserError(buf) => Ok(Self::UserError(buf)),
+            RunOk::VMError(e, cause) => Ok(Self::VMError(e, cause)),
+            RunOk::FatalVMError(e, cause) => Err(rt::errors::Error::fatal_vm_cause(e, cause)),
+        }
+    }
+}
+
 impl RunOk {
     /// Like clone, but drops the `cause` of a VM error if present
     pub fn duplicate(&self) -> Self {
@@ -25,15 +112,8 @@ impl RunOk {
         }
     }
 
-    pub fn into_nonfatal(self) -> rt::errors::Result<Self> {
-        match self {
-            RunOk::FatalVMError(e, cause) => Err(rt::errors::Error::fatal_vm_cause(e, cause)),
-            run_ok => Ok(run_ok),
-        }
-    }
-
     pub fn into_contract_observable_bytes(self) -> rt::errors::Result<Vec<u8>> {
-        self.into_nonfatal().map(|run_ok| run_ok.as_bytes())
+        ContractOutcome::try_from(self).map(|outcome| outcome.encode().into_bytes().to_vec())
     }
 }
 
@@ -96,51 +176,17 @@ impl FullResult {
         self.storage_changes.clear();
         self.emissions.clear();
     }
+
+    pub fn coalesce_fatal_for_top_level(&mut self) {
+        if self.kind == host_fns::ResultCode::FatalVmError {
+            self.kind = host_fns::ResultCode::VmError;
+        }
+    }
 }
 
 impl RunOk {
     pub fn empty_return() -> Self {
         Self::Return(calldata::Value::Null.into())
-    }
-
-    pub fn as_bytes(&self) -> Vec<u8> {
-        use crate::public_abi::ResultCode;
-        match self {
-            RunOk::Return(buf) => {
-                let encoded = calldata::encode_obj(buf);
-                let mut res = Vec::with_capacity(1 + encoded.len());
-                res.push(ResultCode::Return as u8);
-                res.extend_from_slice(&encoded);
-                res
-            }
-            RunOk::UserError(val) => {
-                let mut res = vec![ResultCode::UserError as u8];
-                match val {
-                    calldata::unparsed::Maybe::Materialized(value) => {
-                        res.extend_from_slice(&calldata::encode(value));
-                    }
-                    calldata::unparsed::Maybe::Checked(raw) => {
-                        res.extend_from_slice(&raw.0);
-                    }
-                }
-                res
-            }
-            RunOk::VMError(buf, _) => {
-                let mut res = Vec::with_capacity(1 + buf.0.len());
-                res.push(ResultCode::VmError as u8);
-                res.extend_from_slice(buf.0.as_bytes());
-                res
-            }
-            // Fatality has to survive a sub-VM buffer that is relayed across a
-            // major boundary, so it keeps a code of its own -- one the host
-            // wire admits and the contract-facing enumeration does not.
-            RunOk::FatalVMError(buf, _) => {
-                let mut res = Vec::with_capacity(1 + buf.0.len());
-                res.push(crate::host::host_fns::ResultCode::FatalVmError as u8);
-                res.extend_from_slice(buf.0.as_bytes());
-                res
-            }
-        }
     }
 }
 
@@ -386,25 +432,21 @@ mod tests {
     }
 
     #[test]
-    fn fatal_result_serialization_is_total() {
-        let code = public_abi::VmError::timeout();
-        let bytes = RunOk::FatalVMError(code.clone(), None).as_bytes();
-
-        assert_eq!(
-            bytes[0],
-            crate::host::host_fns::ResultCode::FatalVmError as u8
-        );
-        assert_eq!(&bytes[1..], code.0.as_bytes());
-    }
-
-    // Fatality is reported truthfully to the host; degrading it to an ordinary
-    // VM error is the manager's job, at the outermost boundary.
-    #[test]
     fn fatal_result_is_reported_as_fatal() {
         let full =
             FullResult::empty_from(RunOk::FatalVMError(public_abi::VmError::timeout(), None));
 
         assert_eq!(full.kind, host_fns::ResultCode::FatalVmError);
+    }
+
+    #[test]
+    fn top_level_fatal_result_is_coalesced() {
+        let mut full =
+            FullResult::empty_from(RunOk::FatalVMError(public_abi::VmError::timeout(), None));
+
+        full.coalesce_fatal_for_top_level();
+
+        assert_eq!(full.kind, host_fns::ResultCode::VmError);
     }
 
     fn with_effects(run_ok: RunOk) -> FullResult {

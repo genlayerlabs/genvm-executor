@@ -41,7 +41,7 @@ pub trait ExtendedMessageExt {
         &self,
         entry_kind: public_abi::EntryKind,
         entry_data: bytes::Bytes,
-        entry_leader_data: Option<rt::vm::RunOk>,
+        entry_leader_data: Option<rt::vm::ContractOutcome>,
     ) -> ExtendedMessage;
 
     fn fork(&self, entry_kind: public_abi::EntryKind, entry_data: bytes::Bytes) -> ExtendedMessage;
@@ -52,7 +52,7 @@ impl ExtendedMessageExt for ExtendedMessage {
         &self,
         entry_kind: public_abi::EntryKind,
         entry_data: bytes::Bytes,
-        entry_leader_data: Option<rt::vm::RunOk>,
+        entry_leader_data: Option<rt::vm::ContractOutcome>,
     ) -> ExtendedMessage {
         use genlayer_sdk::abi::entry::MessageData;
 
@@ -60,7 +60,7 @@ impl ExtendedMessageExt for ExtendedMessage {
             None => default_entry_stage_data(),
             Some(entry_leader_data) => calldata::Value::Map(BTreeMap::from([(
                 "leaders_result".into(),
-                calldata::Value::Bytes(entry_leader_data.as_bytes()),
+                calldata::Value::Bytes(entry_leader_data.encode().into_bytes().to_vec()),
             )])),
         };
 
@@ -415,7 +415,9 @@ impl ContextVFS<'_> {
             }
             data => data,
         };
-        let data: Vec<u8> = data.as_bytes();
+        let data = data
+            .into_contract_observable_bytes()
+            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
         let len = data.len();
         self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
             .map(|fd| (fd, len))

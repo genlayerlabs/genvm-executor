@@ -87,10 +87,10 @@ pub fn strip_vm_error_detail(code: &str) -> public_abi::VmError {
 }
 
 /// The one total parse of a leader-proposed non-deterministic result. `Ok`
-/// means the bytes are accepted verbatim (`as_bytes()` reproduces `data`);
+/// means the bytes are accepted verbatim (`encode()` reproduces `data`);
 /// `Err` carries the VM error the validator derives instead. Malformed input
 /// never traps and never bypasses the comparison stage.
-pub fn parse_leader_result(data: &[u8]) -> Result<rt::vm::RunOk, public_abi::VmError> {
+pub fn parse_leader_result(data: &[u8]) -> Result<rt::vm::ContractOutcome, public_abi::VmError> {
     let Some((&code, rest)) = data.split_first() else {
         return Err(public_abi::VmError::leader_fault().nondet_output().absent());
     };
@@ -104,24 +104,52 @@ pub fn parse_leader_result(data: &[u8]) -> Result<rt::vm::RunOk, public_abi::VmE
             let ret: calldata::unparsed::Maybe<calldata::Value> =
                 calldata::decode_obj(rest).map_err(|_| malformed_leader_result())?;
 
-            Ok(rt::vm::RunOk::Return(ret))
+            Ok(rt::vm::ContractOutcome::Return(ret))
         }
         public_abi::ResultCode::UserError => {
             let err: calldata::unparsed::Maybe<calldata::Value> =
                 calldata::decode_obj(rest).map_err(|_| malformed_leader_result())?;
 
-            Ok(rt::vm::RunOk::UserError(err))
+            Ok(rt::vm::ContractOutcome::UserError(err))
         }
         public_abi::ResultCode::VmError => {
             let code = std::str::from_utf8(rest).map_err(|_| malformed_leader_result())?;
 
             validate_leader_vm_error(code)?;
 
-            Ok(rt::vm::RunOk::VMError(
+            Ok(rt::vm::ContractOutcome::VMError(
                 public_abi::VmError(std::borrow::Cow::Owned(code.to_owned())),
                 None,
             ))
         }
+    }
+}
+
+pub(super) fn leader_outcome_for_publication(
+    computed_result: rt::vm::RunOk,
+) -> rt::errors::Result<rt::vm::ContractOutcome> {
+    match rt::vm::ContractOutcome::try_from(computed_result)? {
+        // Publish the bare code, keep the detail as a local cause
+        rt::vm::ContractOutcome::VMError(err, cause) => Ok(rt::vm::ContractOutcome::VMError(
+            strip_vm_error_detail(&err.0),
+            cause,
+        )),
+        computed_result => Ok(computed_result),
+    }
+}
+
+pub(super) fn leader_outcome_for_validation(
+    data: &[u8],
+) -> (rt::vm::ContractOutcome, rt::vm::RunOk) {
+    match parse_leader_result(data) {
+        Ok(outcome) => {
+            let result_to_return = outcome.duplicate().into();
+            (outcome, result_to_return)
+        }
+        Err(vm_error) => (
+            rt::vm::ContractOutcome::VMError(vm_error.clone(), None),
+            rt::vm::RunOk::FatalVMError(vm_error, None),
+        ),
     }
 }
 
@@ -624,7 +652,7 @@ impl ContextVFS<'_> {
 
         let is_leader = self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Leader;
 
-        let result_to_return = if is_leader {
+        let (result_to_return, encoded) = if is_leader {
             let vm_ext_msg = self.context.data.message_data.fork_leader(
                 public_abi::EntryKind::ConsensusStage,
                 data_leader,
@@ -638,17 +666,11 @@ impl ContextVFS<'_> {
                 .await
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
-            let computed_result = computed_result
-                .into_nonfatal()
+            let computed_result = leader_outcome_for_publication(computed_result)
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+            let encoded = computed_result.encode();
 
-            match computed_result {
-                // Publish the bare code, keep the detail as a local cause.
-                rt::vm::RunOk::VMError(err, cause) => {
-                    rt::vm::RunOk::VMError(strip_vm_error_detail(&err.0), cause)
-                }
-                computed_result => computed_result,
-            }
+            (computed_result.into(), encoded)
         } else {
             let leaders_res_bytes = self
                 .context
@@ -662,10 +684,8 @@ impl ContextVFS<'_> {
             // A leader fault is fatal: it says this node's whole run is built on
             // a result no honest leader could have produced, so a caller must
             // not be able to carry on as if the block had merely failed.
-            let leaders_res = match parse_leader_result(&leaders_res_bytes.unwrap_or_default()) {
-                Ok(res) => res,
-                Err(vm_error) => rt::vm::RunOk::FatalVMError(vm_error, None),
-            };
+            let (leaders_res, result_to_return) =
+                leader_outcome_for_validation(&leaders_res_bytes.unwrap_or_default());
 
             if self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Validator {
                 let vm_ext_msg = self.context.data.message_data.fork_leader(
@@ -679,12 +699,9 @@ impl ContextVFS<'_> {
                 rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task).await;
             }
 
-            leaders_res
+            let encoded = leaders_res.encode();
+            (result_to_return, encoded)
         };
-
-        // One encoding feeds the fee, the leader's retained copy and the
-        // caller-visible file.
-        let encoded = bytes::Bytes::from(result_to_return.as_bytes());
 
         // Retention precedes the charge, so a validator replaying a run that
         // ran out of fee here sees the same result the leader charged for.
@@ -698,7 +715,7 @@ impl ContextVFS<'_> {
 
         consume_nondet_output(
             &self.context.data.supervisor.shared_data,
-            encoded.len().into_int_comptime(),
+            encoded.as_slice().len().into_int_comptime(),
         )
         .await?;
 

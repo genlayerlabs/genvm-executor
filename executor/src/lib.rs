@@ -285,7 +285,10 @@ fn extra_leader_nondet_output_error(
         return None;
     }
 
-    Some(rt::errors::vm_error_for_leader_extra(&run_ok.as_bytes()))
+    let encoded = rt::vm::ContractOutcome::try_from(run_ok.duplicate())
+        .expect("fatal results return before extra leader output is checked")
+        .encode();
+    Some(rt::errors::vm_error_for_leader_extra(encoded.as_slice()))
 }
 
 fn has_extra_leader_output(run_mode: rt::RunMode, executed: u32, published: u32) -> bool {
@@ -521,6 +524,28 @@ pub async fn run_with_impl(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportingBoundary {
+    TopLevel,
+    Nested,
+}
+
+impl ReportingBoundary {
+    fn for_execution_data(entry_data: &genvm_modules_interfaces::ExecutionData) -> Self {
+        if entry_data.nested.is_some() {
+            Self::Nested
+        } else {
+            Self::TopLevel
+        }
+    }
+
+    fn normalize(self, result: &mut rt::vm::FullResult) {
+        if self == Self::TopLevel {
+            result.coalesce_fatal_for_top_level();
+        }
+    }
+}
+
 pub async fn run_with(
     entry_data: genvm_modules_interfaces::ExecutionData,
     context: ExecutionContext,
@@ -532,6 +557,7 @@ pub async fn run_with(
     // during deploy attaches to this very entry at spawn. Dropping the pin
     // earlier would make that load's outcome depend on which queue processed it.
     let mut deploy_pin: Option<runners::cache::ArchivePin> = None;
+    let reporting_boundary = ReportingBoundary::for_execution_data(&entry_data);
 
     let supervisor = context.supervisor.clone();
 
@@ -588,6 +614,7 @@ pub async fn run_with(
     let res = match res {
         Ok((mut a, b)) => {
             a.discard_effects_unless_returned();
+            reporting_boundary.normalize(&mut a);
 
             Ok(host::FullResult::new(
                 a,
@@ -629,5 +656,23 @@ mod tests {
     fn det_only_child_has_no_extra_leader_output() {
         assert!(!has_extra_leader_output(rt::RunMode::Leader, 0, 0));
         assert!(!has_extra_leader_output(rt::RunMode::Sync, 0, 0));
+    }
+
+    #[test]
+    fn reporting_boundary_coalesces_only_top_level_fatality() {
+        let fatal = || {
+            rt::vm::FullResult::empty_from(rt::vm::RunOk::FatalVMError(
+                public_abi::VmError::timeout(),
+                None,
+            ))
+        };
+        let mut top_level = fatal();
+        let mut nested = fatal();
+
+        ReportingBoundary::TopLevel.normalize(&mut top_level);
+        ReportingBoundary::Nested.normalize(&mut nested);
+
+        assert_eq!(top_level.kind, host::host_fns::ResultCode::VmError);
+        assert_eq!(nested.kind, host::host_fns::ResultCode::FatalVmError);
     }
 }
