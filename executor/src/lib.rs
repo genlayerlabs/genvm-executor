@@ -172,7 +172,7 @@ fn convert_message_data(
         chain_id: message.chain_id,
         value: message.value,
         is_init: message.is_init,
-        datetime: message.datetime,
+        datetime: message.transaction_timestamp,
     }
 }
 

@@ -770,9 +770,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let supervisor = self.context.data.supervisor.clone();
                 let data = supervisor
                     .host
-                    .lock_for(host::host_fns::Methods::EthCall)
+                    .lock_for(host::host_fns::Methods::ExternalCall)
                     .await
-                    .eth_call(address, &calldata)
+                    .external_call(address, &calldata)
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
                 self.place_content(vfs::FileContents::from(bytes::Bytes::from(data)))
             }
@@ -827,9 +827,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                 let routing_payload = supervisor
                     .host
-                    .lock_for(host::host_fns::Methods::ResolveCallcontractExecutor)
+                    .lock_for(host::host_fns::Methods::ResolveCallContractExecutor)
                     .await
-                    .resolve_callcontract_executor(address, state, ADVISORY_MAJOR)
+                    .resolve_call_contract_executor(address, state, ADVISORY_MAJOR)
                     .map_err(|e| cross_major_internal("resolving CallContract executor", e))?;
 
                 let code_slot = child_storage
@@ -921,17 +921,17 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     super::method_compat::method_legacy_to_new(&mut nested_calldata);
                     let nested_calldata = bytes::Bytes::from(calldata::encode(&nested_calldata));
 
-                    let host_remaining_fuel = supervisor
+                    let host_remaining_time_fee_gen_wei = supervisor
                         .host
-                        .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+                        .lock_for(host::host_fns::Methods::GetRemainingTimeFeeGenWei)
                         .await
-                        .remaining_fuel_as_gen()
+                        .get_remaining_time_fee_gen_wei()
                         .map_err(|e| {
                             cross_major_internal("reading nested deterministic fuel", e)
                         })?;
                     let remaining_det_fuel = supervisor
                         .shared_data
-                        .remaining_det_fuel(host_remaining_fuel)
+                        .remaining_det_fuel(host_remaining_time_fee_gen_wei)
                         .await;
 
                     let mut permissions = P::default();
@@ -975,7 +975,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                             chain_id: message.chain_id.clone(),
                             value: message.value.clone(),
                             is_init: message.is_init,
-                            datetime: message.datetime,
+                            transaction_timestamp: message.datetime,
                         },
                         stack: message.stack.clone(),
                         permissions,
@@ -1400,21 +1400,21 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     return Err(generated::types::Errno::Inval.into());
                 }
 
-                let host_remaining_fuel = self
+                let host_remaining_time_fee_gen_wei = self
                     .context
                     .data
                     .supervisor
                     .host
-                    .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+                    .lock_for(host::host_fns::Methods::GetRemainingTimeFeeGenWei)
                     .await
-                    .remaining_fuel_as_gen()
+                    .get_remaining_time_fee_gen_wei()
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-                let remaining_fuel_as_gen = self
+                let remaining_time_fee_gen_wei = self
                     .context
                     .data
                     .supervisor
                     .shared_data
-                    .remaining_det_fuel(host_remaining_fuel)
+                    .remaining_det_fuel(host_remaining_time_fee_gen_wei)
                     .await;
 
                 let sup = self.context.data.supervisor.clone();
@@ -1427,7 +1427,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
                             genvm_modules_interfaces::llm::Message::Prompt {
                                 payload: gl_call_to_mi::prompt_payload(prompt_payload),
-                                remaining_fuel_as_gen,
+                                remaining_time_fee_gen_wei,
                             },
                         )
                         .await?;
@@ -1440,9 +1440,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     };
 
                     sup.host
-                        .lock_for(host::host_fns::Methods::ConsumeFuel)
+                        .lock_for(host::host_fns::Methods::ConsumeTimeFeeGenWei)
                         .await
-                        .consume_fuel(result.consumed_gen)?;
+                        .consume_time_fee_gen_wei(result.consumed_gen)?;
                     sup.shared_data.consume_det_fuel(result.consumed_gen).await;
 
                     if result.consumed_gen == primitive_types::U256::MAX {
@@ -1491,22 +1491,21 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     gl_call::llm_iface::PromptTemplatePayload::EqNonComparativeLeader(_)
                 );
 
-                // Get remaining fuel from host
-                let host_remaining_fuel = self
+                let host_remaining_time_fee_gen_wei = self
                     .context
                     .data
                     .supervisor
                     .host
-                    .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+                    .lock_for(host::host_fns::Methods::GetRemainingTimeFeeGenWei)
                     .await
-                    .remaining_fuel_as_gen()
+                    .get_remaining_time_fee_gen_wei()
                     .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-                let remaining_fuel_as_gen = self
+                let remaining_time_fee_gen_wei = self
                     .context
                     .data
                     .supervisor
                     .shared_data
-                    .remaining_det_fuel(host_remaining_fuel)
+                    .remaining_det_fuel(host_remaining_time_fee_gen_wei)
                     .await;
 
                 let sup = self.context.data.supervisor.clone();
@@ -1519,7 +1518,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                                 payload: gl_call_to_mi::prompt_template_payload(
                                     prompt_template_payload,
                                 ),
-                                remaining_fuel_as_gen,
+                                remaining_time_fee_gen_wei,
                             },
                         )
                         .await?;
@@ -1527,9 +1526,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
 
                     if let Ok(PromptAnswer { consumed_gen, .. }) = &answer {
                         sup.host
-                            .lock_for(host::host_fns::Methods::ConsumeFuel)
+                            .lock_for(host::host_fns::Methods::ConsumeTimeFeeGenWei)
                             .await
-                            .consume_fuel(*consumed_gen)?;
+                            .consume_time_fee_gen_wei(*consumed_gen)?;
                         sup.shared_data.consume_det_fuel(*consumed_gen).await;
                         if *consumed_gen == primitive_types::U256::MAX {
                             return Err(
@@ -1759,9 +1758,9 @@ impl Context {
             .data
             .supervisor
             .host
-            .lock_for(host::host_fns::Methods::GetBalance)
+            .lock_for(host::host_fns::Methods::GetBalanceGenWei)
             .await
-            .get_balance(address)
+            .get_balance_gen_wei(address)
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         let _ = self.data.supervisor.balances.insert(address, res);
