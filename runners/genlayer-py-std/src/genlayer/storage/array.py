@@ -108,7 +108,7 @@ class Array[T, S: int](
 class _ArrayDesc(SpecialTypeDesc):
 	_len: int
 
-	__slots__ = ('item_desc', 'view_ctor', '_len')
+	__slots__ = ('_len', 'item_desc', 'view_ctor')
 
 	def __init__(self, item_desc: TypeDesc, le: int):
 		self._len = le

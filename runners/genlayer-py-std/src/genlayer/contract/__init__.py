@@ -53,7 +53,7 @@ from genlayer.vm.public_abi import StorageView  # noqa: E402
 
 
 class _ContractAtViewMethod:
-	__slots__ = ('_addr', '_name', '_state', '_catch_vm_error')
+	__slots__ = ('_addr', '_catch_vm_error', '_name', '_state')
 
 	def __init__(
 		self,
@@ -96,7 +96,7 @@ class _ContractAtViewMethod:
 
 
 class _ContractAtEmitMethod:
-	__slots__ = ('_addr', '_name', '_value', '_on', '_use_balance', '_fee_params')
+	__slots__ = ('_addr', '_fee_params', '_name', '_on', '_use_balance', '_value')
 
 	def __init__(
 		self,
@@ -355,7 +355,7 @@ _ContractAtGetter_P = typing.ParamSpec('_ContractAtGetter_P')
 
 
 class _ContractAtGetter[T]:
-	__slots__ = ('_ctor', '_args', '_kwargs')
+	__slots__ = ('_args', '_ctor', '_kwargs')
 
 	def __init__(
 		self,

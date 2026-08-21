@@ -241,21 +241,6 @@ def test_randomized_mutations_preserve_invariants_and_knn():
 			assert got == expected
 
 
-def test_legacy_tree_is_migrated_on_access():
-	db = DB()
-	for coord in [0, 100, 90, 90, 80, 86]:
-		db.x.insert(_vec(coord), str(coord))
-	db.x._base = 1.3
-	db.x._tree_version = 0
-
-	assert len(db.x) == 6
-	assert db.x._tree_version == 1
-	assert db.x._base == 2.0
-	assert {elem.value for elem in db.x} == {'0', '100', '90', '80', '86'}
-	_assert_cover_tree(db.x)
-	assert [elem.distance for elem in db.x.knn(_vec(89), 3)] == [1.0, 1.0, 3.0]
-
-
 def test_remove_arbitrary_duplicate():
 	db = DB()
 	ids = [db.x.insert(_vec(7), str(i)) for i in range(4)]

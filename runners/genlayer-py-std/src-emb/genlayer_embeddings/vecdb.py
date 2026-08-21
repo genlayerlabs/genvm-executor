@@ -97,7 +97,7 @@ class VecDBElement[T: np.number, S: int, V, Dist]:
 	Distance from search point to this element, if any
 	"""
 
-	__slots__ = ('_idx', '_db', 'distance')
+	__slots__ = ('_db', '_idx', 'distance')
 
 	def __init__(self, db: VecDB[T, S, V, typing.Any], idx: u32, distance: Dist):
 		self._idx = idx
@@ -180,39 +180,19 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 
 	_initialized: bool = False
 	_level_counts: TreeMap[i32, u32]
-	_tree_version: u32
 	_duplicate_pos: TreeMap[u32, u32]
 
 	def __init__(self):
 		self._do_init()
 
 	def _do_init(self):
-		if not self._initialized:
-			self._initialized = True
-			self._root_idx = NO_PARENT
-			self._base = 2.0
-			self._max_level = 0
-			self._min_level = 0
-			self._tree_version = 1
+		if self._initialized:
 			return
-		if self._tree_version == 1:
-			return
-		self._rebuild_legacy_tree()
-
-	def _rebuild_legacy_tree(self) -> None:
-		element_ids = [i for i in range(len(self._keys)) if i not in self._free_idx]
-		self._nodes.clear()
-		self._free_nodes.clear()
-		self._elem_to_node.clear()
-		self._level_counts.clear()
-		self._duplicate_pos.clear()
+		self._initialized = True
 		self._root_idx = NO_PARENT
 		self._base = 2.0
 		self._max_level = 0
 		self._min_level = 0
-		self._tree_version = 1
-		for element_id in element_ids:
-			self._insert_into_tree(element_id)
 
 	def __len__(self) -> int:
 		self._do_init()
@@ -408,14 +388,7 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 
 	def _remove_from_tree(self, idx: u32) -> None:
 		"""Remove an element using Algorithm 3 of the cover-tree paper"""
-		if idx in self._elem_to_node:
-			node_idx = self._elem_to_node[idx]
-		else:
-			# Fallback for legacy data without _elem_to_node populated
-			node_idx = self._find_node_by_id(idx)
-			if node_idx == NO_PARENT:
-				return
-
+		node_idx = self._elem_to_node[idx]
 		node = self._nodes[node_idx]
 		if node.element_id != idx or len(node.duplicates) > 0:
 			self._remove_duplicate(node_idx, idx)
@@ -547,24 +520,6 @@ class VecDB[T: np.number, S: int, V, D: Distance]:
 				else:
 					break
 			parent_level += 1
-
-	def _find_node_by_id(self, element_id: u32) -> u32:
-		"""Find node index with given element ID"""
-		if self._root_idx == NO_PARENT:
-			return NO_PARENT
-
-		stack: list[u32] = [self._root_idx]
-		while len(stack) > 0:
-			node_idx = stack.pop()
-			if node_idx in self._free_nodes:
-				continue
-			node = self._nodes[node_idx]
-			if node.element_id == element_id:
-				return node_idx
-			for i in range(len(node.children)):
-				stack.append(node.children[i])
-
-		return NO_PARENT
 
 	def _max_descendant_dist(self, level: int) -> float:
 		"""

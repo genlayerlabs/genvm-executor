@@ -229,8 +229,7 @@ def encode[T](
 			mem.extend(b.as_bytes)
 		elif isinstance(b, Raw):
 			mem.extend(b.data)
-		elif isinstance(b, (bytes, bytearray, memoryview)):
-			# a memoryview may be cast to a wider format, where `len` counts items
+		elif isinstance(b, collections.abc.Buffer):
 			b = bytes(b)
 			lb = len(b)
 			lb = (lb << 3) | TYPE_BYTES
@@ -365,7 +364,7 @@ def to_str(d: Encodable, /) -> str:
 		elif isinstance(d, Raw):
 			buf.append('raw#')
 			buf.append(d.data.hex())
-		elif isinstance(d, (bytes, bytearray, memoryview)):
+		elif isinstance(d, collections.abc.Buffer):
 			buf.append('b#')
 			buf.append(bytes(d).hex())
 		elif isinstance(d, int):

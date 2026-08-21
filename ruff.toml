@@ -21,6 +21,7 @@ extend-select = [
     "F",
     "ASYNC",
     "RUF006",
+    "RUF023",
     "D213", # docstring summary on next line
     "I", # sort imports
 ]

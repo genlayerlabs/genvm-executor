@@ -45,10 +45,12 @@ def strict_eq[T: calldata.Decoded](fn: typing.Callable[[], T], /) -> Lazy[T]:
 		my_res = vm.spawn_sandbox(fn)
 		return my_res == leaders_res
 
-	return vm.run_nondet.lazy(fn, validator_fn)
+	return vm.run_nondet.lazy(  # pyright: ignore[reportFunctionMemberAccess]
+		fn, validator_fn
+	)
 
 
-from genlayer.nondet import _decode_nondet  # noqa: E402
+from genlayer.nondet import _decode_nondet, _invalid_nondet_response  # noqa: E402
 
 
 @_lazy_api
@@ -96,9 +98,14 @@ def prompt_comparative[T: calldata.Decoded](
 			_decode_nondet,
 		)
 
-		return ret.get()
+		result = ret.get()
+		if not isinstance(result, bool):
+			_invalid_nondet_response('comparative result is not a bool')
+		return result
 
-	return vm.run_nondet_default.lazy(fn, validator_fn)
+	return vm.run_nondet_default.lazy(  # pyright: ignore[reportFunctionMemberAccess]
+		fn, validator_fn
+	)
 
 
 @_lazy_api
@@ -135,7 +142,10 @@ def prompt_non_comparative(
 			},
 			_decode_nondet,
 		)
-		return ret.get()
+		result = ret.get()
+		if not isinstance(result, str):
+			_invalid_nondet_response('non-comparative result is not text')
+		return result
 
 	def validator_fn(
 		leaders_res: vm.Result[str],
@@ -157,7 +167,11 @@ def prompt_non_comparative(
 			},
 			_decode_nondet,
 		)
-		ret = ret.get()
-		return ret
+		result = ret.get()
+		if not isinstance(result, bool):
+			_invalid_nondet_response('non-comparative validation result is not a bool')
+		return result
 
-	return vm.run_nondet_default.lazy(leader_fn, validator_fn)
+	return vm.run_nondet_default.lazy(  # pyright: ignore[reportFunctionMemberAccess]
+		leader_fn, validator_fn
+	)

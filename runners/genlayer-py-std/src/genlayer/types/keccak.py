@@ -181,7 +181,7 @@ class KeccakState:
 	The state is stored as a 5x5 table of integers.
 	"""
 
-	__slots__ = ('lanew', 'bitrate', 'b', 's', 'bitrate_bytes')
+	__slots__ = ('b', 'bitrate', 'bitrate_bytes', 'lanew', 's')
 
 	W = 5
 	H = 5
@@ -310,7 +310,7 @@ class KeccakState:
 
 
 class KeccakSponge:
-	__slots__ = ('state', 'padfn', 'permfn', 'buffer')
+	__slots__ = ('buffer', 'padfn', 'permfn', 'state')
 
 	def __init__(self, bitrate, width, padfn, permfn):
 		self.state = KeccakState(bitrate, width)
@@ -355,7 +355,7 @@ class KeccakHash:
 	The Keccak hash function, with a hashlib-compatible interface.
 	"""
 
-	__slots__ = ('sponge', 'digest_size', 'block_size')
+	__slots__ = ('block_size', 'digest_size', 'sponge')
 
 	def __init__(self, bitrate_bits: int, capacity_bits: int, output_bits: int):
 		"""

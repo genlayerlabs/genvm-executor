@@ -159,7 +159,11 @@ def request(
 			_invalid_nondet_response('web response headers are invalid')
 		if body is not None and not isinstance(body, bytes):
 			_invalid_nondet_response('web response body is invalid')
-		return Response(status=status, headers=response_headers, body=body)
+		return Response(
+			status=status,
+			headers=typing.cast(dict[str, bytes], response_headers),
+			body=body,
+		)
 
 	return gl_call.gl_call_generic(
 		{

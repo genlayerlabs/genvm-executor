@@ -18,7 +18,7 @@ class TransactionDataKwArgs(typing.TypedDict):
 
 
 class ContractProxy[TView, TWrite]:
-	__slots__ = ('_view', '_send', 'address', '_balance', '_transfer')
+	__slots__ = ('_balance', '_send', '_transfer', '_view', 'address')
 
 	address: Address
 

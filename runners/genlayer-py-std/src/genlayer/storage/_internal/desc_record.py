@@ -54,7 +54,7 @@ class RecordExtraFields(_WithStorageSlot, typing.Protocol):
 
 
 class _RecordDesc[T: RecordExtraFields](TypeDesc[T]):
-	__slots__ = ('props', 'hsh', 'cls', 'layout')
+	__slots__ = ('cls', 'hsh', 'layout', 'props')
 
 	def __init__(self, layout: RecordLayout, cls: typing.Type[T]):
 		TypeDesc.__init__(self, layout.size, list(layout.copy_actions))

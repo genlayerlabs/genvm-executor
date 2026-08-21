@@ -1,3 +1,5 @@
+import array
+
 import genlayer.calldata as calldata
 
 # Shared cross-language corpus: (logical value, expected canonical hex). The exact same
@@ -31,4 +33,9 @@ def test_calldata_corpus_decode_roundtrip():
 
 def test_memoryview_roundtrip_as_bytes():
 	value = memoryview(b'abc')
+	assert calldata.decode(calldata.encode(value)) == value.tobytes()
+
+
+def test_buffer_roundtrip_as_bytes():
+	value = array.array('I', [0x12345678])
 	assert calldata.decode(calldata.encode(value)) == value.tobytes()

@@ -65,7 +65,7 @@ def _decode_nondet(buf: collections.abc.Buffer) -> calldata.Decoded:
 				or not isinstance(ctx, dict)
 			):
 				_invalid_nondet_response('invalid error details')
-			raise NondetException(causes=causes, ctx=ctx)
+			raise NondetException(causes=typing.cast(list[str], causes), ctx=ctx)
 		raise NondetException(causes=[str(err)], ctx={})
 
 	if 'ok' not in ret:
@@ -81,6 +81,13 @@ def _decode_nondet_json(buf: collections.abc.Buffer) -> JSONValue:
 		return typing.cast(JSONValue, json.loads(data))
 	except (ValueError, UnicodeDecodeError, RecursionError) as exc:
 		_invalid_nondet_response(f'invalid JSON: {exc}')
+
+
+def _decode_nondet_text(buf: collections.abc.Buffer) -> str:
+	data = _decode_nondet(buf)
+	if not isinstance(data, str):
+		_invalid_nondet_response('text result is not a string')
+	return data
 
 
 if typing.TYPE_CHECKING:
@@ -155,16 +162,16 @@ def exec_prompt(
 
 	format = config.get('response_format', 'text')
 
-	return gl_call.gl_call_generic(
-		{
-			'ExecPrompt': {
-				'prompt': prompt,
-				'response_format': format,
-				'images': images,
-			}
-		},
-		_decode_nondet_json if format == 'json' else _decode_nondet,
-	)
+	data = {
+		'ExecPrompt': {
+			'prompt': prompt,
+			'response_format': format,
+			'images': images,
+		}
+	}
+	if format == 'json':
+		return gl_call.gl_call_generic(data, _decode_nondet_json)
+	return gl_call.gl_call_generic(data, _decode_nondet_text)
 
 
 import genlayer.nondet.web as web  # noqa: E402

@@ -50,7 +50,7 @@ def decode[T](expected: typing.Type[T], encoded: collections.abc.Buffer, /) -> T
 
 
 class MethodEncoder:
-	__slots__ = ('_encoder', '_selector', '_decoder')
+	__slots__ = ('_decoder', '_encoder', '_selector')
 
 	def __init__(self, name: str, params: tuple[typing.Any, ...], ret: type):
 		self._encoder = build(tuple[InplaceTuple, *params])

@@ -48,10 +48,10 @@ def check_entry_name(name: str):
 
 
 def add_file(name: str, contents: bytes, skip_pyc=True):
-	if name in all_files:
-		raise KeyError('EEXISTS')
 	if skip_pyc and (name.endswith('.pyc') or name.endswith('.pyo')):
 		return
+	if name in all_files:
+		raise KeyError(f'EEXISTS: {name}')
 	if name.endswith('/'):
 		return  # skip dir
 	check_entry_name(name)

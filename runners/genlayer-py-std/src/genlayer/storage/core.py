@@ -65,7 +65,7 @@ class Slot:
 	manager: Manager
 	id: bytes
 
-	__slots__ = ('manager', 'id', '_indir_cache')
+	__slots__ = ('_indir_cache', 'id', 'manager')
 
 	def __getstate__(self):
 		return (self.manager, self.id)
@@ -218,7 +218,7 @@ class TypeDesc[T](metaclass=abc.ABCMeta):
 	"""
 	alias_to: typing.Any
 
-	__slots__ = ('size', 'copy_actions', 'alias_to')
+	__slots__ = ('alias_to', 'copy_actions', 'size')
 
 	def __init__(self, size: int, copy_actions: list[CopyAction]):
 		self.copy_actions = copy_actions
@@ -294,7 +294,7 @@ class Indirection[T](_WithStorageSlotAndTD):
 	This class provides ability to save data at its own slot. Occupies 1 byte to prevent collision.
 	"""
 
-	__slots__ = ('_storage_slot', '_off', '_item_desc')
+	__slots__ = ('_item_desc', '_off', '_storage_slot')
 
 	def get(self) -> T:
 		"""
@@ -362,7 +362,7 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 	_off: int
 	_item_desc: TypeDesc[T]
 
-	__slots__ = ('_storage_slot', '_off', '_item_desc')
+	__slots__ = ('_item_desc', '_off', '_storage_slot')
 
 	def __len__(self) -> int:
 		data = self._storage_slot.read(self._off, 4)
