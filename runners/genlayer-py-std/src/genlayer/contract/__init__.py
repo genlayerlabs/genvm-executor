@@ -122,7 +122,7 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 	:param TSend: Type representing available write methods
 	"""
 
-	def view(self, *, state: StorageType = StorageType.LATEST_NON_FINAL) -> TView:
+	def view(self, *, state: StorageType = StorageType.LATEST_DECIDED) -> TView:
 		"""
 		Get a namespace for calling view methods.
 
@@ -209,7 +209,7 @@ class _ContractAt(Proxy[ErasedMethods, ErasedMethods]):
 	def address(self) -> Address:
 		return self._address
 
-	def view(self, *, state: StorageType = StorageType.LATEST_NON_FINAL) -> ErasedMethods:
+	def view(self, *, state: StorageType = StorageType.LATEST_DECIDED) -> ErasedMethods:
 		return _ContractAtGetter(_ContractAtViewMethod, self._address, state)
 
 	def emit(

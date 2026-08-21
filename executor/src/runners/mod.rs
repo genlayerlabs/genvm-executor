@@ -46,7 +46,7 @@ impl ChainState {
             ChainState::Deploy
         } else {
             match state {
-                crate::public_abi::StorageType::LatestFinal => ChainState::Finalized,
+                crate::public_abi::StorageType::LatestFinalized => ChainState::Finalized,
                 _ => ChainState::Accepted,
             }
         }
@@ -54,8 +54,8 @@ impl ChainState {
 
     pub fn host_storage_type(self) -> Option<crate::public_abi::StorageType> {
         match self {
-            ChainState::Accepted => Some(crate::public_abi::StorageType::LatestNonFinal),
-            ChainState::Finalized => Some(crate::public_abi::StorageType::LatestFinal),
+            ChainState::Accepted => Some(crate::public_abi::StorageType::LatestDecided),
+            ChainState::Finalized => Some(crate::public_abi::StorageType::LatestFinalized),
             ChainState::Deploy => None,
         }
     }
@@ -76,7 +76,8 @@ impl ChainState {
 /// - `contract` -- the runner of the contract that is currently being executed.
 /// - `chain:<address>:<a|f>:<slot>` -- read the runner code blob from a storage
 ///   slot of an arbitrary contract. `address` is a `0x`-prefixed 20 byte hex
-///   address, `a`/`f` selects accepted (latest non final) / finalized state and
+///   address, `a`/`f` selects the latest decided / finalized state. The legacy
+///   `a` spelling is retained in runner IDs for wire compatibility.
 ///   `slot` is a 32 byte slot id encoded with GVM32 (Crockford Base32).
 ///   Both `<a|f>` and `<slot>` are optional: `<a|f>` defaults to `a` and
 ///   `<slot>` defaults to reading the target contract's root slot during

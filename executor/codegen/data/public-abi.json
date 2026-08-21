@@ -15,8 +15,12 @@
     "repr": "u8",
     "values": {
       "default": 0,
-      "latest_final": 1,
-      "latest_non_final": 2
+      "latest_finalized": 1,
+      "latest_decided": 2
+    },
+    "aliases": {
+      "latest_final": "latest_finalized",
+      "latest_non_final": "latest_decided"
     }
   },
   {
