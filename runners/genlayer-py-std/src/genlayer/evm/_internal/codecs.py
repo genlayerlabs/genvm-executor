@@ -9,6 +9,10 @@ from genlayer.types import Address, SizedArray
 type Tails = list[typing.Callable[[EncodeState], None]]
 
 
+class DecodingError(ValueError):
+	pass
+
+
 @dataclass
 class EncodeState:
 	current_off: int
@@ -49,16 +53,31 @@ class DecoderState:
 	mem: memoryview
 	current_off: int
 	current_off_0: int
+	minimum_indirect_offset: int = 0
 
 	def fetch_head(self, le: int) -> memoryview:
-		res = self.mem[self.current_off : self.current_off + le]
-		self.current_off += le
+		end = self.current_off + le
+		if end > len(self.mem):
+			raise DecodingError(
+				f'unexpected end of ABI data at offset {self.current_off}: '
+				f'expected {le} bytes, got {len(self.mem) - self.current_off}'
+			)
+		res = self.mem[self.current_off : end]
+		self.current_off = end
 		return res
 
 	def indirected(self) -> 'DecoderState':
 		off = int.from_bytes(self.fetch_head(32), 'big', signed=False)
+		if off % 32 != 0:
+			raise DecodingError(f'ABI offset {off} is not 32-byte aligned')
+		if off < self.minimum_indirect_offset:
+			raise DecodingError(
+				f'ABI offset {off} points into the {self.minimum_indirect_offset}-byte head'
+			)
 
 		new_off_0 = self.current_off_0 + off
+		if new_off_0 > len(self.mem):
+			raise DecodingError(f'ABI offset {off} is outside the data')
 		return DecoderState(
 			current_off_0=new_off_0,
 			current_off=new_off_0,
@@ -113,12 +132,30 @@ class IntCodec[T: int](Codec[T]):
 		else:
 			self._name = f'uint{bits}'
 		self.signed = signed
+		self.bits = bits
 
 	def encode(self, state: EncodeState, val: T):
+		if self.signed:
+			minimum = -(1 << (self.bits - 1))
+			maximum = (1 << (self.bits - 1)) - 1
+		else:
+			minimum = 0
+			maximum = (1 << self.bits) - 1
+		if not minimum <= val <= maximum:
+			raise ValueError(f'{val} is outside the range of {self.name}')
 		state.result.extend(val.to_bytes(32, 'big', signed=self.signed))
 
 	def decode(self, state: DecoderState) -> int:  # type: ignore
-		return int.from_bytes(state.fetch_head(32), 'big', signed=self.signed)
+		val = int.from_bytes(state.fetch_head(32), 'big', signed=self.signed)
+		if self.signed:
+			minimum = -(1 << (self.bits - 1))
+			maximum = (1 << (self.bits - 1)) - 1
+		else:
+			minimum = 0
+			maximum = (1 << self.bits) - 1
+		if not minimum <= val <= maximum:
+			raise DecodingError(f'invalid sign or zero extension for {self.name}')
+		return val
 
 
 class BoolCodec(Codec[bool]):
@@ -135,10 +172,15 @@ class BoolCodec(Codec[bool]):
 		return 'bool'
 
 	def encode(self, state: EncodeState, val: bool):
+		if not isinstance(val, bool):
+			raise TypeError(f'expected bool, got {type(val).__name__}')
 		state.result.extend(int.to_bytes(1 if val else 0, 32, 'big'))
 
 	def decode(self, state: DecoderState) -> bool:
-		return state.fetch_head(32) != b'\x00' * 32
+		val = int.from_bytes(state.fetch_head(32), 'big')
+		if val not in (0, 1):
+			raise DecodingError(f'invalid ABI bool value {val}')
+		return val == 1
 
 
 class AddressCodec(Codec[Address]):
@@ -159,7 +201,8 @@ class AddressCodec(Codec[Address]):
 		state.result.extend(val.as_bytes)
 
 	def decode(self, state: DecoderState) -> Address:
-		state.fetch_head(12)
+		if state.fetch_head(12) != b'\x00' * 12:
+			raise DecodingError('address has non-zero leading padding')
 		return Address(state.fetch_head(20))
 
 
@@ -180,13 +223,15 @@ class BytesNCodec(Codec):
 		return f'bytes{self.bytes}'
 
 	def encode(self, state: EncodeState, val):
-		assert len(val) == self.bytes
+		if len(val) != self.bytes:
+			raise ValueError(f'expected {self.bytes} bytes, got {len(val)}')
 		state.result.extend(val)
 		state.result.extend(b'\x00' * (32 - self.bytes))
 
 	def decode(self, state: DecoderState) -> memoryview:
 		res = state.fetch_head(self.bytes)
-		state.fetch_head(32 - self.bytes)
+		if state.fetch_head(32 - self.bytes) != b'\x00' * (32 - self.bytes):
+			raise DecodingError(f'{self.name} has non-zero trailing padding')
 		return res
 
 
@@ -228,9 +273,16 @@ class BytesStrCodec[T: str | bytes](Codec[T]):
 		state = state.indirected()
 
 		le = int.from_bytes(state.fetch_head(32), 'big', signed=False)
-		as_bytes = state.fetch_head(le)
+		padded_length = (le + 31) // 32 * 32
+		padded = state.fetch_head(padded_length)
+		as_bytes = padded[:le]
+		if padded[le:] != b'\x00' * (padded_length - le):
+			raise DecodingError(f'{self.name} has non-zero trailing padding')
 		if issubclass(self.type, str):
-			return str(as_bytes, 'utf-8')  # type: ignore
+			try:
+				return str(as_bytes, 'utf-8')  # type: ignore
+			except UnicodeDecodeError as exc:
+				raise DecodingError('string contains invalid UTF-8') from exc
 		else:
 			return bytes(as_bytes)  # type: ignore
 
@@ -267,8 +319,11 @@ class DynArrayCodec[T](Codec[collections.abc.Sequence[T]]):
 		state = state.indirected()
 		le = int.from_bytes(state.fetch_head(32), 'big', signed=False)
 		state.current_off_0 += 32
+		state.minimum_indirect_offset = le * self.elem_encoder.size_here
+		if state.current_off + state.minimum_indirect_offset > len(state.mem):
+			raise DecodingError(f'{self.name} head is outside the data')
 		res = []
-		for i in range(le):
+		for _ in range(le):
 			res.append(self.elem_encoder.decode(state))
 		return res
 
@@ -293,6 +348,8 @@ class ArrayCodec[T, S: int](Codec[SizedArray[T, S]]):
 		return self.elem_encoder.name + f'[{self.elem_count}]'
 
 	def _encode_now(self, state: EncodeState, val: SizedArray[T, S]):
+		if len(val) != self.elem_count:
+			raise ValueError(f'expected {self.elem_count} elements, got {len(val)}')
 		if self.is_dynamic:
 			state = state.derived()
 		for v in val:
@@ -311,7 +368,10 @@ class ArrayCodec[T, S: int](Codec[SizedArray[T, S]]):
 		res: list[T] = []
 		if self.is_dynamic:
 			state = state.indirected()
-		for i in range(self.elem_count):
+		state.minimum_indirect_offset = self.elem_count * self.elem_encoder.size_here
+		if state.current_off + state.minimum_indirect_offset > len(state.mem):
+			raise DecodingError(f'{self.name} head is outside the data')
+		for _ in range(self.elem_count):
 			res.append(self.elem_encoder.decode(state))
 		return res  # type: ignore
 
@@ -353,7 +413,10 @@ class TupleCodec[*T](Codec[tuple[*T]]):
 			der.run_tails()
 
 	def encode(self, state: EncodeState, val: tuple[*T]):
-		assert len(val) == len(self.elem_encoders)
+		if len(val) != len(self.elem_encoders):
+			raise ValueError(
+				f'expected {len(self.elem_encoders)} tuple elements, got {len(val)}'
+			)
 
 		if self._is_dynamic:
 			state.put_iloc()
@@ -365,6 +428,9 @@ class TupleCodec[*T](Codec[tuple[*T]]):
 		res = []
 		if self._is_dynamic:
 			state = state.indirected()
+		state.minimum_indirect_offset = sum(e.size_here for e in self.elem_encoders)
+		if state.current_off + state.minimum_indirect_offset > len(state.mem):
+			raise DecodingError(f'{self.name} head is outside the data')
 
 		for enc in self.elem_encoders:
 			res.append(enc.decode(state))

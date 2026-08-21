@@ -36,9 +36,9 @@ pub struct ExternalMessageParams {
 #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct InternalMessageParams {
     #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
-    pub leader_timeunits_allocation: U256,
+    pub leader_time_units_allocation: U256,
     #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
-    pub validator_timeunits_allocation: U256,
+    pub validator_time_units_allocation: U256,
     #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
     pub execution_budget_per_round: U256,
     /// Per-round rotation allocations; `rotations[0]` is the initial round, the

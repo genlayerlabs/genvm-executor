@@ -39,7 +39,7 @@ pub mod raw {
 /// - 4: ilseq (illegal sequence)
 /// - 5: io
 /// - 6: forbidden (permission denied)
-/// - 7: inbalance (insufficient balance)
+/// - 7: insufficient_balance
 pub struct WasiError(pub u32);
 
 const ERROR_NAMES: &[&str] = &[
@@ -50,7 +50,7 @@ const ERROR_NAMES: &[&str] = &[
     "ilseq",
     "io",
     "forbidden",
-    "inbalance",
+    "insufficient_balance",
 ];
 
 impl WasiError {

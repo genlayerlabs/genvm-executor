@@ -59,7 +59,7 @@ impl ExtendedMessageExt for ExtendedMessage {
         let entry_leader_data = match entry_leader_data {
             None => default_entry_stage_data(),
             Some(entry_leader_data) => calldata::Value::Map(BTreeMap::from([(
-                "leaders_result".into(),
+                "leader_result".into(),
                 calldata::Value::Bytes(entry_leader_data.encode().into_bytes().to_vec()),
             )])),
         };
@@ -89,7 +89,7 @@ impl ExtendedMessageExt for ExtendedMessage {
 
 #[derive(Clone)]
 pub struct ReadToken {
-    pub mode: public_abi::StorageType,
+    pub mode: public_abi::StorageView,
     pub account: calldata::Address,
 }
 
@@ -287,7 +287,7 @@ impl Context {
         // non-`Default` state_mode reads bypass the cache, so it must not be able to
         // write (otherwise its writes would hit the cache but never be read back).
         debug_assert!(
-            data.conf.execution.state_mode == public_abi::StorageType::Default
+            data.conf.execution.state_mode == public_abi::StorageView::Default
                 || !data.conf.permissions.write_storage,
             "a VM with state_mode != Default must not have can_write_storage"
         );
@@ -495,7 +495,7 @@ fn checked_sum_le(
     a <= c_minus_b
 }
 
-use message::GLCallDeployContractArgsArgs;
+use message::EmitInternalDeployMessageArgs;
 
 #[allow(unused_variables)]
 impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
@@ -529,27 +529,30 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
         };
 
         match request {
-            gl_call::Message::EthSend {
+            gl_call::Message::EmitExternalMessage {
                 address,
                 calldata,
                 value,
-            } => self.gl_call_eth_send(address, calldata, value).await,
-            gl_call::Message::EthCall { address, calldata } => {
-                self.gl_call_eth_call(address, calldata).await
+            } => {
+                self.gl_call_emit_external_message(address, calldata, value)
+                    .await
+            }
+            gl_call::Message::ExternalCall { address, calldata } => {
+                self.gl_call_external_call(address, calldata).await
             }
             gl_call::Message::CallContract {
                 address,
                 calldata,
-                state,
+                storage_view,
                 catch_vm_error,
             } => {
-                self.gl_call_contract(address, calldata, state, catch_vm_error)
+                self.gl_call_contract(address, calldata, storage_view, catch_vm_error)
                     .await
             }
             gl_call::Message::EmitEvent { topics, blob } => {
                 self.gl_call_emit_event(topics, blob).await
             }
-            gl_call::Message::PostMessage {
+            gl_call::Message::EmitInternalMessage {
                 address,
                 calldata,
                 value,
@@ -557,10 +560,17 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 use_balance,
                 fee_params,
             } => {
-                self.gl_call_post_message(address, calldata, value, on, use_balance, fee_params)
-                    .await
+                self.gl_call_emit_internal_message(
+                    address,
+                    calldata,
+                    value,
+                    on,
+                    use_balance,
+                    fee_params,
+                )
+                .await
             }
-            gl_call::Message::DeployContract {
+            gl_call::Message::EmitInternalDeployMessage {
                 calldata,
                 code,
                 value,
@@ -569,11 +579,11 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 use_balance,
                 fee_params,
             } => {
-                self.gl_call_deploy_contract(
+                self.gl_call_emit_internal_deploy_message(
                     calldata,
                     on,
                     fee_params,
-                    GLCallDeployContractArgsArgs {
+                    EmitInternalDeployMessageArgs {
                         code,
                         value,
                         salt_nonce,
@@ -675,7 +685,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
             (true, vec_buf.as_mut_slice())
         };
 
-        if self.context.data.conf.execution.state_mode == public_abi::StorageType::Default {
+        if self.context.data.conf.execution.state_mode == public_abi::StorageView::Default {
             self.context
                 .data
                 .storage
@@ -812,9 +822,9 @@ impl Context {
             .data
             .supervisor
             .host
-            .lock_for(host::host_fns::Methods::GetBalance)
+            .lock_for(host::host_fns::Methods::GetBalanceGenWei)
             .await
-            .get_balance(address)
+            .get_balance_gen_wei(address)
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         let _ = self.data.supervisor.balances.insert(address, res);
@@ -918,21 +928,21 @@ impl ContextVFS<'_> {
             return Err(generated::types::Errno::Inval.into());
         }
 
-        let host_remaining_fuel = self
+        let host_remaining_time_fee_gen_wei = self
             .context
             .data
             .supervisor
             .host
-            .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+            .lock_for(host::host_fns::Methods::GetRemainingTimeFeeGenWei)
             .await
-            .remaining_fuel_as_gen()
+            .get_remaining_time_fee_gen_wei()
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-        let remaining_fuel_as_gen = self
+        let remaining_time_fee_gen_wei = self
             .context
             .data
             .supervisor
             .shared_data
-            .remaining_det_fuel(host_remaining_fuel)
+            .remaining_det_fuel(host_remaining_time_fee_gen_wei)
             .await;
 
         let sup = self.context.data.supervisor.clone();
@@ -944,7 +954,7 @@ impl ContextVFS<'_> {
                 .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
                     genvm_modules_interfaces::llm::Message::Prompt {
                         payload: gl_call_to_mi::prompt_payload(prompt_payload),
-                        remaining_fuel_as_gen,
+                        remaining_time_fee_gen_wei,
                     },
                 )
                 .await?;
@@ -957,9 +967,9 @@ impl ContextVFS<'_> {
             };
 
             sup.host
-                .lock_for(host::host_fns::Methods::ConsumeFuel)
+                .lock_for(host::host_fns::Methods::ConsumeTimeFeeGenWei)
                 .await
-                .consume_fuel(result.consumed_gen)?;
+                .consume_time_fee_gen_wei(result.consumed_gen)?;
             sup.shared_data.consume_det_fuel(result.consumed_gen).await;
 
             if result.consumed_gen == primitive_types::U256::MAX {
@@ -993,22 +1003,21 @@ impl ContextVFS<'_> {
             gl_call::llm_iface::PromptTemplatePayload::EqNonComparativeLeader(_)
         );
 
-        // Get remaining fuel from host
-        let host_remaining_fuel = self
+        let host_remaining_time_fee_gen_wei = self
             .context
             .data
             .supervisor
             .host
-            .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+            .lock_for(host::host_fns::Methods::GetRemainingTimeFeeGenWei)
             .await
-            .remaining_fuel_as_gen()
+            .get_remaining_time_fee_gen_wei()
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
-        let remaining_fuel_as_gen = self
+        let remaining_time_fee_gen_wei = self
             .context
             .data
             .supervisor
             .shared_data
-            .remaining_det_fuel(host_remaining_fuel)
+            .remaining_det_fuel(host_remaining_time_fee_gen_wei)
             .await;
 
         let sup = self.context.data.supervisor.clone();
@@ -1019,7 +1028,7 @@ impl ContextVFS<'_> {
                 .send::<genvm_modules_interfaces::llm::PromptAnswer, _>(
                     genvm_modules_interfaces::llm::Message::PromptTemplate {
                         payload: gl_call_to_mi::prompt_template_payload(prompt_template_payload),
-                        remaining_fuel_as_gen,
+                        remaining_time_fee_gen_wei,
                     },
                 )
                 .await?;
@@ -1027,9 +1036,9 @@ impl ContextVFS<'_> {
 
             if let Ok(PromptAnswer { consumed_gen, .. }) = &answer {
                 sup.host
-                    .lock_for(host::host_fns::Methods::ConsumeFuel)
+                    .lock_for(host::host_fns::Methods::ConsumeTimeFeeGenWei)
                     .await
-                    .consume_fuel(*consumed_gen)?;
+                    .consume_time_fee_gen_wei(*consumed_gen)?;
                 sup.shared_data.consume_det_fuel(*consumed_gen).await;
                 if *consumed_gen == primitive_types::U256::MAX {
                     return Err(rt::errors::Error::fatal_vm(abi::consts::VmError::timeout()).into());
@@ -1098,7 +1107,7 @@ impl ContextVFS<'_> {
 
                 Ok(file_fd_none())
             }
-            gl_call::TracePayload::RuntimeMicroSec => {
+            gl_call::TracePayload::RuntimeMicroseconds => {
                 let elapsed_micros = if self.context.data.conf.permissions.deterministic
                     && !self
                         .context
@@ -1229,7 +1238,7 @@ mod gl_call_to_mi {
         }
     }
 
-    pub fn wait_after_loaded(w: web_iface::WaitAfterLoaded) -> mi_web::WaitAfterLoaded {
+    pub fn post_load_wait(w: web_iface::WaitAfterLoaded) -> mi_web::WaitAfterLoaded {
         match w {
             web_iface::WaitAfterLoaded::Seconds(s) => mi_web::WaitAfterLoaded::Seconds(s),
             web_iface::WaitAfterLoaded::Millis(ms) => mi_web::WaitAfterLoaded::Millis(ms),
@@ -1240,7 +1249,7 @@ mod gl_call_to_mi {
         mi_web::RenderPayload {
             mode: render_mode(p.mode),
             url: p.url,
-            wait_after_loaded: wait_after_loaded(p.wait_after_loaded),
+            wait_after_loaded: post_load_wait(p.post_load_wait),
         }
     }
 

@@ -47,9 +47,9 @@ if os.getenv('GENLAYER_ENABLE_PROFILER', 'false') == 'true':
 import dataclasses
 import typing
 
+import genlayer._internal.entry_calldata as entry_calldata
 import genlayer._internal.on_chain.gl_call as gl_call
 import genlayer._internal.on_chain.storage  # noqa: F401  # initialize Root.MANAGER
-import genlayer._internal.reflect as reflect
 import genlayer.calldata as calldata
 import genlayer.message as gl_message
 import genlayer.vm as _vm
@@ -74,7 +74,9 @@ def _handle_main() -> typing.NoReturn:
 
 	@dataclasses.dataclass
 	class MethodResolverInfo:
-		cd: dict
+		selector: str
+		args: list
+		kwargs: dict
 		msg: gl_message.MessageRawType
 		contract_type: type[Contract]
 
@@ -97,7 +99,7 @@ def _handle_main() -> typing.NoReturn:
 
 			return meth
 		# now it is not init
-		match ctx.cd.get('', ''):
+		match ctx.selector:
 			case ABI.SpecialMethod.GET_SCHEMA:
 				_give_result(ctx.contract_type.__get_schema__)
 			case '':
@@ -111,9 +113,7 @@ def _handle_main() -> typing.NoReturn:
 					else:
 						contract = root_slot.get_contract_instance(ctx.contract_type)
 						_give_result(
-							lambda: contract.__handle_undefined_method__(
-								'', ctx.cd.get('args', []), ctx.cd.get('kwargs', {})
-							)
+							lambda: contract.__handle_undefined_method__('', ctx.args, ctx.kwargs)
 						)
 				else:
 					return ctx.contract_type.__receive__
@@ -132,7 +132,7 @@ def _handle_main() -> typing.NoReturn:
 				contract = root_slot.get_contract_instance(ctx.contract_type)
 				_give_result(
 					lambda: contract.__handle_undefined_method__(
-						ctx.cd.get('', ''), ctx.cd.get('args', []), ctx.cd.get('kwargs', {})
+						ctx.selector, ctx.args, ctx.kwargs
 					)
 				)
 
@@ -144,28 +144,15 @@ def _handle_main() -> typing.NoReturn:
 		raise Exception('no contract defined')
 
 	cd_raw = calldata.decode(gl_message.raw['entry_data'])
-	if not isinstance(cd_raw, dict):
-		raise TypeError(
-			f'invalid calldata, expected dict got `{reflect.repr_type(cd_raw)}`'
-		)
+	selector, args, kwargs = entry_calldata.normalize(cd_raw)
 
 	if gl_message.raw.get('is_init'):
 		root_slot.lock_default()
 
-	ctx = MethodResolverInfo(cd_raw, gl_message.raw, __known_contract__)
+	ctx = MethodResolverInfo(selector, args, kwargs, gl_message.raw, __known_contract__)
 	meth2call = resolve_method(ctx)
 
 	contract_instance = root_slot.get_contract_instance(__known_contract__)
-	args = cd_raw.get('args', [])
-	if not isinstance(args, list):
-		raise TypeError(
-			f'invalid calldata, expected `args` to be list, got `{reflect.repr_type(args)}`'
-		)
-	kwargs = cd_raw.get('kwargs', {})
-	if not isinstance(kwargs, dict):
-		raise TypeError(
-			f'invalid calldata, expected `kwargs` to be dict, got `{reflect.repr_type(kwargs)}`'
-		)
 	_give_result(functools.partial(meth2call, contract_instance, *args, **kwargs))
 
 

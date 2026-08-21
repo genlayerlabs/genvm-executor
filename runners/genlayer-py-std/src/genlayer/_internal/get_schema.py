@@ -134,7 +134,7 @@ def _get_params(m: types.FunctionType, *, is_ctor: bool) -> dict:
 		for name, par in signature.parameters.items():
 			if is_first:
 				if name != 'self':
-					raise Exception('missing self')
+					raise TypeError('contract method is missing self')
 				is_first = False
 				continue
 			match str(par.kind):
@@ -146,6 +146,8 @@ def _get_params(m: types.FunctionType, *, is_ctor: bool) -> dict:
 					raise TypeError(
 						f'unsupported parameter type {kind} {type(kind)} for `{name}: {par}`'
 					)
+		if is_first:
+			raise TypeError('contract method is missing self')
 
 		ret = {
 			'params': params,

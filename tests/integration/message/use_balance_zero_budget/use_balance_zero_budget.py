@@ -8,8 +8,8 @@ from genlayer.vm.public_abi import Permissions
 # metered normally rather than rejected -- and, in particular, must not abort
 # the transaction while evaluating the fee expression.
 _PARAMS = gl.chain.InternalMessageParams(
-	leader_timeunits_allocation=5,
-	validator_timeunits_allocation=5,
+	leader_time_units_allocation=5,
+	validator_time_units_allocation=5,
 	execution_budget_per_round=0,
 	rotations=[4, 4, 4, 4, 4],
 	max_price_gen_per_time_unit=2,

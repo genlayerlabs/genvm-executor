@@ -2,8 +2,9 @@ import typing
 from functools import partial
 
 import genlayer.evm as genvm_eth
+import pytest
 from genlayer.evm.calldata import MethodEncoder
-from genlayer.types import Address
+from genlayer.types import Address, u256
 
 
 def generate_test(
@@ -20,13 +21,14 @@ def generate_test(
 
 def test_view_send():
 	tst = []
+	transfers = []
 	generator = partial(generate_test, dump_to=tst)
 
 	@genvm_eth.contract_generator(
 		generator,
 		generator,
 		lambda x: 0,
-		lambda p, d: None,
+		lambda p, d: transfers.append((p.address, d)),
 	)
 	class MyContract:
 		class View:
@@ -50,3 +52,10 @@ def test_view_send():
 		addr,
 		b'\xd4s\xa8\xed\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03abc\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
 	]
+
+	contr.emit_transfer(typing.cast(u256, 7))
+	assert transfers == [(addr, {'value': 7})]
+	with pytest.raises(TypeError):
+		contr.emit_transfer()  # type: ignore[call-arg]
+	with pytest.raises(TypeError):
+		contr.emit_transfer(7, on='finalized')  # type: ignore[call-arg]

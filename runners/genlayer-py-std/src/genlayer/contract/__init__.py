@@ -15,7 +15,7 @@ __all__ = (
 	'get_at',
 	'Proxy',
 	'GenVMContractDeclaration',
-	'StorageType',
+	'StorageView',
 	'ON',
 )
 
@@ -48,7 +48,8 @@ def _make_calldata_obj(method, args, kwargs) -> calldata.Encodable:
 	return ret
 
 
-from genlayer.vm.public_abi import StorageType  # noqa: E402
+from genlayer.vm import VMError  # noqa: E402
+from genlayer.vm.public_abi import StorageView  # noqa: E402
 
 
 class _ContractAtViewMethod:
@@ -58,7 +59,7 @@ class _ContractAtViewMethod:
 		self,
 		name: str,
 		addr: Address,
-		state: StorageType,
+		state: StorageView,
 		catch_vm_error: bool = False,
 	):
 		self._addr = addr
@@ -66,22 +67,31 @@ class _ContractAtViewMethod:
 		self._state = state
 		self._catch_vm_error = catch_vm_error
 
-	def __call__(self, *args, **kwargs) -> typing.Any:
+	def __call__(self, *args, **kwargs) -> calldata.Decoded | VMError:
 		return self.lazy(*args, **kwargs).get()
 
-	def lazy(self, *args, **kwargs) -> Lazy[typing.Any]:
-		from genlayer.vm import _decode_sub_vm_result
+	def lazy(self, *args, **kwargs) -> Lazy[calldata.Decoded | VMError]:
+		from genlayer.vm import (
+			_decode_sub_vm_result,
+			_decode_sub_vm_result_catching_vm_error,
+		)
+
+		decoder = (
+			_decode_sub_vm_result_catching_vm_error
+			if self._catch_vm_error
+			else _decode_sub_vm_result
+		)
 
 		return gl_call_generic(
 			{
 				'CallContract': {
 					'address': self._addr,
 					'calldata': _make_calldata_obj(self._name, args, kwargs),
-					'state': self._state.value,
+					'storage_view': self._state.value,
 					'catch_vm_error': self._catch_vm_error,
 				}
 			},
-			_decode_sub_vm_result,
+			decoder,
 		)
 
 
@@ -115,7 +125,7 @@ class _ContractAtEmitMethod:
 			message['use_balance'] = True
 		if self._fee_params is not None:
 			message['fee_params'] = self._fee_params
-		wasi.gl_call(calldata.encode({'PostMessage': message}))
+		wasi.gl_call(calldata.encode({'EmitInternalMessage': message}))
 
 
 @typing.runtime_checkable
@@ -130,12 +140,36 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 	:param TSend: Type representing available write methods
 	"""
 
+	@typing.overload
 	def view(
 		self,
 		*,
-		state: StorageType = StorageType.LATEST_DECIDED,
+		state: StorageView = StorageView.LATEST_DECIDED,
+		catch_vm_error: typing.Literal[False] = False,
+	) -> TView: ...
+
+	@typing.overload
+	def view(
+		self,
+		*,
+		state: StorageView = StorageView.LATEST_DECIDED,
+		catch_vm_error: typing.Literal[True],
+	) -> '_CaughtViewMethods': ...
+
+	@typing.overload
+	def view(
+		self,
+		*,
+		state: StorageView = StorageView.LATEST_DECIDED,
+		catch_vm_error: bool,
+	) -> TView | '_CaughtViewMethods': ...
+
+	def view(
+		self,
+		*,
+		state: StorageView = StorageView.LATEST_DECIDED,
 		catch_vm_error: bool = False,
-	) -> TView:
+	) -> TView | '_CaughtViewMethods':
 		"""
 		Get a namespace for calling view methods.
 
@@ -182,7 +216,7 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 	) -> None:
 		"""
 		Emit a simple value transfer without calling any method. Receiver may catch it with
-		py:func:`genlayer.gl.Contract.__receive__` method, so users may need to supply non-zero gas
+		:py:meth:`Contract.__receive__` method, so users may need to supply non-zero gas
 
 		:param value: Amount of native tokens to transfer
 		:param on: When transaction message should be emitted to consensus
@@ -212,6 +246,12 @@ class ErasedMethods(typing.Protocol):
 		...
 
 
+class _CaughtViewMethods(typing.Protocol):
+	def __getattr__(
+		self, name: str
+	) -> typing.Callable[..., calldata.Decoded | VMError]: ...
+
+
 class _ContractAt(Proxy[ErasedMethods, ErasedMethods]):
 	__slots__ = ('_address',)
 
@@ -224,12 +264,36 @@ class _ContractAt(Proxy[ErasedMethods, ErasedMethods]):
 	def address(self) -> Address:
 		return self._address
 
+	@typing.overload
 	def view(
 		self,
 		*,
-		state: StorageType = StorageType.LATEST_DECIDED,
+		state: StorageView = StorageView.LATEST_DECIDED,
+		catch_vm_error: typing.Literal[False] = False,
+	) -> ErasedMethods: ...
+
+	@typing.overload
+	def view(
+		self,
+		*,
+		state: StorageView = StorageView.LATEST_DECIDED,
+		catch_vm_error: typing.Literal[True],
+	) -> _CaughtViewMethods: ...
+
+	@typing.overload
+	def view(
+		self,
+		*,
+		state: StorageView = StorageView.LATEST_DECIDED,
+		catch_vm_error: bool,
+	) -> ErasedMethods | _CaughtViewMethods: ...
+
+	def view(
+		self,
+		*,
+		state: StorageView = StorageView.LATEST_DECIDED,
 		catch_vm_error: bool = False,
-	) -> ErasedMethods:
+	) -> ErasedMethods | _CaughtViewMethods:
 		"""
 		:param catch_vm_error: return the callee's VM error instead of re-raising
 			it. A fatal one is never caught.
@@ -280,7 +344,7 @@ def get_at(address: Address, /) -> Proxy:
 
 	Example:
 		>>> addr = Address('0x1234567890abcdef...')
-		>>> contract = get_contract_at(addr)
+		>>> contract = get_at(addr)
 		>>> result = contract.view().some_view_method(arg1, arg2)
 		>>> contract.emit(value=100).some_write_method(arg1)
 	"""
@@ -483,7 +547,7 @@ def deploy(
 		message['use_balance'] = True
 	if fee_params is not None:
 		message['fee_params'] = fee_params
-	wasi.gl_call(calldata.encode({'DeployContract': message}))
+	wasi.gl_call(calldata.encode({'EmitInternalDeployMessage': message}))
 
 	if salt_nonce == 0:
 		return None
@@ -506,9 +570,9 @@ class Contract(IAccount):
 	generates storage management code and registers itself as the main contract.
 
 	Example:
-		>>> import genlayer.gl as gl
+		>>> import genlayer as gl
 		>>>
-		>>> class MyContract(gl.Contract):
+		>>> class MyContract(gl.contract.Contract):
 		>>>     def __init__(self, initial_value: int):
 		>>>         self.value = initial_value
 		>>>
@@ -568,7 +632,7 @@ class Contract(IAccount):
 		Handle calls to undefined methods.
 
 		This method is called when a message is sent to the contract with a method
-		name that doesn't exist. If it is overriden, it must be either a ``gl.public.write``
+		name that doesn't exist. If it is overridden, it must be either a ``gl.public.write``
 		or ``gl.public.write.payable`` method.
 
 		:param method_name: Name of the method that was called
@@ -577,7 +641,7 @@ class Contract(IAccount):
 		:raises NotImplementedError: Must be implemented by subclasses if used
 
 		Example:
-			>>> class MyContract(gl.Contract):
+			>>> class MyContract(gl.contract.Contract):
 			>>>     @gl.public.write
 			>>>     def __handle_undefined_method__(self, method_name: str, args: list, kwargs: dict):
 			>>>         if method_name == "fallback_method":
@@ -598,7 +662,7 @@ class Contract(IAccount):
 		:raises NotImplementedError: Must be implemented by subclasses if used
 
 		Example:
-			>>> class MyContract(gl.Contract):
+			>>> class MyContract(gl.contract.Contract):
 			>>>     @gl.public.write.payable
 			>>>     def __receive__(self):
 			>>> # Handle incoming transfers

@@ -1,13 +1,20 @@
 import pytest
-from genlayer.storage import DynArray
+from genlayer.storage import DynArray, allow
 from genlayer.storage._internal.generate import _BuilderCtx, _storage_build
 from genlayer.storage.core import ROOT_SLOT_ID, InmemManager
+from genlayer.types import u8, u32
 
 from .common import SameOp
 
 
 def new_vec():
 	td = _storage_build(_BuilderCtx.empty(), DynArray[str])
+	man = InmemManager()
+	return td.get(man.get_store_slot(ROOT_SLOT_ID), 0)
+
+
+def new_typed_vec(typ):
+	td = _storage_build(_BuilderCtx.empty(), DynArray[typ])
 	man = InmemManager()
 	return td.get(man.get_store_slot(ROOT_SLOT_ID), 0)
 
@@ -173,6 +180,24 @@ def test_insert(idx: int):
 	same_iter(lx, r)
 
 
+@pytest.mark.parametrize('idx', [-100, -10, 10, 100])
+def test_insert_clamps_index(idx: int):
+	lx = new_vec()
+	r = ['0', '1', '2']
+	lx.assign(r)
+
+	lx.insert(idx, 'test')
+	r.insert(idx, 'test')
+
+	assert list(lx) == r
+
+
+def test_insert_into_empty():
+	lx = new_vec()
+	lx.insert(0, 'test')
+	assert list(lx) == ['test']
+
+
 def test_init_raises():
 	with pytest.raises(TypeError):
 		DynArray()
@@ -207,8 +232,89 @@ def test_append_new_get():
 
 def test_pop_empty():
 	lx = new_vec()
-	with pytest.raises(Exception, match="can't pop from empty array"):
+	with pytest.raises(IndexError):
 		lx.pop()
+
+
+@pytest.mark.parametrize('idx', [0, 1, -1])
+def test_pop_returns_indexed_element(idx: int):
+	lx = new_vec()
+	lx.assign(['a', 'b', 'c'])
+	r = ['a', 'b', 'c']
+
+	assert lx.pop(idx) == r.pop(idx)
+	assert list(lx) == r
+
+
+class Index:
+	def __init__(self, value: int):
+		self.value = value
+
+	def __index__(self) -> int:
+		return self.value
+
+
+def test_insert_and_pop_accept_index_protocol():
+	lx = new_vec()
+	lx.assign(['a', 'c'])
+	lx.insert(Index(1), 'b')
+	assert lx.pop(Index(1)) == 'b'
+	assert list(lx) == ['a', 'c']
+
+
+@pytest.mark.parametrize('idx', [3, -4])
+def test_pop_out_of_range(idx: int):
+	lx = new_vec()
+	lx.assign(['a', 'b', 'c'])
+	with pytest.raises(IndexError):
+		lx.pop(idx)
+
+
+@allow
+class Box:
+	value: u32
+
+
+def test_popped_storage_value_remains_a_view():
+	lx = new_typed_vec(Box)
+	item = lx.append_new_get()
+	item.value = 1
+
+	popped = lx.pop()
+	reused = lx.append_new_get()
+	reused.value = 2
+
+	assert popped.value == 2
+
+
+def test_popped_non_last_storage_value_tracks_shifted_slot():
+	lx = new_typed_vec(Box)
+	for value in [1, 2]:
+		lx.append_new_get().value = value
+
+	popped = lx.pop(0)
+
+	assert popped.value == 2
+
+
+def test_failed_append_exposes_new_element():
+	lx = new_typed_vec(u8)
+	lx.append(1)
+
+	with pytest.raises(OverflowError):
+		lx.append(256)
+
+	assert list(lx) == [1, 0]
+
+
+def test_failed_assign_leaves_array_empty():
+	lx = new_typed_vec(u8)
+	lx.assign([3, 4])
+
+	with pytest.raises(OverflowError):
+		lx.assign([1, 256])
+
+	assert list(lx) == []
 
 
 def test_repr():

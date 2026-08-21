@@ -1,2 +1,2 @@
-A caught UserError('vm error: exit_code 3')
+A got VMError("exit_code 3")
 executed with `VMError("exit_code 3")`

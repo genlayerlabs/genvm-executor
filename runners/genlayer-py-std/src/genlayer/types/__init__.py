@@ -422,14 +422,24 @@ class Address:
 			self._as_hex = val.as_hex
 			return
 		if isinstance(val, str):
-			if len(val) == 2 + Address.SIZE * 2 and val.startswith('0x'):
-				val = bytes.fromhex(val[2:])
-			elif len(val) > Address.SIZE:
-				val = base64.b64decode(val)
-		else:
+			if val.startswith('0x'):
+				if len(val) != 2 + Address.SIZE * 2:
+					raise ValueError(f'invalid hexadecimal address length {len(val)}')
+				try:
+					val = bytes.fromhex(val[2:])
+				except ValueError as exc:
+					raise ValueError('invalid hexadecimal address') from exc
+			else:
+				try:
+					val = base64.b64decode(val, validate=True)
+				except ValueError as exc:
+					raise ValueError('invalid base64 address') from exc
+		elif isinstance(val, collections.abc.Buffer):
 			val = bytes(val)
-		if not isinstance(val, bytes) or len(val) != Address.SIZE:
-			raise Exception(f'invalid address {val}')
+		else:
+			raise TypeError(f'unsupported address type {type(val).__name__}')
+		if len(val) != Address.SIZE:
+			raise ValueError(f'invalid address length {len(val)}')
 		self._as_bytes = val
 
 	@property
@@ -478,37 +488,41 @@ class Address:
 	def as_int(self) -> u160:
 		"""
 		>>> Address('0x5b38da6a701c568545dcfcb03fcb875f56beddc4').as_int
-		1123907236495940146162314350759402901750813440091
+		520786028573371803640530888255888666801131675076
 		>>> hex(Address('0x5b38da6a701c568545dcfcb03fcb875f56beddc4').as_int)
-		'0xc4ddbe565f87cb3fb0fcdc4585561c706ada385b'
+		'0x5b38da6a701c568545dcfcb03fcb875f56beddc4'
 
 
-		:returns: int representation of an address (unsigned little endian)
+		:returns: int representation of an address (unsigned big endian)
 		"""
-		return int.from_bytes(self._as_bytes, 'little', signed=False)
+		return int.from_bytes(self._as_bytes, 'big', signed=False)
 
 	def __hash__(self):
 		return hash(self._as_bytes)
 
 	def __lt__(self, r):
-		assert isinstance(r, Address)
+		if not isinstance(r, Address):
+			return NotImplemented
 		return self._as_bytes < r._as_bytes
 
 	def __le__(self, r):
-		assert isinstance(r, Address)
+		if not isinstance(r, Address):
+			return NotImplemented
 		return self._as_bytes <= r._as_bytes
 
 	def __eq__(self, r):
 		if not isinstance(r, Address):
-			return False
+			return NotImplemented
 		return self._as_bytes == r._as_bytes
 
 	def __ge__(self, r):
-		assert isinstance(r, Address)
+		if not isinstance(r, Address):
+			return NotImplemented
 		return self._as_bytes >= r._as_bytes
 
 	def __gt__(self, r):
-		assert isinstance(r, Address)
+		if not isinstance(r, Address):
+			return NotImplemented
 		return self._as_bytes > r._as_bytes
 
 	def __repr__(self) -> str:

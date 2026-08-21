@@ -55,6 +55,9 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 	def clear(self):
 		"""
 		Remove all entries from the map.
+
+		The root is cleared before the backing arrays. If a storage write fails,
+		the map may already appear empty while unreachable backing data remains.
 		"""
 		self._root = 0
 		self._slots.clear()
@@ -178,6 +181,9 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 
 		:param k: key to remove
 		:raises KeyError: when key is not found
+
+		Key comparisons finish before mutation starts. A later storage error can
+		leave the tree only partially updated; storage errors must not be caught.
 		"""
 		seq, is_less = self._find_seq(k)
 		# not found
@@ -313,6 +319,10 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 
 		:param k: key
 		:param v: value to associate with the key
+
+		Overwriting an entry has the value encoder's exception safety. During an
+		insertion, an encoding or storage error can leave an allocated node linked
+		and partially initialized; such errors must not be caught.
 		"""
 
 		def setter(node: _Node[K, V]):
@@ -327,6 +337,9 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 	def compute_if_absent(self, k: K, supplier: typing.Callable[[], V], /) -> V:
 		"""
 		:returns: Value associated with `k` if it is present, otherwise get's new value from the supplier, stores it at `k` and returns
+
+		The supplier is called before storage is mutated. If encoding or storing
+		the supplied value fails, insertion can remain partially applied.
 		"""
 		res: list[V] = []
 
@@ -346,6 +359,8 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 
 		:param k: key to look up or insert
 		:returns: value associated with the key
+
+		If insertion fails during a storage write, it can remain partially applied.
 		"""
 		return self._get_set(
 			k,
@@ -367,18 +382,20 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 			return slot.value
 		# patch root
 		if len(seq) == 1:
+			value = does_not_exist()
 			idx, cur_node = self._alloc_slot()
 			self._root = idx + 1
-			cur_node.__init__(k, does_not_exist())
+			cur_node.__init__(k, value)
 			return cur_node.value
 		# alloc new
+		value = does_not_exist()
 		new_idx, new_slot = self._alloc_slot()
 		if is_less:
 			self._slots[seq[-2] - 1].left = new_idx + 1
 		else:
 			self._slots[seq[-2] - 1].right = new_idx + 1
 		seq[-1] = new_idx + 1
-		new_slot.__init__(k, does_not_exist())
+		new_slot.__init__(k, value)
 		# rebalance
 		while len(seq) >= 2:
 			cur = seq[-1]
@@ -470,6 +487,9 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 
 		:param arr: mapping to copy entries from
 		:returns: self
+
+		The old map is cleared first. If iteration or insertion fails, entries
+		inserted before the error remain visible.
 		"""
 		self.clear()
 		for k, v in arr.items():

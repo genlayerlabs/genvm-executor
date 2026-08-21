@@ -5,8 +5,8 @@ from genlayer.vm.public_abi import Permissions
 # leader/validator timeunits (5) are below the node's minTimeUnitsPerPhase floor
 # (30, set in the jsonnet), so metering rejects the emission.
 _PARAMS = gl.chain.InternalMessageParams(
-	leader_timeunits_allocation=5,
-	validator_timeunits_allocation=5,
+	leader_time_units_allocation=5,
+	validator_time_units_allocation=5,
 	execution_budget_per_round=1024,
 	rotations=[4, 4, 4, 4, 4],
 	max_price_gen_per_time_unit=2,

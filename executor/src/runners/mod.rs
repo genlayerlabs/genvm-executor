@@ -40,21 +40,21 @@ pub enum ChainState {
 }
 
 impl ChainState {
-    pub fn for_vm(is_init: bool, state: crate::public_abi::StorageType) -> Self {
+    pub fn for_vm(is_init: bool, state: crate::public_abi::StorageView) -> Self {
         if is_init {
             ChainState::Deploy
         } else {
             match state {
-                crate::public_abi::StorageType::LatestFinalized => ChainState::Finalized,
+                crate::public_abi::StorageView::LatestFinalized => ChainState::Finalized,
                 _ => ChainState::Decided,
             }
         }
     }
 
-    pub fn host_storage_type(self) -> Option<crate::public_abi::StorageType> {
+    pub fn host_storage_type(self) -> Option<crate::public_abi::StorageView> {
         match self {
-            ChainState::Decided => Some(crate::public_abi::StorageType::LatestDecided),
-            ChainState::Finalized => Some(crate::public_abi::StorageType::LatestFinalized),
+            ChainState::Decided => Some(crate::public_abi::StorageView::LatestDecided),
+            ChainState::Finalized => Some(crate::public_abi::StorageView::LatestFinalized),
             ChainState::Deploy => None,
         }
     }

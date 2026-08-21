@@ -42,8 +42,8 @@ fn convert_internal_message_params_to_sdk(
     params: &genvm_modules_interfaces::fees::InternalMessageParams,
 ) -> abi::fees::InternalMessageParams {
     abi::fees::InternalMessageParams {
-        leader_timeunits_allocation: params.leader_timeunits_allocation,
-        validator_timeunits_allocation: params.validator_timeunits_allocation,
+        leader_time_units_allocation: params.leader_timeunits_allocation,
+        validator_time_units_allocation: params.validator_timeunits_allocation,
         execution_budget_per_round: params.execution_budget_per_round,
         rotations: params.rotations.clone(),
         max_price_gen_per_time_unit: params.max_price_gen_per_time_unit,
@@ -99,7 +99,7 @@ async fn consume_message_fee_internal(
                 return Err(internal_trap(rt::errors::Error::vm(
                     abi::consts::VmError::out_of()
                         .message_fee()
-                        .node()
+                        .allocation_budget()
                         .internal(),
                 )));
             }
@@ -132,7 +132,7 @@ async fn consume_message_fee_internal(
         } => {
             // `value + fee_total` can itself overflow U256.
             let Some(total) = value.checked_add(fee_total) else {
-                return Err(generated::types::Errno::Inbalance.into());
+                return Err(generated::types::Errno::InsufficientBalance.into());
             };
             if !checked_sum_le(total, messages_value_decremented, my_balance) {
                 log_warn!(
@@ -141,7 +141,7 @@ async fn consume_message_fee_internal(
                     my_balance:cd = my_balance;
                     "insufficient balance to fund balance-funded message fee"
                 );
-                return Err(generated::types::Errno::Inbalance.into());
+                return Err(generated::types::Errno::InsufficientBalance.into());
             }
 
             if !shared_data
@@ -195,7 +195,7 @@ async fn consume_message_fee_external(
         return Err(internal_trap(rt::errors::Error::vm(
             abi::consts::VmError::out_of()
                 .message_fee()
-                .node()
+                .allocation_budget()
                 .external(),
         )));
     }
@@ -249,7 +249,7 @@ pub(super) const FEE_PARAM_PRICE_BITS: usize = 96;
 pub(super) const FEE_PARAM_COUNT_BITS: usize = 32;
 
 /// Validates the balance-funded fee fields (`use_balance` / `fee_params`) shared
-/// by `PostMessage` and `DeployContract`. Returns the fee params
+/// by `EmitInternalMessage` and `EmitInternalDeployMessage`. Returns the fee params
 /// to meter against the contract balance when `use_balance` is set, or `None`
 /// for the ordinary allocation-matched path.
 ///
@@ -294,8 +294,8 @@ pub(super) fn validate_balance_fee(
                 || params.storage_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
                 || params.receipt_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
                 || params.execution_budget_per_round.bits() > FEE_PARAM_PRICE_BITS
-                || params.leader_timeunits_allocation.bits() > FEE_PARAM_COUNT_BITS
-                || params.validator_timeunits_allocation.bits() > FEE_PARAM_COUNT_BITS
+                || params.leader_time_units_allocation.bits() > FEE_PARAM_COUNT_BITS
+                || params.validator_time_units_allocation.bits() > FEE_PARAM_COUNT_BITS
                 || params
                     .rotations
                     .iter()
@@ -314,7 +314,7 @@ pub(super) fn validate_balance_fee(
     }
 }
 
-pub(super) struct GLCallDeployContractArgsArgs {
+pub(super) struct EmitInternalDeployMessageArgs {
     pub code: bytes::Bytes,
     pub value: primitive_types::U256,
     pub salt_nonce: primitive_types::U256,
@@ -322,7 +322,7 @@ pub(super) struct GLCallDeployContractArgsArgs {
 }
 
 impl ContextVFS<'_> {
-    pub(super) async fn gl_call_eth_send(
+    pub(super) async fn gl_call_emit_external_message(
         &mut self,
         address: calldata::Address,
         calldata: bytes::Bytes,
@@ -346,7 +346,7 @@ impl ContextVFS<'_> {
                 self.context.data.accumulator.messages_value_decremented,
                 my_balance,
             ) {
-                return Err(generated::types::Errno::Inbalance.into());
+                return Err(generated::types::Errno::InsufficientBalance.into());
             }
         }
 
@@ -375,7 +375,9 @@ impl ContextVFS<'_> {
             );
 
             return Err(internal_trap(rt::errors::Error::vm(
-                abi::consts::VmError::fee().no_matching_node().external(),
+                abi::consts::VmError::fee()
+                    .no_matching_allocation()
+                    .external(),
             )));
         };
 
@@ -398,7 +400,7 @@ impl ContextVFS<'_> {
             .data
             .accumulator
             .emissions
-            .push(domain::ExecutionEmission::EthSend {
+            .push(domain::ExecutionEmission::ExternalMessage {
                 address,
                 calldata,
                 value,
@@ -486,7 +488,7 @@ impl ContextVFS<'_> {
             .data
             .accumulator
             .emissions
-            .push(domain::ExecutionEmission::EmitEvent {
+            .push(domain::ExecutionEmission::Event {
                 topics: real_topics,
                 blob,
                 storage_fee,
@@ -494,7 +496,7 @@ impl ContextVFS<'_> {
 
         Ok(file_fd_none())
     }
-    pub(super) async fn gl_call_post_message(
+    pub(super) async fn gl_call_emit_internal_message(
         &mut self,
         address: calldata::Address,
         calldata: abi::entry::MainCallData,
@@ -507,14 +509,14 @@ impl ContextVFS<'_> {
             recipient = address,
             on:? = on,
             use_balance = use_balance;
-            "PostMessage dispatched"
+            "EmitInternalMessage dispatched"
         );
         if !self.context.data.conf.permissions.deterministic {
-            log_debug!("PostMessage rejected: non-deterministic context (Forbidden)");
+            log_debug!("EmitInternalMessage rejected: non-deterministic context (Forbidden)");
             return Err(generated::types::Errno::Forbidden.into());
         }
         if !self.context.data.conf.permissions.send_messages {
-            log_debug!("PostMessage rejected: can_send_messages=false (Forbidden)");
+            log_debug!("EmitInternalMessage rejected: can_send_messages=false (Forbidden)");
             return Err(generated::types::Errno::Forbidden.into());
         }
 
@@ -567,11 +569,8 @@ impl ContextVFS<'_> {
             let metered_fee = fees.message_fee.reported_fee();
 
             // Empty subtree: use_balance nesting is fail-closed on-chain.
-            self.context
-                .data
-                .accumulator
-                .emissions
-                .push(domain::ExecutionEmission::PostMessage {
+            self.context.data.accumulator.emissions.push(
+                domain::ExecutionEmission::InternalMessage {
                     call_key,
                     address,
                     calldata,
@@ -582,7 +581,8 @@ impl ContextVFS<'_> {
                     fee_params: params,
                     subtree: bytes::Bytes::new(),
                     use_balance: true,
-                });
+                },
+            );
 
             self.context.data.accumulator.messages_value_decremented = messages_value_decremented
                 .saturating_add(value)
@@ -602,7 +602,7 @@ impl ContextVFS<'_> {
                 self.context.data.accumulator.messages_value_decremented,
                 my_balance,
             ) {
-                return Err(generated::types::Errno::Inbalance.into());
+                return Err(generated::types::Errno::InsufficientBalance.into());
             }
         }
 
@@ -629,7 +629,9 @@ impl ContextVFS<'_> {
             );
 
             return Err(internal_trap(rt::errors::Error::vm(
-                abi::consts::VmError::fee().no_matching_node().internal(),
+                abi::consts::VmError::fee()
+                    .no_matching_allocation()
+                    .internal(),
             )));
         };
 
@@ -637,7 +639,7 @@ impl ContextVFS<'_> {
             recipient = address,
             call_key:? = call_key,
             on:? = on;
-            "PostMessage matched fee allocation node"
+            "EmitInternalMessage matched fee allocation node"
         );
 
         let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
@@ -669,7 +671,7 @@ impl ContextVFS<'_> {
             .data
             .accumulator
             .emissions
-            .push(domain::ExecutionEmission::PostMessage {
+            .push(domain::ExecutionEmission::InternalMessage {
                 call_key,
                 address,
                 calldata,
@@ -685,7 +687,7 @@ impl ContextVFS<'_> {
         log_debug!(
             depth = self.context.data.depth(),
             emissions_total = self.context.data.accumulator.emissions.len();
-            "PostMessage emission pushed to accumulator"
+            "EmitInternalMessage emission pushed to accumulator"
         );
 
         self.context.data.accumulator.messages_value_decremented = self
@@ -697,14 +699,14 @@ impl ContextVFS<'_> {
 
         Ok(file_fd_none())
     }
-    pub(super) async fn gl_call_deploy_contract(
+    pub(super) async fn gl_call_emit_internal_deploy_message(
         &mut self,
         calldata: abi::entry::MainDeployData,
         on: gl_call::On,
         fee_params: Option<abi::fees::InternalMessageParams>,
-        args: GLCallDeployContractArgsArgs,
+        args: EmitInternalDeployMessageArgs,
     ) -> Result<generated::types::Fd, generated::types::Error> {
-        let GLCallDeployContractArgsArgs {
+        let EmitInternalDeployMessageArgs {
             code,
             value,
             salt_nonce,
@@ -762,7 +764,7 @@ impl ContextVFS<'_> {
             let metered_fee = fees.message_fee.reported_fee();
 
             self.context.data.accumulator.emissions.push(
-                domain::ExecutionEmission::DeployContract {
+                domain::ExecutionEmission::InternalDeployMessage {
                     calldata,
                     code,
                     value,
@@ -794,7 +796,7 @@ impl ContextVFS<'_> {
                 self.context.data.accumulator.messages_value_decremented,
                 my_balance,
             ) {
-                return Err(generated::types::Errno::Inbalance.into());
+                return Err(generated::types::Errno::InsufficientBalance.into());
             }
         }
 
@@ -821,7 +823,9 @@ impl ContextVFS<'_> {
             );
 
             return Err(internal_trap(rt::errors::Error::vm(
-                abi::consts::VmError::fee().no_matching_node().internal(),
+                abi::consts::VmError::fee()
+                    .no_matching_allocation()
+                    .internal(),
             )));
         };
 
@@ -851,11 +855,8 @@ impl ContextVFS<'_> {
         )
         .await?;
 
-        self.context
-            .data
-            .accumulator
-            .emissions
-            .push(domain::ExecutionEmission::DeployContract {
+        self.context.data.accumulator.emissions.push(
+            domain::ExecutionEmission::InternalDeployMessage {
                 calldata,
                 code,
                 value,
@@ -866,7 +867,8 @@ impl ContextVFS<'_> {
                 fee_params,
                 subtree,
                 use_balance: false,
-            });
+            },
+        );
 
         self.context.data.accumulator.messages_value_decremented = self
             .context

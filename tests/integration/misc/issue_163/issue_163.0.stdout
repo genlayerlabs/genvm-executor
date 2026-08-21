@@ -1,2 +1,2 @@
-Is right the same storage type? `TreeMap` <- `dict`
+incompatible storage type: `TreeMap` <- `dict`
 executed with `Return(null)`

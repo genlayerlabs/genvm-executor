@@ -3,8 +3,8 @@ import genlayer as gl
 from genlayer.vm.public_abi import Permissions
 
 _PARAMS = gl.chain.InternalMessageParams(
-	leader_timeunits_allocation=5,
-	validator_timeunits_allocation=5,
+	leader_time_units_allocation=5,
+	validator_time_units_allocation=5,
 	execution_budget_per_round=1024,
 	rotations=[4, 4, 4, 4, 4],
 	# Small GEN cap keeps the metered fee tractable (fee = cap * consensusTerm +
@@ -25,7 +25,7 @@ class Contract(gl.contract.Contract):
 	def emit_normal(self):
 		# The tx carries an empty message-fee allocation tree, so the ordinary
 		# (allocation-matched) path finds no matching node and aborts with the
-		# `fee no_matching_node` VMError.
+		# `fee no_matching_allocation` VMError.
 		gl.contract.get_at(gl.Address(b'\x30' * 20)).emit().foo(1, 2)
 
 	@gl.public.write

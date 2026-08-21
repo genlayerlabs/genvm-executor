@@ -25,7 +25,7 @@ pub enum Capture {
 ///   *unsafe across machines* -- different nodes may resolve different code -- so
 ///   it can diverge consensus, but a single node stays deterministic.
 /// - `UnsafeTracing`: also exposes real wall-clock time to the contract
-///   (`RuntimeMicroSec`). This can break determinism even on a single machine.
+///   (`RuntimeMicroseconds`). This can break determinism even on a single machine.
 ///   Local debugging only.
 #[derive(
     Debug,

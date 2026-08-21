@@ -2,6 +2,13 @@ import pytest
 from genlayer.chain import Event
 
 
+def test_event_requires_init():
+	with pytest.raises(TypeError, match='must define __init__'):
+
+		class MissingInit(Event):
+			pass
+
+
 def test_invalid_sig():
 	with pytest.raises(TypeError):
 

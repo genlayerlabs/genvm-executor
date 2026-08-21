@@ -259,7 +259,7 @@ pub(super) fn nested_run_ok(
 }
 
 impl ContextVFS<'_> {
-    pub(super) async fn gl_call_eth_call(
+    pub(super) async fn gl_call_external_call(
         &mut self,
         address: calldata::Address,
         calldata: bytes::Bytes,
@@ -277,9 +277,9 @@ impl ContextVFS<'_> {
 
         let data = supervisor
             .host
-            .lock_for(host::host_fns::Methods::EthCall)
+            .lock_for(host::host_fns::Methods::ExternalCall)
             .await
-            .eth_call(address, &calldata, pre_limit)
+            .external_call(address, &calldata, pre_limit)
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
         let Some(data) = data else {
@@ -319,7 +319,7 @@ impl ContextVFS<'_> {
                     can_use_balance_for_message_fees: false,
                 },
                 execution: base::Execution {
-                    state_mode: public_abi::StorageType::Default,
+                    state_mode: public_abi::StorageView::Default,
                     topmost_runner_id: args.child_topmost_id,
                 },
             },
@@ -345,7 +345,7 @@ impl ContextVFS<'_> {
         &self,
         address: calldata::Address,
         calldata: &abi::entry::MainCallData,
-        state: public_abi::StorageType,
+        state: public_abi::StorageView,
         code_slot: SlotID,
         limiter: rt::memlimiter::Limiter,
         child_storage: rt::vm::storage::Storage<StorageHostHolder>,
@@ -370,7 +370,7 @@ impl ContextVFS<'_> {
                     state_mode: state,
                     topmost_runner_id: runners::Id::Chain {
                         address,
-                        on: if state == public_abi::StorageType::LatestFinalized {
+                        on: if state == public_abi::StorageView::LatestFinalized {
                             runners::ChainState::Finalized
                         } else {
                             runners::ChainState::Decided
@@ -420,17 +420,17 @@ impl ContextVFS<'_> {
             NestedPermissions as P, NestedRunEnvelope, NestedRunnerId, NestedStorageType,
         };
 
-        let host_remaining_fuel = vm_data
+        let host_remaining_time_fee_gen_wei = vm_data
             .supervisor
             .host
-            .lock_for(host::host_fns::Methods::RemainingFuelAsGen)
+            .lock_for(host::host_fns::Methods::GetRemainingTimeFeeGenWei)
             .await
-            .remaining_fuel_as_gen()
+            .get_remaining_time_fee_gen_wei()
             .map_err(|e| cross_major_internal("reading nested deterministic fuel", e))?;
         let remaining_det_fuel = vm_data
             .supervisor
             .shared_data
-            .remaining_det_fuel(host_remaining_fuel)
+            .remaining_det_fuel(host_remaining_time_fee_gen_wei)
             .await;
 
         let mut permissions = P::READ_STORAGE;
@@ -457,9 +457,9 @@ impl ContextVFS<'_> {
         }
 
         let state_mode = match vm_data.conf.execution.state_mode {
-            public_abi::StorageType::Default => NestedStorageType::Default,
-            public_abi::StorageType::LatestFinalized => NestedStorageType::LatestFinalized,
-            public_abi::StorageType::LatestDecided => NestedStorageType::LatestDecided,
+            public_abi::StorageView::Default => NestedStorageType::Default,
+            public_abi::StorageView::LatestFinalized => NestedStorageType::LatestFinalized,
+            public_abi::StorageView::LatestDecided => NestedStorageType::LatestDecided,
         };
         let message = &vm_data.message_data.message;
         let envelope = NestedRunEnvelope {
@@ -473,7 +473,7 @@ impl ContextVFS<'_> {
                 chain_id: message.chain_id.clone(),
                 value: message.value.clone(),
                 is_init: message.is_init,
-                datetime: message.datetime,
+                transaction_timestamp: message.datetime,
             },
             stack: message.stack.clone(),
             permissions,
@@ -502,7 +502,7 @@ impl ContextVFS<'_> {
         &mut self,
         address: calldata::Address,
         calldata: abi::entry::MainCallData,
-        mut state: public_abi::StorageType,
+        mut state: public_abi::StorageView,
         catch_vm_error: bool,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         if !self.context.data.conf.permissions.deterministic {
@@ -514,7 +514,7 @@ impl ContextVFS<'_> {
 
         let supervisor = self.context.data.supervisor.clone();
 
-        if state == public_abi::StorageType::Default {
+        if state == public_abi::StorageView::Default {
             state = self.context.data.conf.execution.state_mode;
         }
 
@@ -538,9 +538,9 @@ impl ContextVFS<'_> {
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
         let routing_payload = supervisor
             .host
-            .lock_for(host::host_fns::Methods::ResolveCallcontractExecutor)
+            .lock_for(host::host_fns::Methods::ResolveCallContractExecutor)
             .await
-            .resolve_callcontract_executor(address, state, advisory_major)
+            .resolve_call_contract_executor(address, state, advisory_major)
             .map_err(|e| cross_major_internal("resolving CallContract executor", e))?;
         let route = call_contract_route(routing_payload, advisory_major);
         let vm_data = self.derive_call_contract_vm_data(
@@ -556,7 +556,7 @@ impl ContextVFS<'_> {
             CallContractRoute::Nested(routing_payload) => {
                 if vm_data.remaining_recursion == 0 {
                     return Err(internal_trap(rt::errors::Error::vm(
-                        public_abi::VmError::out_of().vm_recursion(),
+                        public_abi::VmError::out_of().subvm_recursion(),
                     )));
                 }
                 // Custom runners are process-local: the envelope carries no

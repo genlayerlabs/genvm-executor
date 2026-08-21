@@ -312,7 +312,7 @@ pub mod contract_def {
 
         /// Handle a ConsensusStage entry - validator consensus functions.
         /// - For leader nodes: stage_data is null
-        /// - For validator nodes: stage_data contains {leaders_result: <calldata>}
+        /// - For validator nodes: stage_data contains {leader_result: <calldata>}
         fn handle_consensus_stage(
             &mut self,
             message: MessageData,
@@ -326,10 +326,10 @@ pub mod contract_def {
     pub enum ConsensusStageParseError {
         /// Invalid format for stage data (expected null or map with bytes)
         InvalidFormat,
-        /// Missing leaders_result field in validator data
-        MissingLeadersResult,
-        /// Empty leaders_result data
-        EmptyLeadersResult,
+        /// Missing leader_result field in validator data
+        MissingLeaderResult,
+        /// Empty leader_result data
+        EmptyLeaderResult,
         /// Unknown result code
         UnknownResultCode(u8),
         /// Failed to decode calldata
@@ -347,11 +347,11 @@ pub mod contract_def {
                         "invalid stage data format (expected null or map with bytes)"
                     )
                 }
-                ConsensusStageParseError::MissingLeadersResult => {
-                    write!(f, "missing leaders_result field in validator data")
+                ConsensusStageParseError::MissingLeaderResult => {
+                    write!(f, "missing leader_result field in validator data")
                 }
-                ConsensusStageParseError::EmptyLeadersResult => {
-                    write!(f, "empty leaders_result")
+                ConsensusStageParseError::EmptyLeaderResult => {
+                    write!(f, "empty leader_result")
                 }
                 ConsensusStageParseError::UnknownResultCode(code) => {
                     write!(f, "unknown result code: {}", code)
@@ -376,7 +376,7 @@ pub mod contract_def {
         /// Parse leader result from raw bytes (result code prefix + payload)
         pub fn parse(data: &[u8]) -> Result<Self, ConsensusStageParseError> {
             if data.is_empty() {
-                return Err(ConsensusStageParseError::EmptyLeadersResult);
+                return Err(ConsensusStageParseError::EmptyLeaderResult);
             }
 
             let code = ResultCode::try_from(data[0])
@@ -409,7 +409,7 @@ pub mod contract_def {
         /// This node is the leader - no previous result available.
         Leader,
         /// This node is a validator - leader's result is provided for verification.
-        Validator { leaders_result: LeaderResult },
+        Validator { leader_result: LeaderResult },
     }
 
     impl ConsensusStageData {
@@ -418,18 +418,18 @@ pub mod contract_def {
             match value {
                 Value::Null => Ok(ConsensusStageData::Leader),
                 Value::Map(mut map) => {
-                    let leaders_result_value = map
-                        .remove("leaders_result")
-                        .ok_or(ConsensusStageParseError::MissingLeadersResult)?;
+                    let leader_result_value = map
+                        .remove("leader_result")
+                        .ok_or(ConsensusStageParseError::MissingLeaderResult)?;
 
-                    let data = match leaders_result_value {
+                    let data = match leader_result_value {
                         Value::Bytes(bytes) => bytes,
                         _ => return Err(ConsensusStageParseError::InvalidFormat),
                     };
 
-                    let leaders_result = LeaderResult::parse(&data)?;
+                    let leader_result = LeaderResult::parse(&data)?;
 
-                    Ok(ConsensusStageData::Validator { leaders_result })
+                    Ok(ConsensusStageData::Validator { leader_result })
                 }
                 _ => Err(ConsensusStageParseError::InvalidFormat),
             }

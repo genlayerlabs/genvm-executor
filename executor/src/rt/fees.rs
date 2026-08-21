@@ -45,11 +45,11 @@ pub fn fee_params_value_internal(
     let mut m = std::collections::BTreeMap::new();
     m.insert(
         "leaderTimeunitsAllocation".to_owned(),
-        num_u256(p.leader_timeunits_allocation),
+        num_u256(p.leader_time_units_allocation),
     );
     m.insert(
         "validatorTimeunitsAllocation".to_owned(),
-        num_u256(p.validator_timeunits_allocation),
+        num_u256(p.validator_time_units_allocation),
     );
     m.insert(
         "executionBudgetPerRound".to_owned(),

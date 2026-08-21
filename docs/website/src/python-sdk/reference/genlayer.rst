@@ -7,6 +7,7 @@ Top level
 
 .. automodule:: genlayer
    :members:
+   :exclude-members: Address
    :imported-members:
    :undoc-members:
    :show-inheritance:

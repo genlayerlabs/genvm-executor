@@ -18,7 +18,7 @@ def _generate_view(name: str, params: tuple[type], ret: type) -> typing.Any:
 		calldata = encoder.encode_call(args)
 		return gl_call.gl_call_generic(
 			{
-				'EthCall': {
+				'ExternalCall': {
 					'address': self._proxy_parent.address,
 					'calldata': calldata,
 				}
@@ -42,7 +42,7 @@ def _generate_send(name: str, params: tuple[type], ret: type) -> typing.Any:
 			)
 		gl_call.gl_call_generic(
 			{
-				'EthSend': {
+				'EmitExternalMessage': {
 					'address': self._proxy_parent.address,
 					'calldata': calldata,
 					'value': self._proxy_kwargs.get('value', 0),
@@ -59,7 +59,13 @@ evm_contract_interface = contract_generator(
 	_generate_send,
 	lambda p: wasi.get_balance(p.address.as_bytes),
 	lambda p, d: gl_call.gl_call_generic(
-		{'EthSend': {'address': p.address, 'calldata': b'', 'value': d.get('value', 0)}},
+		{
+			'EmitExternalMessage': {
+				'address': p.address,
+				'calldata': b'',
+				'value': d.get('value', 0),
+			}
+		},
 		lambda _x: None,
 	).get(),
 )
@@ -69,7 +75,7 @@ Decorator that is used to declare eth contract interface
 
 .. code:: python
 
-	@gl.eth_contract
+	@gl.evm.contract_interface
 	class Ghost:
 		class View:
 			pass

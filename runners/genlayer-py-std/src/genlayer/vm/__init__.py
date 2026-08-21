@@ -28,6 +28,7 @@ __all__ = (
 	'ABI',
 	'SandboxChangesOnError',
 	'RunnerID',
+	'RunnerIDOps',
 )
 
 import typing
@@ -154,7 +155,7 @@ class VMError:
 
 class UserError(Exception):
 	"""
-	Represents an error that user contract rose during execution of their code in the VM.
+	Represents an error that a user contract raised during execution in the VM.
 	"""
 
 	data: calldata.Decoded
@@ -197,6 +198,8 @@ def _decode_sub_vm_result_retn(
 	data: collections.abc.Buffer,
 ) -> Result:
 	mem = memoryview(data)
+	if len(mem) == 0:
+		raise ValueError('empty VM result')
 	if mem[0] == ResultCode.USER_ERROR:
 		return UserError(calldata.decode(mem[1:]))
 	if mem[0] == ResultCode.RETURN:
@@ -230,6 +233,15 @@ def _decode_sub_vm_result(
 	data: collections.abc.Buffer,
 ) -> calldata.Decoded:
 	return unpack_result(_decode_sub_vm_result_retn(data))
+
+
+def _decode_sub_vm_result_catching_vm_error[T: calldata.Decoded](
+	data: collections.abc.Buffer,
+) -> T | VMError:
+	res = typing.cast(Result[T], _decode_sub_vm_result_retn(data))
+	if isinstance(res, VMError):
+		return res
+	return unpack_result(res)
 
 
 type SandboxChangesOnError = typing.Literal['inherit']
@@ -336,6 +348,39 @@ def spawn_sandbox[T: calldata.Decoded](
 	)
 
 
+@typing.overload
+def run_nondet[T: calldata.Decoded](
+	leader_fn: typing.Callable[[], T],
+	validator_fn: typing.Callable[[Result], bool],
+	/,
+	*,
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: typing.Literal[False] = False,
+) -> T: ...
+
+
+@typing.overload
+def run_nondet[T: calldata.Decoded](
+	leader_fn: typing.Callable[[], T],
+	validator_fn: typing.Callable[[Result], bool],
+	/,
+	*,
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: typing.Literal[True],
+) -> T | VMError: ...
+
+
+@typing.overload
+def run_nondet[T: calldata.Decoded](
+	leader_fn: typing.Callable[[], T],
+	validator_fn: typing.Callable[[Result], bool],
+	/,
+	*,
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: bool,
+) -> T | VMError: ...
+
+
 @_lazy_api
 def run_nondet[T: calldata.Decoded](
 	leader_fn: typing.Callable[[], T],
@@ -344,12 +389,12 @@ def run_nondet[T: calldata.Decoded](
 	*,
 	custom_runners: list[RunnerID] | None = None,
 	catch_vm_error: bool = False,
-) -> Lazy[T]:
+) -> Lazy[T | VMError]:
 	"""
 	Executes a non-deterministic block with leader-validator consensus.
 
 	This is the most generic API for non-deterministic execution. The leader function
-	runs as is, validators one checks the result.
+	runs as is, and each validator checks the result.
 
 	:param leader_fn: Function executed by the leader node (must be serializable)
 	:param validator_fn: Function that validates the leader's result and returns bool
@@ -376,9 +421,12 @@ def run_nondet[T: calldata.Decoded](
 	import cloudpickle
 
 	def validator_fn_mapped(stage_data):
-		leaders_result = _decode_sub_vm_result_retn(stage_data['leaders_result'])
+		leaders_result = _decode_sub_vm_result_retn(stage_data['leader_result'])
 		return validator_fn(leaders_result)
 
+	decoder = (
+		_decode_sub_vm_result_catching_vm_error if catch_vm_error else _decode_sub_vm_result
+	)
 	res = gl_call.gl_call_generic(
 		{
 			'RunNondet': {
@@ -388,10 +436,49 @@ def run_nondet[T: calldata.Decoded](
 				'catch_vm_error': catch_vm_error,
 			}
 		},
-		_decode_sub_vm_result,
+		decoder,
 	)
 
-	return typing.cast(Lazy[T], res)
+	return typing.cast(Lazy[T | VMError], res)
+
+
+@typing.overload
+def run_nondet_default[T: calldata.Decoded](
+	leader_fn: typing.Callable[[], T],
+	validator_fn: typing.Callable[[Result[T]], bool],
+	/,
+	*,
+	compare_user_errors: typing.Callable[[UserError, UserError], bool] = ...,
+	compare_vm_errors: typing.Callable[[VMError, VMError], bool] = ...,
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: typing.Literal[False] = False,
+) -> T: ...
+
+
+@typing.overload
+def run_nondet_default[T: calldata.Decoded](
+	leader_fn: typing.Callable[[], T],
+	validator_fn: typing.Callable[[Result[T]], bool],
+	/,
+	*,
+	compare_user_errors: typing.Callable[[UserError, UserError], bool] = ...,
+	compare_vm_errors: typing.Callable[[VMError, VMError], bool] = ...,
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: typing.Literal[True],
+) -> T | VMError: ...
+
+
+@typing.overload
+def run_nondet_default[T: calldata.Decoded](
+	leader_fn: typing.Callable[[], T],
+	validator_fn: typing.Callable[[Result[T]], bool],
+	/,
+	*,
+	compare_user_errors: typing.Callable[[UserError, UserError], bool] = ...,
+	compare_vm_errors: typing.Callable[[VMError, VMError], bool] = ...,
+	custom_runners: list[RunnerID] | None = None,
+	catch_vm_error: bool,
+) -> T | VMError: ...
 
 
 @_lazy_api
@@ -408,7 +495,7 @@ def run_nondet_default[T: calldata.Decoded](
 	),
 	custom_runners: list[RunnerID] | None = None,
 	catch_vm_error: bool = False,
-) -> Lazy[T]:
+) -> Lazy[T | VMError]:
 	"""
 	Executes a non-deterministic block with comprehensive error handling.
 
@@ -417,7 +504,7 @@ def run_nondet_default[T: calldata.Decoded](
 	in a sandbox and handling validator errors with provided functions with sensible defaults.
 
 	:param leader_fn: Function executed by the leader node
-	:param validator_fn: Function that validates the leader's result, is ran in a sandbox
+	:param validator_fn: Function that validates the leader's result and runs in a sandbox
 	:param compare_user_errors: Function to compare UserError instances for equality
 	:param compare_vm_errors: Function to compare VMError instances for equality; the default compares only the public code (the part before the first `` # `` detail suffix), ignoring implementation-specific diagnostics
 	:param custom_runners: ``custom:<hash>`` ids visible to the block; ``None`` grants this VM's entire set, a list grants exactly that subset of it
@@ -444,11 +531,12 @@ def run_nondet_default[T: calldata.Decoded](
 	import cloudpickle
 
 	def real_leader_fn(stage_data):
-		assert stage_data is None
+		if stage_data is not None:
+			raise TypeError('leader stage data must be None')
 		return leader_fn()
 
 	def real_validator_fn(stage_data) -> bool:
-		leaders_result = _decode_sub_vm_result_retn(stage_data['leaders_result'])
+		leaders_result = _decode_sub_vm_result_retn(stage_data['leader_result'])
 
 		import genlayer.vm as vm
 
@@ -470,6 +558,9 @@ def run_nondet_default[T: calldata.Decoded](
 			f'validator function returned `{answer!r:20}` while leader returned `{leaders_result!r:20}`'
 		)
 
+	decoder = (
+		_decode_sub_vm_result_catching_vm_error if catch_vm_error else _decode_sub_vm_result
+	)
 	res = gl_call.gl_call_generic(
 		{
 			'RunNondet': {
@@ -479,13 +570,13 @@ def run_nondet_default[T: calldata.Decoded](
 				'catch_vm_error': catch_vm_error,
 			}
 		},
-		_decode_sub_vm_result,
+		decoder,
 	)
 
-	return typing.cast(Lazy[T], res)
+	return typing.cast(Lazy[T | VMError], res)
 
 
-def trace(*objs: typing.Any, sep: str = ' '):
+def trace(*objs: typing.Any, sep: str = ' ') -> None:
 	wasi.gl_call(
 		calldata.encode(
 			{
@@ -501,7 +592,7 @@ def trace_time_micro() -> int:
 	return gl_call.gl_call_generic(
 		{
 			'Trace': {
-				'RuntimeMicroSec': None,
+				'RuntimeMicroseconds': None,
 			},
 		},
 		lambda x: typing.cast(int, calldata.decode(x)),
@@ -559,8 +650,7 @@ def map_file(runner: RunnerID, path_in_runner: str, path_in_vfs: str) -> None:
 	Behaves the same as the ``MapFile`` runner action: if ``path_in_runner`` ends
 	with ``/`` the whole directory subtree is mapped, otherwise a single file.
 
-	Requires the ``read_storage`` permission (a ``chain:`` runner reads another
-	contract's storage). Mapping into ``/vm/`` is forbidden.
+	Mapping into ``/vm/`` is forbidden.
 
 	:param runner: runner id (e.g. ``name:hash``, ``contract``, ``custom:<hash>``)
 	:param path_in_runner: path within the runner archive

@@ -12,7 +12,7 @@ let
   extraObj = stdenvNoCC.mkDerivation {
     name = "genvm-cpython-mod-genlayer-objs";
     outputHashMode = "recursive";
-    outputHash = "sha256-53l0JPljJhFPfgkHhgGiiOtn/QOos0iK4nrNx9JxM7I=";
+    outputHash = "sha256-uJU7a6c7ocdIyJq37LROW/89XB42mzQuH28UwUwVaRY=";
 
     deps = [ genlayer_c ];
 

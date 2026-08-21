@@ -97,9 +97,9 @@ def test_getitem_slice_full():
 	same_iter(sub, [1, 2, 3])
 
 
-def test_getitem_slice_negative_step_raises():
+def test_getitem_slice_unsupported_step_raises():
 	lx = new_arr()
-	with pytest.raises(KeyError):
+	with pytest.raises(ValueError, match='only support a step of 1'):
 		lx[::-1]
 
 
@@ -143,3 +143,23 @@ def test_slice_is_view():
 	sub = lx[1:3]
 	sub[0] = 99
 	assert lx[1] == 99
+
+
+def test_descriptor_accepts_sequence():
+	td = _storage_build(_BuilderCtx.empty(), ArrType)
+	man = InmemManager()
+	slot = man.get_store_slot(ROOT_SLOT_ID)
+	td.set(slot, 0, (1, 2, 3))
+	assert list(td.get(slot, 0)) == [1, 2, 3]
+
+
+def test_descriptor_rejects_wrong_length_before_writing():
+	td = _storage_build(_BuilderCtx.empty(), ArrType)
+	man = InmemManager()
+	slot = man.get_store_slot(ROOT_SLOT_ID)
+	td.set(slot, 0, [1, 2, 3])
+
+	with pytest.raises(ValueError, match='expected 3 elements, got 2'):
+		td.set(slot, 0, [4, 5])
+
+	assert list(td.get(slot, 0)) == [1, 2, 3]

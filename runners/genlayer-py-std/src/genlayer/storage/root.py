@@ -112,6 +112,9 @@ class Root:
 	def lock_default(self):
 		"""
 		Lock the default set of slots (root, code, locked_slots, upgraders) to prevent modification after deployment.
+
+		Slots are appended in that order. If an append fails and the exception is
+		caught, earlier appends and the failed append's length change remain.
 		"""
 		frozen = self.locked_slots.get()
 
@@ -135,6 +138,8 @@ class Root:
 
 		:param perm: permission to modify
 		:param value: whether to grant the permission
+
+		This method performs one fixed-size storage-field write.
 		"""
 		bit = 1 << perm.value
 		if value:

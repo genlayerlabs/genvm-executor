@@ -56,7 +56,7 @@ fn call_contract_catch_vm_error_round_trips() {
             args: None,
             kwargs: None,
         },
-        state: genlayer_sdk::abi::consts::StorageType::Default,
+        storage_view: genlayer_sdk::abi::consts::StorageView::Default,
         catch_vm_error: true,
     };
 

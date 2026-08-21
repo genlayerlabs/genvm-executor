@@ -9,8 +9,8 @@ from genlayer.vm.public_abi import Permissions
 # The jsonnet sets node.genPerTimeUnit=7; had the balance path used it the fee
 # would be 7*5140 + 29696 = 65676. The golden's 45116 confirms the cap is used.
 _PARAMS = gl.chain.InternalMessageParams(
-	leader_timeunits_allocation=5,
-	validator_timeunits_allocation=5,
+	leader_time_units_allocation=5,
+	validator_time_units_allocation=5,
 	execution_budget_per_round=1024,
 	rotations=[4, 4, 4, 4, 4],
 	max_price_gen_per_time_unit=3,

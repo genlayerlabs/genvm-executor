@@ -22,8 +22,8 @@ class InternalMessageParams(calldata.DataclassMixin):
 
 	Field names and layout mirror the executor's calldata encoding exactly.
 
-	:param leader_timeunits_allocation: time units allocated to the leader per round
-	:param validator_timeunits_allocation: time units allocated to each validator per round
+	:param leader_time_units_allocation: time units allocated to the leader per round
+	:param validator_time_units_allocation: time units allocated to each validator per round
 	:param execution_budget_per_round: gas budget granted to the child execution per round
 	:param rotations: per-round rotation allocations; must be non-empty (``appeal_rounds`` is ``len(rotations) - 1``)
 	:param max_price_gen_per_time_unit: per-time-unit GEN price cap; must be non-zero
@@ -31,8 +31,8 @@ class InternalMessageParams(calldata.DataclassMixin):
 	:param receipt_fee_max_gas_price: max gas price for the receipt-fee component; must be non-zero
 	"""
 
-	leader_timeunits_allocation: u256
-	validator_timeunits_allocation: u256
+	leader_time_units_allocation: u256
+	validator_time_units_allocation: u256
 	execution_budget_per_round: u256
 	rotations: list[u256]
 	max_price_gen_per_time_unit: u256
@@ -190,7 +190,8 @@ class Event:
 	@staticmethod
 	def _do_init(klass) -> None:
 		old_init = klass.__init__
-		assert old_init is not Event.__init__
+		if old_init is Event.__init__:
+			raise TypeError('event class must define __init__')
 
 		klass.__slots__ = ('_blob',)
 

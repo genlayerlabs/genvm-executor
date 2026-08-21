@@ -126,7 +126,7 @@ pub mod web_iface {
         }
     }
 
-    pub(crate) fn encode_wait_after_loaded<W: genlayer_calldata::Writer>(
+    pub(crate) fn encode_post_load_wait<W: genlayer_calldata::Writer>(
         val: &WaitAfterLoaded,
         enc: &mut genlayer_calldata::Encoder<W>,
     ) -> Result<(), W::Error> {
@@ -137,7 +137,7 @@ pub mod web_iface {
         enc.push_str(&s)
     }
 
-    pub(crate) fn decode_wait_after_loaded(
+    pub(crate) fn decode_post_load_wait(
         val: genlayer_calldata::Value,
     ) -> Result<WaitAfterLoaded, genlayer_calldata::codec::DecodeError> {
         let genlayer_calldata::Value::Str(s) = val else {
@@ -177,10 +177,10 @@ pub mod web_iface {
         pub mode: RenderMode,
         pub url: String,
         #[calldata(
-            serialize_with = encode_wait_after_loaded,
-            deserialize_with = decode_wait_after_loaded
+            serialize_with = encode_post_load_wait,
+            deserialize_with = decode_post_load_wait
         )]
-        pub wait_after_loaded: WaitAfterLoaded,
+        pub post_load_wait: WaitAfterLoaded,
     }
 
     /// HTTP request method for WebRequest operations.
@@ -485,28 +485,28 @@ pub enum On {
     Decided,
 }
 
-fn encode_storage_type<W: calldata::Writer>(
-    st: &public_abi::StorageType,
+fn encode_storage_view<W: calldata::Writer>(
+    view: &public_abi::StorageView,
     enc: &mut calldata::Encoder<W>,
 ) -> Result<(), W::Error> {
-    enc.push_u64(st.value().into())
+    enc.push_u64(view.value().into())
 }
 
-fn decode_storage_type(
+fn decode_storage_view(
     val: calldata::Value,
-) -> Result<public_abi::StorageType, calldata::codec::DecodeError> {
+) -> Result<public_abi::StorageView, calldata::codec::DecodeError> {
     let calldata::Value::Number(n) = val else {
         return Err(calldata::codec::DecodeError::Unexpected("expected number"));
     };
     let v: u8 = <u8 as TryFrom<&num_bigint::BigInt>>::try_from(&n).map_err(|_| {
         calldata::codec::DecodeError::OutOfRange {
             value: n.to_string(),
-            target: "StorageType",
+            target: "StorageView",
         }
     })?;
-    public_abi::StorageType::try_from(v).map_err(|_| calldata::codec::DecodeError::OutOfRange {
+    public_abi::StorageView::try_from(v).map_err(|_| calldata::codec::DecodeError::OutOfRange {
         value: v.to_string(),
-        target: "StorageType",
+        target: "StorageView",
     })
 }
 
@@ -527,7 +527,7 @@ pub enum TracePayload {
     /// Log a debug message with timing information.
     Message(String),
     /// Get elapsed execution time in microseconds.
-    RuntimeMicroSec,
+    RuntimeMicroseconds,
 }
 
 /// All available gl_call message types.
@@ -538,7 +538,7 @@ pub enum TracePayload {
 #[derive(PartialEq, Debug, calldata::Encode, calldata::Decode)]
 #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub enum Message {
-    EthCall {
+    ExternalCall {
         address: calldata::Address,
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         calldata: Bytes,
@@ -547,10 +547,10 @@ pub enum Message {
         address: calldata::Address,
         calldata: abi::entry::MainCallData,
         #[calldata(
-            serialize_with = encode_storage_type,
-            deserialize_with = decode_storage_type
+            serialize_with = encode_storage_view,
+            deserialize_with = decode_storage_view
         )]
-        state: public_abi::StorageType,
+        storage_view: public_abi::StorageView,
         /// Take a VM error from the callee as a result instead of re-raising
         /// it. Never applies to a fatal one: that is precisely an outcome the
         /// callee marked as not catchable.
@@ -558,14 +558,14 @@ pub enum Message {
         catch_vm_error: bool,
     },
 
-    EthSend {
+    EmitExternalMessage {
         address: calldata::Address,
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         calldata: Bytes,
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
         value: primitive_types::U256,
     },
-    PostMessage {
+    EmitInternalMessage {
         address: calldata::Address,
         calldata: abi::entry::MainCallData,
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
@@ -581,7 +581,7 @@ pub enum Message {
         #[calldata(default = default_none)]
         fee_params: Option<fees::InternalMessageParams>,
     },
-    DeployContract {
+    EmitInternalDeployMessage {
         calldata: abi::entry::MainDeployData,
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_bytes))]
         code: Bytes,
@@ -590,10 +590,10 @@ pub enum Message {
         on: On,
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
         salt_nonce: primitive_types::U256,
-        /// Chain `useBalance` for the deploy message; see `PostMessage::use_balance`.
+        /// Chain `useBalance` for the deploy message; see `EmitInternalMessage::use_balance`.
         #[calldata(default = default_false)]
         use_balance: bool,
-        /// Guest fee params for the balance-funded deploy; see `PostMessage::fee_params`.
+        /// Guest fee params for the balance-funded deploy; see `EmitInternalMessage::fee_params`.
         #[calldata(default = default_none)]
         fee_params: Option<fees::InternalMessageParams>,
     },

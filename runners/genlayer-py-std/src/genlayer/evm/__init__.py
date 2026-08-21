@@ -18,6 +18,7 @@ __all__ = (
 	'MethodEncoder',
 	'encode',
 	'decode',
+	'DecodingError',
 	'contract_generator',
 	'ContractProxy',
 	'ContractDeclaration',
@@ -210,6 +211,7 @@ import typing
 
 from ..types import Address, u256
 from .calldata import (
+	DecodingError,
 	MethodEncoder,
 	decode,
 	encode,

@@ -1,4 +1,4 @@
-__all__ = ('SentenceTransformer',)
+__all__ = ('SentenceTransformer', 'SentenceTransformerFromPath')
 
 import collections.abc
 import json
@@ -59,11 +59,12 @@ def _unfold(x: np.ndarray):
 	return x.reshape(prod(x.shape))
 
 
-_cache_SentenceTransformer: dict[str, typing.Callable[[str], np.ndarray]] = {}
+_cache_sentence_transformer_by_path: dict[str, typing.Callable[[str], np.ndarray]] = {}
+_cache_sentence_transformer_by_model: dict[str, typing.Callable[[str], np.ndarray]] = {}
 
 
 def SentenceTransformerFromPath(path: str) -> typing.Callable[[str], np.ndarray]:
-	if res := _cache_SentenceTransformer.get(path):
+	if res := _cache_sentence_transformer_by_path.get(path):
 		return res
 	from word_piece_tokenizer import WordPieceTokenizer
 
@@ -85,18 +86,18 @@ def SentenceTransformerFromPath(path: str) -> typing.Callable[[str], np.ndarray]
 		return _unfold(
 			nn_model(
 				input_ids=res,
-				attention_mask=np.zeros(res.shape, res.dtype),
+				attention_mask=np.ones(res.shape, res.dtype),
 				token_type_ids=np.zeros(res.shape, res.dtype),
 			)['embedding']
 		)
 
-	_cache_SentenceTransformer[path] = ret
+	_cache_sentence_transformer_by_path[path] = ret
 
 	return ret
 
 
 def SentenceTransformer(model: str) -> typing.Callable[[str], np.ndarray]:
-	if res := _cache_SentenceTransformer.get(model):
+	if res := _cache_sentence_transformer_by_model.get(model):
 		return res
 	from word_piece_tokenizer import WordPieceTokenizer
 
@@ -123,11 +124,11 @@ def SentenceTransformer(model: str) -> typing.Callable[[str], np.ndarray]:
 		return _unfold(
 			nn_model(
 				input_ids=res,
-				attention_mask=np.zeros(res.shape, res.dtype),
+				attention_mask=np.ones(res.shape, res.dtype),
 				token_type_ids=np.zeros(res.shape, res.dtype),
 			)['embedding']
 		)
 
-	_cache_SentenceTransformer[model] = ret
+	_cache_sentence_transformer_by_model[model] = ret
 
 	return ret

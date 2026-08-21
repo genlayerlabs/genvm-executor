@@ -1,5 +1,6 @@
 //! Backward-compat / round-trip coverage for the balance-funded fee fields
-//! (`use_balance`, `fee_params`) added to `PostMessage` / `DeployContract`.
+//! (`use_balance`, `fee_params`) added to `EmitInternalMessage` /
+//! `EmitInternalDeployMessage`.
 
 use genlayer_sdk::abi::fees::InternalMessageParams;
 use genlayer_sdk::abi::gl_call::{Message, On};
@@ -19,8 +20,8 @@ macro_rules! encode {
 
 fn sample_params() -> InternalMessageParams {
     InternalMessageParams {
-        leader_timeunits_allocation: U256::from(5u64),
-        validator_timeunits_allocation: U256::from(7u64),
+        leader_time_units_allocation: U256::from(5u64),
+        validator_time_units_allocation: U256::from(7u64),
         execution_budget_per_round: U256::from(1024u64),
         rotations: vec![U256::from(4u64); 5],
         max_price_gen_per_time_unit: U256::from(9u64),
@@ -31,9 +32,9 @@ fn sample_params() -> InternalMessageParams {
 
 /// A message carrying the two new fields round-trips through the calldata codec.
 #[test]
-fn post_message_balance_fields_round_trip() {
+fn emit_internal_message_balance_fields_round_trip() {
     let params = sample_params();
-    let msg = Message::PostMessage {
+    let msg = Message::EmitInternalMessage {
         address: calldata::Address::zero(),
         calldata: genlayer_sdk::abi::entry::MainCallData {
             name: None,
@@ -49,7 +50,7 @@ fn post_message_balance_fields_round_trip() {
     let decoded: Message = Decode::decode(BinaryDeserializer::new(&encode!(msg))).unwrap();
 
     match decoded {
-        Message::PostMessage {
+        Message::EmitInternalMessage {
             use_balance,
             fee_params,
             value,
@@ -59,20 +60,20 @@ fn post_message_balance_fields_round_trip() {
             assert_eq!(fee_params, Some(params));
             assert_eq!(value, U256::from(42u64));
         }
-        other => panic!("expected PostMessage, got {other:?}"),
+        other => panic!("expected EmitInternalMessage, got {other:?}"),
     }
 }
 
-/// A `PostMessage` map produced before the fields existed (no `use_balance` /
+/// An `EmitInternalMessage` map produced before the fields existed (no `use_balance` /
 /// `fee_params` keys) decodes with the defaults.
 #[test]
-fn post_message_old_encoding_defaults() {
-    // Mirrors the pre-feature `PostMessage` variant (same wire name and fields),
+fn emit_internal_message_old_encoding_defaults() {
+    // Mirrors the pre-feature `EmitInternalMessage` variant (same wire name and fields),
     // so encoding it yields exactly what an old SDK would emit.
     #[derive(calldata::Encode)]
     enum OldMessage {
         #[allow(dead_code)]
-        PostMessage {
+        EmitInternalMessage {
             address: calldata::Address,
             calldata: Maybe<Value>,
             value: U256,
@@ -80,7 +81,7 @@ fn post_message_old_encoding_defaults() {
         },
     }
 
-    let old = OldMessage::PostMessage {
+    let old = OldMessage::EmitInternalMessage {
         address: calldata::Address::zero(),
         calldata: Maybe::Materialized(Value::Map(Default::default())),
         value: U256::from(1u64),
@@ -90,7 +91,7 @@ fn post_message_old_encoding_defaults() {
     let decoded: Message = Decode::decode(BinaryDeserializer::new(&encode!(old))).unwrap();
 
     match decoded {
-        Message::PostMessage {
+        Message::EmitInternalMessage {
             use_balance,
             fee_params,
             ..
@@ -98,17 +99,17 @@ fn post_message_old_encoding_defaults() {
             assert!(!use_balance);
             assert!(fee_params.is_none());
         }
-        other => panic!("expected PostMessage, got {other:?}"),
+        other => panic!("expected EmitInternalMessage, got {other:?}"),
     }
 }
 
-/// Same backward-compat guarantee for `DeployContract`.
+/// Same backward-compat guarantee for `EmitInternalDeployMessage`.
 #[test]
-fn deploy_contract_old_encoding_defaults() {
+fn emit_internal_deploy_message_old_encoding_defaults() {
     #[derive(calldata::Encode)]
     enum OldMessage {
         #[allow(dead_code)]
-        DeployContract {
+        EmitInternalDeployMessage {
             calldata: Maybe<Value>,
             code: Maybe<Value>,
             value: U256,
@@ -117,7 +118,7 @@ fn deploy_contract_old_encoding_defaults() {
         },
     }
 
-    let old = OldMessage::DeployContract {
+    let old = OldMessage::EmitInternalDeployMessage {
         calldata: Maybe::Materialized(Value::Map(Default::default())),
         code: Maybe::Materialized(Value::Bytes(b"code".to_vec())),
         value: U256::zero(),
@@ -128,7 +129,7 @@ fn deploy_contract_old_encoding_defaults() {
     let decoded: Message = Decode::decode(BinaryDeserializer::new(&encode!(old))).unwrap();
 
     match decoded {
-        Message::DeployContract {
+        Message::EmitInternalDeployMessage {
             use_balance,
             fee_params,
             ..
@@ -136,6 +137,6 @@ fn deploy_contract_old_encoding_defaults() {
             assert!(!use_balance);
             assert!(fee_params.is_none());
         }
-        other => panic!("expected DeployContract, got {other:?}"),
+        other => panic!("expected EmitInternalDeployMessage, got {other:?}"),
     }
 }

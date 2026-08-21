@@ -67,7 +67,7 @@ class Array[T, S: int](
 		:param idx: integer index or slice (step must be 1)
 		:returns: single element for int index, ``Array`` view for slice
 		:raises IndexError: when integer index is out of range
-		:raises KeyError: when slice step is not 1
+		:raises ValueError: when slice step is not 1
 		"""
 		if not isinstance(idx, slice):
 			idx = self._map_index(idx.__index__())
@@ -77,7 +77,7 @@ class Array[T, S: int](
 		else:
 			start, stop, step = idx.indices(len(self))
 			if step != 1:
-				raise KeyError('negative step is not supported')
+				raise ValueError('array slices only support a step of 1')
 			le = max(stop - start, 0)
 			return Array._view_at(
 				self._item_desc,
@@ -93,6 +93,9 @@ class Array[T, S: int](
 		:param idx: integer index (supports negative indexing)
 		:param val: value to set
 		:raises IndexError: when index is out of range
+
+		If the value's storage encoding requires several writes and one fails,
+		writes completed before the error remain visible.
 		"""
 		idx = self._map_index(idx)
 		self._item_desc.set(self._storage_slot, self._off + idx * self._item_desc.size, val)
@@ -123,10 +126,17 @@ class _ArrayDesc(SpecialTypeDesc):
 
 		TypeDesc.__init__(self, le * item_desc.size, cop)
 
-	def set(self, slot: Slot, off: int, val: Array | list) -> None:
-		assert len(val) == self._len
-		if isinstance(val, list):
+	def set(
+		self, slot: Slot, off: int, val: Array | collections.abc.Sequence[typing.Any]
+	) -> None:
+		if not isinstance(val, collections.abc.Sequence):
+			raise TypeError(f'expected a sequence, got {type(val).__name__}')
+		if len(val) != self._len:
+			raise ValueError(f'expected {self._len} elements, got {len(val)}')
+		if not isinstance(val, Array):
 			for i in range(self._len):
 				self.item_desc.set(slot, off + i * self.item_desc.size, val[i])
 		else:
+			if val._item_desc != self.item_desc:
+				raise TypeError('incompatible array element type')
 			actions_apply_copy(self.copy_actions, slot, off, val._storage_slot, val._off)

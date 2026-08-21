@@ -13,7 +13,7 @@ a = Pr()
 
 try:
 	a.x = {'x': 'y'}  # type: ignore
-except AssertionError as e:
+except TypeError as e:
 	print(*e.args)
 
 exit(0)

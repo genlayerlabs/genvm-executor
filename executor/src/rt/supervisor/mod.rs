@@ -406,7 +406,7 @@ pub async fn spawn(
 ) -> std::result::Result<rt::vm::VM<()>, rt::SpawnError> {
     if vm.remaining_recursion == 0 {
         return Err(rt::SpawnError {
-            error: rt::errors::Error::vm(public_abi::VmError::out_of().vm_recursion()).into(),
+            error: rt::errors::Error::vm(public_abi::VmError::out_of().subvm_recursion()).into(),
             state: Box::new(rt::SpawnErrorState::Unspawned(vm)),
         });
     }

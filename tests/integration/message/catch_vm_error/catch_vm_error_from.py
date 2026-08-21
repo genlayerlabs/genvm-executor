@@ -9,13 +9,8 @@ class Contract(gl.contract.Contract):
 
 	@gl.public.write
 	def main(self, addr: Address):
-		# Opted in: B's VM error arrives as this call's result, so it is an
-		# ordinary Python exception here.
-		try:
-			gl.contract.get_at(addr).view(catch_vm_error=True).boom()
-			print('A: no error')
-		except Exception as e:
-			print(f'A caught {e}')
+		# Opted in: B's VM error arrives as this call's result.
+		print('A got', gl.contract.get_at(addr).view(catch_vm_error=True).boom())
 
 		# Not opted in: the same error ends A too, so nothing below runs.
 		gl.contract.get_at(addr).view().boom()

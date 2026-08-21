@@ -3,12 +3,15 @@ __all__ = (
 	'request',
 	'get',
 	'post',
+	'put',
 	'delete',
 	'head',
+	'options',
 	'patch',
 	'Response',
 )
 
+import collections.abc
 import dataclasses
 import io
 import typing
@@ -17,7 +20,7 @@ import genlayer._internal.on_chain.gl_call as gl_call
 from genlayer._internal import _lazy_api
 from genlayer.types import Lazy
 
-from . import Image, _decode_nondet
+from . import Image, _decode_nondet, _invalid_nondet_response
 
 
 @dataclasses.dataclass
@@ -42,7 +45,7 @@ def get(
 	url: str,
 	/,
 	*,
-	headers: dict[str, str | bytes] = {},
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
 	sign: bool = False,
 ) -> Lazy[Response]:
 	return request.lazy(url, method='GET', headers=headers, sign=sign)
@@ -54,7 +57,7 @@ def post(
 	/,
 	*,
 	body: str | bytes | None = None,
-	headers: dict[str, str | bytes] = {},
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
 	sign: bool = False,
 ) -> Lazy[Response]:
 	return request.lazy(url, method='POST', body=body, headers=headers, sign=sign)
@@ -66,7 +69,7 @@ def put(
 	/,
 	*,
 	body: str | bytes | None = None,
-	headers: dict[str, str | bytes] = {},
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
 	sign: bool = False,
 ) -> Lazy[Response]:
 	return request.lazy(url, method='PUT', body=body, headers=headers, sign=sign)
@@ -78,7 +81,7 @@ def delete(
 	/,
 	*,
 	body: str | bytes | None = None,
-	headers: dict[str, str | bytes] = {},
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
 	sign: bool = False,
 ) -> Lazy[Response]:
 	return request.lazy(url, method='DELETE', body=body, headers=headers, sign=sign)
@@ -90,10 +93,22 @@ def head(
 	/,
 	*,
 	body: str | bytes | None = None,
-	headers: dict[str, str | bytes] = {},
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
 	sign: bool = False,
 ) -> Lazy[Response]:
 	return request.lazy(url, method='HEAD', body=body, headers=headers, sign=sign)
+
+
+@_lazy_api
+def options(
+	url: str,
+	/,
+	*,
+	body: str | bytes | None = None,
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
+	sign: bool = False,
+) -> Lazy[Response]:
+	return request.lazy(url, method='OPTIONS', body=body, headers=headers, sign=sign)
 
 
 @_lazy_api
@@ -102,7 +117,7 @@ def patch(
 	/,
 	*,
 	body: str | bytes | None = None,
-	headers: dict[str, str | bytes] = {},
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
 	sign: bool = False,
 ) -> Lazy[Response]:
 	return request.lazy(url, method='PATCH', body=body, headers=headers, sign=sign)
@@ -115,9 +130,37 @@ def request(
 	*,
 	method: typing.Literal['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'],
 	body: str | bytes | None = None,
-	headers: dict[str, str | bytes] = {},
+	headers: collections.abc.Mapping[str, str | bytes] | None = None,
 	sign: bool = False,
 ) -> Lazy[Response]:
+	headers = headers or {}
+
+	def decoder(data: collections.abc.Buffer) -> Response:
+		result = _decode_nondet(data)
+		if not isinstance(result, dict):
+			_invalid_nondet_response('web result is not a dict')
+		response = result.get('response')
+		if not isinstance(response, dict):
+			_invalid_nondet_response('missing web response')
+
+		status = response.get('status')
+		response_headers = response.get('headers')
+		body = response.get('body')
+		if (
+			not isinstance(status, int)
+			or isinstance(status, bool)
+			or not 0 <= status <= 0xFFFF
+		):
+			_invalid_nondet_response('web response status is not a u16')
+		if not isinstance(response_headers, dict) or not all(
+			isinstance(key, str) and isinstance(value, bytes)
+			for key, value in response_headers.items()
+		):
+			_invalid_nondet_response('web response headers are invalid')
+		if body is not None and not isinstance(body, bytes):
+			_invalid_nondet_response('web response body is invalid')
+		return Response(status=status, headers=response_headers, body=body)
+
 	return gl_call.gl_call_generic(
 		{
 			'WebRequest': {
@@ -128,7 +171,7 @@ def request(
 				'sign': sign,
 			}
 		},
-		lambda x: Response(**(_decode_nondet(x)['response'])),
+		decoder,
 	)
 
 
@@ -138,13 +181,17 @@ def render(
 	/,
 	*,
 	wait_after_loaded: str | None = None,
-	mode: typing.Literal['text', 'html'],
+	mode: typing.Literal['text', 'html'] = 'text',
 ) -> str: ...
 
 
 @typing.overload
 def render(
-	url: str, *, wait_after_loaded: str | None = None, mode: typing.Literal['screenshot']
+	url: str,
+	/,
+	*,
+	wait_after_loaded: str | None = None,
+	mode: typing.Literal['screenshot'],
 ) -> Image: ...
 
 
@@ -166,12 +213,22 @@ def render(
 
 	def decoder(x):
 		x = _decode_nondet(x)
+		if not isinstance(x, dict):
+			_invalid_nondet_response('render result is not a dict')
 		if mode != 'screenshot':
-			return typing.cast(str, x['text'])
-		raw = typing.cast(bytes, x['image'])
+			text = x.get('text')
+			if not isinstance(text, str):
+				_invalid_nondet_response('render text is invalid')
+			return text
+		raw = x.get('image')
+		if not isinstance(raw, bytes):
+			_invalid_nondet_response('render image is invalid')
 		import PIL.Image
 
-		pil = PIL.Image.open(io.BytesIO(raw))
+		try:
+			pil = PIL.Image.open(io.BytesIO(raw))
+		except (OSError, ValueError) as exc:
+			_invalid_nondet_response(f'render image is invalid: {exc}')
 		return Image(raw, pil)
 
 	return gl_call.gl_call_generic(
@@ -179,7 +236,7 @@ def render(
 			'WebRender': {
 				'url': url,
 				'mode': mode,
-				'wait_after_loaded': wait_after_loaded or '0ms',
+				'post_load_wait': wait_after_loaded or '0ms',
 			}
 		},
 		decoder,

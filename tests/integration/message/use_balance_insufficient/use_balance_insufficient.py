@@ -3,8 +3,8 @@ import genlayer as gl
 from genlayer.vm.public_abi import Permissions
 
 _PARAMS = gl.chain.InternalMessageParams(
-	leader_timeunits_allocation=5,
-	validator_timeunits_allocation=5,
+	leader_time_units_allocation=5,
+	validator_time_units_allocation=5,
 	execution_budget_per_round=1024,
 	rotations=[4, 4, 4, 4, 4],
 	max_price_gen_per_time_unit=2,
@@ -22,7 +22,7 @@ class Contract(gl.contract.Contract):
 	@gl.public.write
 	def do_emit(self):
 		# The contract balance (100) is below the metered message fee, so the
-		# balance-funded emission fails with Inbalance (errno 7), catchable by
+		# balance-funded emission fails with InsufficientBalance (errno 7), catchable by
 		# the guest just like a value overspend.
 		try:
 			gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(

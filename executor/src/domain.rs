@@ -6,7 +6,7 @@ use primitive_types::U256;
 #[derive(Debug, Clone, PartialEq, Eq, genlayer_calldata::Encode)]
 #[calldata(tag = "type")]
 pub enum ExecutionEmission {
-    EthSend {
+    ExternalMessage {
         address: genlayer_sdk::calldata::Address,
         calldata: Bytes,
         value: U256,
@@ -15,7 +15,7 @@ pub enum ExecutionEmission {
 
         fee_params: genlayer_sdk::abi::fees::ExternalMessageParams,
     },
-    PostMessage {
+    InternalMessage {
         call_key: genlayer_sdk::abi::CallKey,
         address: genlayer_sdk::calldata::Address,
         calldata: abi::entry::MainCallData,
@@ -30,7 +30,7 @@ pub enum ExecutionEmission {
         /// balance rather than the sender's prefunded message-fee pool.
         use_balance: bool,
     },
-    DeployContract {
+    InternalDeployMessage {
         calldata: abi::entry::MainDeployData,
         code: Bytes,
         value: U256,
@@ -41,10 +41,10 @@ pub enum ExecutionEmission {
 
         fee_params: genlayer_sdk::abi::fees::InternalMessageParams,
         subtree: bytes::Bytes,
-        /// Chain `useBalance`; see `ExecutionEmission::PostMessage::use_balance`.
+        /// Chain `useBalance`; see `ExecutionEmission::InternalMessage::use_balance`.
         use_balance: bool,
     },
-    EmitEvent {
+    Event {
         topics: Vec<Bytes>,
         blob: genlayer_calldata::codec::Maybe<
             genlayer_sdk::calldata::Map<genlayer_sdk::calldata::Value>,

@@ -5,7 +5,7 @@ This module provides:
 - ``DynArray``: Dynamic-length arrays
 - ``Array``: Fixed-size arrays
 - ``TreeMap``: Tree-based key-value storage
-- ``allow_storage``: Decorator for storage-enabled classes
+- ``allow``: Decorator for storage-enabled classes
 - ``inmem_allocate``: In-memory allocation utility
 - ``Root``: Root storage class
 """
@@ -78,15 +78,15 @@ def cast_slot[T](t: typing.Type[T], manager: Manager, slot: bytes, offset: int, 
 
 def copy_to_memory[T](val: T, /) -> T:
 	"""
-	Deep-copy a storage value into a new in-memory instance.
+	Deep-copy a storage-enabled class instance into a new in-memory instance.
 
-	:param val: storage-backed value to copy
+	:param val: storage-backed class instance to copy
 	:returns: independent in-memory copy
-	:raises AssertionError: when val is not a storage type
+	:raises TypeError: when val is not a storage-enabled class instance
 	"""
-	# we know that val is a storage type
 	td = getattr(val, '__type_desc__', None)
-	assert td is not None
+	if td is None:
+		raise TypeError(f'expected a storage-enabled class, got {type(val).__name__}')
 
 	man = InmemManager()
 	slot = man.get_store_slot(ROOT_SLOT_ID)
@@ -120,5 +120,9 @@ class Pickled[T]:
 		Serialize and persist the given value.
 
 		:param val: object to pickle and store
+
+		Serialization completes before storage is changed. If serialization
+		fails, the previous value remains intact. A later storage-write failure
+		may leave the byte payload only partially updated.
 		"""
 		self._data = pickle.dumps(val)

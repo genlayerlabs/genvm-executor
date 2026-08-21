@@ -100,11 +100,14 @@ fn wrap_promotes_internal_cause() {
 fn a_detail_rides_along_with_its_code() {
     let code = abi::consts::VmError::out_of()
         .message_fee()
-        .node()
+        .allocation_budget()
         .internal();
 
     let recovered = Error::vm(code).into_run_ok().expect("must be a VM result");
-    assert_eq!(vm_code(&recovered), "out_of message_fee node # internal");
+    assert_eq!(
+        vm_code(&recovered),
+        "out_of message_fee allocation_budget # internal"
+    );
 }
 
 // An internal error stays internal (no spurious VM code).

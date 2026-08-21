@@ -64,38 +64,38 @@ impl TryFrom<u8> for ResultCode {
     ::genlayer_calldata::Decode,
 )]
 #[repr(u8)]
-pub enum StorageType {
+pub enum StorageView {
     Default = 0,
     LatestFinalized = 1,
     LatestDecided = 2,
 }
 
-impl StorageType {
+impl StorageView {
     pub const SIZE: usize = 3;
     pub fn value(self) -> u8 {
         match self {
-            StorageType::Default => 0,
-            StorageType::LatestFinalized => 1,
-            StorageType::LatestDecided => 2,
+            StorageView::Default => 0,
+            StorageView::LatestFinalized => 1,
+            StorageView::LatestDecided => 2,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
         match self {
-            StorageType::Default => "default",
-            StorageType::LatestFinalized => "latest_finalized",
-            StorageType::LatestDecided => "latest_decided",
+            StorageView::Default => "default",
+            StorageView::LatestFinalized => "latest_finalized",
+            StorageView::LatestDecided => "latest_decided",
         }
     }
 }
 
-impl TryFrom<u8> for StorageType {
+impl TryFrom<u8> for StorageView {
     type Error = ();
 
     fn try_from(value: u8) -> Result<Self, ()> {
         match value {
-            0 => Ok(StorageType::Default),
-            1 => Ok(StorageType::LatestFinalized),
-            2 => Ok(StorageType::LatestDecided),
+            0 => Ok(StorageView::Default),
+            1 => Ok(StorageView::LatestFinalized),
+            2 => Ok(StorageView::LatestDecided),
             _ => Err(()),
         }
     }
@@ -348,14 +348,14 @@ pub mod __VmError {
         }
     }
 
-    pub struct OutOfMessageFeeNode;
+    pub struct OutOfMessageFeeAllocationBudget;
 
-    impl OutOfMessageFeeNode {
-        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node")) }
-        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node # internal")) }
-        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee node # external")) }
+    impl OutOfMessageFeeAllocationBudget {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee allocation_budget")) }
+        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee allocation_budget # internal")) }
+        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("out_of message_fee allocation_budget # external")) }
         pub const fn prefix_(&self) -> &'static str {
-            "out_of message_fee node"
+            "out_of message_fee allocation_budget"
         }
     }
 
@@ -366,7 +366,7 @@ pub mod __VmError {
             "out_of message_fee"
         }
         pub const fn total(&self) -> OutOfMessageFeeTotal { OutOfMessageFeeTotal }
-        pub const fn node(&self) -> OutOfMessageFeeNode { OutOfMessageFeeNode }
+        pub const fn allocation_budget(&self) -> OutOfMessageFeeAllocationBudget { OutOfMessageFeeAllocationBudget }
     }
 
     pub struct OutOf;
@@ -376,7 +376,7 @@ pub mod __VmError {
             "out_of"
         }
         pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("out_of storage")) }
-        pub const fn vm_recursion(&self) -> VmError { VmError(Cow::Borrowed("out_of vm_recursion")) }
+        pub const fn subvm_recursion(&self) -> VmError { VmError(Cow::Borrowed("out_of subvm_recursion")) }
         pub const fn nondet_blocks(&self) -> VmError { VmError(Cow::Borrowed("out_of nondet_blocks")) }
         pub const fn locked_slots(&self) -> VmError { VmError(Cow::Borrowed("out_of locked_slots")) }
         pub const fn upgraders(&self) -> VmError { VmError(Cow::Borrowed("out_of upgraders")) }
@@ -386,14 +386,14 @@ pub mod __VmError {
         pub const fn message_fee(&self) -> OutOfMessageFee { OutOfMessageFee }
     }
 
-    pub struct FeeNoMatchingNode;
+    pub struct FeeNoMatchingAllocation;
 
-    impl FeeNoMatchingNode {
-        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node")) }
-        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node # internal")) }
-        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_node # external")) }
+    impl FeeNoMatchingAllocation {
+        pub const fn val(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_allocation")) }
+        pub const fn internal(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_allocation # internal")) }
+        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("fee no_matching_allocation # external")) }
         pub const fn prefix_(&self) -> &'static str {
-            "fee no_matching_node"
+            "fee no_matching_allocation"
         }
     }
 
@@ -405,7 +405,7 @@ pub mod __VmError {
         }
         pub const fn below_minimum(&self) -> VmError { VmError(Cow::Borrowed("fee below_minimum")) }
         pub const fn too_many_rounds(&self) -> VmError { VmError(Cow::Borrowed("fee too_many_rounds")) }
-        pub const fn no_matching_node(&self) -> FeeNoMatchingNode { FeeNoMatchingNode }
+        pub const fn no_matching_allocation(&self) -> FeeNoMatchingAllocation { FeeNoMatchingAllocation }
     }
 
     pub struct Evm;
@@ -516,13 +516,13 @@ impl VmError {
             "out_of receipt message" |
             "out_of receipt event" |
             "out_of message_fee total" |
-            "out_of message_fee node" |
-            "out_of vm_recursion" |
+            "out_of message_fee allocation_budget" |
+            "out_of subvm_recursion" |
             "out_of nondet_blocks" |
             "out_of locked_slots" |
             "out_of upgraders" |
             "out_of fds" |
-            "fee no_matching_node" |
+            "fee no_matching_allocation" |
             "fee below_minimum" |
             "fee too_many_rounds" |
             "forbidden" |

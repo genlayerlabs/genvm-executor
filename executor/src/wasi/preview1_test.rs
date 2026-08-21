@@ -17,7 +17,7 @@ fn context() -> Context {
                 can_use_balance_for_message_fees: false,
             },
             execution: base::Execution {
-                state_mode: crate::public_abi::StorageType::Default,
+                state_mode: crate::public_abi::StorageView::Default,
                 topmost_runner_id: crate::runners::Id::Custom {
                     hash: Bytes32Hash::ZERO,
                 },

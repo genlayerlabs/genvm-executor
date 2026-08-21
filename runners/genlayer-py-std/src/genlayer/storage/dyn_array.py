@@ -1,6 +1,7 @@
 __all__ = ('DynArray',)
 
 import collections.abc
+import operator
 import typing
 
 from ._internal.desc_base_types import _u32_desc
@@ -82,6 +83,10 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		:param idx: integer index or slice
 		:param val: value or sequence of values to assign
 		:raises IndexError: when integer index is out of range
+
+		If assigning an element or one of several slice elements fails, earlier
+		writes made by this operation remain visible. A failed extending slice
+		assignment changes the length only after all new elements are written.
 		"""
 		if not isinstance(idx, slice):
 			idx = self._map_index(idx.__index__())
@@ -146,6 +151,9 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 
 		:param idx: integer index or slice
 		:raises IndexError: when integer index is out of range
+
+		Elements are shifted before the length is reduced. If shifting fails,
+		the original length and any shifts already completed remain visible.
 		"""
 		if isinstance(idx, int):
 			start = self._map_index(idx)
@@ -183,16 +191,24 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		_u32_desc.set(self._storage_slot, self._off, len(arr))
 		return self
 
-	def insert(self, index: int, value: T, /) -> None:
+	def insert(self, index: typing.SupportsIndex, value: T, /) -> None:
 		"""
 		Insert value before the given index.
 
 		:param index: position to insert at
 		:param value: value to insert
-		:raises IndexError: when index is out of range
+
+		Like :py:meth:`list.insert`, negative indices are normalized and indices
+		outside the array are clamped to either end. The length is increased
+		before elements are shifted, so a failed write leaves the increased
+		length and any completed shifts visible.
 		"""
-		index = self._map_index(index)
+		index = operator.index(index)
 		old_len = len(self)
+		if index < 0:
+			index = max(0, index + old_len)
+		else:
+			index = min(index, old_len)
 		_u32_desc.set(self._storage_slot, self._off, old_len + 1)
 		for i in range(old_len, index, -1):
 			self[i] = self[i - 1]
@@ -207,6 +223,10 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		Append value to the end of the array.
 
 		:param value: value to append
+
+		The length is increased before the value is written. If writing the
+		value fails, the new element remains visible with whatever data its
+		storage previously contained, or its zero-initialized value.
 		"""
 		le = len(self)
 		_u32_desc.set(self._storage_slot, self._off, le + 1)
@@ -218,22 +238,32 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		Grow the array by one and return a reference to the new (uninitialized) element.
 
 		:returns: reference to the newly appended element
+
+		The new element is not initialized by this method. It exposes the value
+		already present at its storage location, which is zero-initialized if the
+		location has never been written.
 		"""
 		le = len(self)
 		_u32_desc.set(self._storage_slot, self._off, le + 1)
 		items_at = self._storage_slot.indirect(self._off)
 		return self._item_desc.get(items_at, le * self._item_desc.size)
 
-	def pop(self) -> None:  # type: ignore
+	def pop(self, index: typing.SupportsIndex = -1, /) -> T:
 		"""
-		Remove the last element.
+		Remove and return an element.
 
-		:raises Exception: when the array is empty
+		:param index: element to remove (default last)
+		:raises IndexError: when the array is empty or index is out of range
+
+		Storage-backed compound values are returned as views, not detached
+		Python objects. Removing a non-last element shifts another element into
+		the returned view's location; reusing the removed last slot can likewise
+		change a previously returned view.
 		"""
-		le = len(self)
-		if le == 0:
-			raise Exception("can't pop from empty array")
-		_u32_desc.set(self._storage_slot, self._off, le - 1)
+		index = self._map_index(operator.index(index))
+		ret = self[index]
+		del self[index]
+		return ret
 
 	def __repr__(self) -> str:
 		ret: list[str] = []
@@ -250,6 +280,8 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 	def clear(self) -> None:
 		"""
 		Remove all elements from the array.
+
+		Payload bytes remain in storage; later growth can expose them again.
 		"""
 		_u32_desc.set(self._storage_slot, self._off, 0)
 

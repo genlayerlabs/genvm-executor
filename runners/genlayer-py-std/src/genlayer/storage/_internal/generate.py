@@ -459,7 +459,15 @@ def _install_storage_view(
 			field = s.__type_desc__.layout.fields[name]
 			field.desc.set(s._storage_slot, s._off + field.offset, value)
 
-		setattr(cls, field_name, property(getter, setter))
+		setattr(
+			cls,
+			field_name,
+			property(
+				getter,
+				setter,
+				doc='Storage-backed field; failed compound assignment can leave it partially updated.',
+			),
+		)
 
 	setattr(cls, STORAGE_PATCHED_ATTR, True)
 	old_init = cls.__init__
@@ -500,7 +508,7 @@ def _install_storage_view(
 def _storage_build_struct(ctx: _BuilderCtx, cls: type) -> TypeDesc:
 	if not hasattr(cls, ALLOW_STORAGE_ATTR):
 		raise ctx.type_err(
-			'class is not marked for usage within storage, please, annotate it with @allow_storage'
+			'class is not marked for usage within storage, please annotate it with @allow'
 		)
 
 	size = 0
@@ -596,16 +604,20 @@ class _DateTimeDesc(TypeDesc[datetime.datetime]):
 		return make_date(time.localtime(dt.seconds), tzinfo=None)
 
 	def set(self, slot: Slot, off: int, val: datetime.datetime) -> None:
+		tz_off = None if val.tzinfo is None else val.utcoffset()
+		if val.tzinfo is not None and tz_off is None:
+			raise ValueError('datetime.utcoffset() returned None')
+		seconds = int(val.timestamp())
+
 		dt = _dt_desc.get(slot, off)
-		dt.seconds = int(val.timestamp())
+		dt.seconds = seconds
 		dt.micros = val.microsecond
 		if val.tzinfo is None:
 			dt.has_tz = False
 			return
 
 		dt.has_tz = True
-		tz_off = val.tzinfo.utcoffset(None)
-		assert tz_off is not None
+		tz_off = typing.cast(datetime.timedelta, tz_off)
 		dt.off_days = tz_off.days
 		dt.off_seconds = tz_off.seconds
 		dt.off_micros = tz_off.microseconds

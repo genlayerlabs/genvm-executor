@@ -11,7 +11,7 @@
         $io
 
         $forbidden
-        $inbalance
+        $insufficient_balance
     )
 )
 

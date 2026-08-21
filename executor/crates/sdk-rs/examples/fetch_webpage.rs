@@ -119,7 +119,7 @@ fn fetch_webpage(url: &str, mode: &str) -> Result<String, ContractError> {
         Value::Map(BTreeMap::from([
             ("mode".to_owned(), Value::Str(mode.to_owned())),
             ("url".to_owned(), Value::Str(url.to_owned())),
-            ("wait_after_loaded".to_owned(), Value::Str("0ms".to_owned())),
+            ("post_load_wait".to_owned(), Value::Str("0ms".to_owned())),
         ])),
     )]));
 
@@ -216,10 +216,10 @@ impl Contract for FetchWebpageHandler {
                 let content = fetch_webpage(TARGET_URL, "text").map_err(|e| e.to_string())?;
                 Ok(Value::Str(content))
             }
-            ConsensusStageData::Validator { leaders_result } => {
-                println!("I am validator! leaders_result={:?}", leaders_result);
+            ConsensusStageData::Validator { leader_result } => {
+                println!("I am validator! leader_result={:?}", leader_result);
 
-                let LeaderResult::Return(leader_value) = leaders_result else {
+                let LeaderResult::Return(leader_value) = leader_result else {
                     // Leader had an error - disagree
                     return Ok(Value::Bool(false));
                 };

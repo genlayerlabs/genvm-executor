@@ -12,6 +12,7 @@ __all__ = (
 	'web',
 	'exec_prompt',
 	'Image',
+	'JSONValue',
 )
 
 import collections.abc
@@ -36,21 +37,50 @@ class NondetException(Exception):
 
 import genlayer.calldata as calldata  # noqa: E402
 
+type JSONValue = (
+	None | bool | int | float | str | list[JSONValue] | dict[str, JSONValue]
+)
 
-def _decode_nondet(buf):
-	ret = typing.cast(dict, calldata.decode(buf))
-	if err := ret.get('error'):
+
+def _invalid_nondet_response(reason: str) -> typing.NoReturn:
+	raise NondetException(causes=[f'invalid nondeterministic response: {reason}'], ctx={})
+
+
+def _decode_nondet(buf: collections.abc.Buffer) -> calldata.Decoded:
+	try:
+		ret = calldata.decode(buf)
+	except (calldata.DecodingError, UnicodeDecodeError) as exc:
+		_invalid_nondet_response(f'invalid calldata: {exc}')
+	if not isinstance(ret, dict):
+		_invalid_nondet_response('expected a dict')
+
+	if 'error' in ret:
+		err = ret['error']
 		if isinstance(err, dict) and 'causes' in err:
-			raise NondetException(
-				causes=err.get('causes', []),
-				ctx=err.get('ctx', {}),
-			)
+			causes = err['causes']
+			ctx = err.get('ctx', {})
+			if (
+				not isinstance(causes, list)
+				or not all(isinstance(cause, str) for cause in causes)
+				or not isinstance(ctx, dict)
+			):
+				_invalid_nondet_response('invalid error details')
+			raise NondetException(causes=causes, ctx=ctx)
 		raise NondetException(causes=[str(err)], ctx={})
+
+	if 'ok' not in ret:
+		_invalid_nondet_response('missing `ok` or `error`')
 	return ret['ok']
 
 
-def _decode_nondet_json(buf):
-	return json.loads(_decode_nondet(buf))
+def _decode_nondet_json(buf: collections.abc.Buffer) -> JSONValue:
+	data = _decode_nondet(buf)
+	if not isinstance(data, str | bytes | bytearray):
+		_invalid_nondet_response('JSON result is not text')
+	try:
+		return typing.cast(JSONValue, json.loads(data))
+	except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+		_invalid_nondet_response(f'invalid JSON: {exc}')
 
 
 if typing.TYPE_CHECKING:
@@ -91,14 +121,14 @@ def exec_prompt(
 	prompt: str,
 	*,
 	response_format: typing.Literal['json'],
-	images: bytes | Image | None = None,
-) -> dict[str, typing.Any]: ...
+	images: collections.abc.Sequence[bytes | Image] | None = None,
+) -> JSONValue: ...
 
 
 @_lazy_api
 def exec_prompt(
 	prompt: str, /, **config: typing.Unpack[ExecPromptKwArgs]
-) -> Lazy[str | dict]:
+) -> Lazy[str | JSONValue]:
 	"""
 	API to execute a prompt (perform NLP)
 
@@ -108,7 +138,7 @@ def exec_prompt(
 	:param \\*\\*config: configuration
 	:type \\*\\*config: :py:class:`ExecPromptKwArgs`
 
-	:rtype: ``str``
+	:rtype: ``str`` or :py:obj:`JSONValue`
 	"""
 
 	if len(prompt) == 0:
@@ -118,8 +148,10 @@ def exec_prompt(
 	for im in config.get('images', None) or []:
 		if isinstance(im, Image):
 			images.append(im.raw)
-		else:
+		elif isinstance(im, bytes):
 			images.append(im)
+		else:
+			raise TypeError(f'expected bytes or Image, got {type(im).__name__}')
 
 	format = config.get('response_format', 'text')
 

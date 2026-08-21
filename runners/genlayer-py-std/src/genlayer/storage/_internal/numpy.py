@@ -37,9 +37,11 @@ def _populate_np_descs():
 			return np.frombuffer(dat, self._type).reshape(self.shape).copy()
 
 		def set(self, slot: Slot, off: int, val: np.ndarray):
-			assert val.dtype == self._type
+			if val.dtype != self._type:
+				raise TypeError(f'expected dtype {self._type}, got {val.dtype}')
 			mv = memoryview(val).cast('B')
-			assert len(mv) == self.size, f'invalid len {len(mv)} vs expected {self.size}'
+			if len(mv) != self.size:
+				raise ValueError(f'expected {self.size} bytes, got {len(mv)}')
 			slot.write(off, mv)
 
 	class _NumpyDesc(TypeDesc):

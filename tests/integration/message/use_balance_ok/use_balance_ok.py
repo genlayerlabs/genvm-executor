@@ -3,8 +3,8 @@ import genlayer as gl
 from genlayer.vm.public_abi import Permissions
 
 _PARAMS = gl.chain.InternalMessageParams(
-	leader_timeunits_allocation=5,
-	validator_timeunits_allocation=5,
+	leader_time_units_allocation=5,
+	validator_time_units_allocation=5,
 	execution_budget_per_round=1024,
 	rotations=[4, 4, 4, 4, 4],
 	# Small GEN cap keeps the metered fee tractable: it is the multiplier for the

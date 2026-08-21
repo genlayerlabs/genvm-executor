@@ -49,7 +49,7 @@ macro_rules! impl_arbitrary_via_try_from_u8 {
 }
 
 impl_arbitrary_via_try_from_u8!(ResultCode, 2u8);
-impl_arbitrary_via_try_from_u8!(StorageType, 2u8);
+impl_arbitrary_via_try_from_u8!(StorageView, 2u8);
 impl_arbitrary_via_try_from_u8!(EntryKind, 2u8);
 
 impl arbitrary::Arbitrary<'_> for SpecialMethod {

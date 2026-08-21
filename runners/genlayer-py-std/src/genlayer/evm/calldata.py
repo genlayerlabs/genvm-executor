@@ -5,6 +5,7 @@ __all__ = (
 	'MethodEncoder',
 	'encode',
 	'decode',
+	'DecodingError',
 )
 
 import collections.abc
@@ -16,7 +17,7 @@ from genlayer.types.keccak import Keccak256
 
 from . import InplaceTuple
 from ._internal.builder import build
-from ._internal.codecs import DecoderState, EncodeState
+from ._internal.codecs import DecoderState, DecodingError, EncodeState
 
 
 def type_name_of(t: type, /) -> str:
@@ -44,7 +45,7 @@ def encode[T](params: typing.Type[T], args: T, /) -> bytes:
 
 def decode[T](expected: typing.Type[T], encoded: collections.abc.Buffer, /) -> T:
 	encoder = build(expected)
-	state = DecoderState(memoryview(encoded), 0, 0)
+	state = DecoderState(memoryview(encoded), 0, 0, encoder.size_here)
 	return encoder.decode(state)
 
 
@@ -68,7 +69,7 @@ class MethodEncoder:
 		return bytes(state.result)
 
 	def decode_ret(self, data: collections.abc.Buffer, /) -> typing.Any:
-		state = DecoderState(memoryview(data), 0, 0)
 		if self._decoder is None:
 			return None
+		state = DecoderState(memoryview(data), 0, 0, self._decoder.size_here)
 		return self._decoder.decode(state)

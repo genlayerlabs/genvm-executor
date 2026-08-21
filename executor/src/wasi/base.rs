@@ -14,7 +14,7 @@ pub struct Permissions {
 
 #[derive(Clone, Serialize, genlayer_calldata::Encode)]
 pub struct Execution {
-    pub state_mode: public_abi::StorageType,
+    pub state_mode: public_abi::StorageView,
     pub topmost_runner_id: runners::Id,
 }
 
@@ -27,6 +27,6 @@ pub struct Config {
 
 impl Config {
     pub fn is_main(&self) -> bool {
-        self.execution.state_mode == public_abi::StorageType::Default
+        self.execution.state_mode == public_abi::StorageView::Default
     }
 }

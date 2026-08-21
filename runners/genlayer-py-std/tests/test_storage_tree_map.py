@@ -160,6 +160,19 @@ def test_compute_if_absent_existing():
 	assert m['k'] == 'old_val'
 
 
+def test_compute_if_absent_supplier_error_does_not_mutate():
+	m = new_map()
+	m['before'] = 'value'
+
+	def fail():
+		raise ValueError('supplier failed')
+
+	with pytest.raises(ValueError, match='supplier failed'):
+		m.compute_if_absent('missing', fail)
+
+	assert list(m.items()) == [('before', 'value')]
+
+
 def test_get_or_insert_default():
 	m = new_map()
 	m.get_or_insert_default('k')

@@ -366,13 +366,19 @@ class KeccakHash:
 		:param output_bits: output length in bits (must be divisible by 8)
 		"""
 		# our in-absorption sponge. this is never given padding
-		assert bitrate_bits + capacity_bits in (25, 50, 100, 200, 400, 800, 1600)
+		if bitrate_bits <= 0 or bitrate_bits % 8 != 0:
+			raise ValueError('bitrate must be a positive multiple of 8')
+		if capacity_bits < 0:
+			raise ValueError('capacity must be non-negative')
+		if bitrate_bits + capacity_bits != 1600:
+			raise ValueError('this implementation only supports a Keccak width of 1600')
 		self.sponge = KeccakSponge(
 			bitrate_bits, bitrate_bits + capacity_bits, multirate_padding, keccak_f
 		)
 
 		# hashlib interface members
-		assert output_bits % 8 == 0
+		if output_bits <= 0 or output_bits % 8 != 0:
+			raise ValueError('output length must be a positive multiple of 8')
 		self.digest_size = bits2bytes(output_bits)
 		self.block_size = bits2bytes(bitrate_bits)
 

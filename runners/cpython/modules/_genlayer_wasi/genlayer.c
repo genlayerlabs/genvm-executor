@@ -21,7 +21,7 @@ gl_call(char const* request, uint32_t request_len, uint32_t* result_fd);
 
 static char const* const error_codes[] = {
 	"success", "overflow", "inval",     "fault",
-	"ilseq",   "io",       "forbidden", "inbalance",
+	"ilseq",   "io",       "forbidden", "insufficient_balance",
 };
 
 static const size_t error_codes_len =

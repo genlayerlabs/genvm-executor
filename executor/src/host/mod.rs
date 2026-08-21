@@ -6,7 +6,7 @@ use genvm_common::internal_constants::top_limits;
 use genvm_common::*;
 
 use crate::public_abi::root_offsets;
-use crate::public_abi::StorageType;
+use crate::public_abi::StorageView;
 use genlayer_sdk::calldata::Address;
 use genlayer_sdk::calldata::ADDRESS_SIZE;
 
@@ -153,7 +153,7 @@ fn handle_host_error(sock: &mut dyn Sock, context: &str) -> Result<()> {
         host_fns::Errors::EvmReverted => {
             Err(rt::errors::Error::vm(abi::consts::VmError::evm().reverted()).into())
         }
-        // Reserved for gen_call-class host methods (e.g. eth_call) refused in
+        // Reserved for gen_call-class host methods (e.g. external_call) refused in
         // the current execution context; it must not occur during on-chain
         // consensus execution.
         host_fns::Errors::Forbidden => {
@@ -240,13 +240,13 @@ impl FullResult {
                 data: calldata::Value::Str(msg).into(),
                 backtrace: None,
                 wasm_store_hashes: genvm_modules_interfaces::WasmStoreHashes::default(),
-                storage_changes: Vec::new(),
+                storage_deltas: Vec::new(),
                 emissions: Vec::new(),
                 nondet_disagreement: None,
                 nondet_results: Vec::new(),
                 data_fees_remaining: Vec::new(),
                 data_fees_consumed: genvm_modules_interfaces::BucketsConsumed::default(),
-                llm_consumption: primitive_types::U256::zero(),
+                llm_consumed_gen_wei: primitive_types::U256::zero(),
             },
             recorded_actions: Vec::new(),
         }
@@ -271,7 +271,7 @@ impl FullResult {
             emissions: &'a Vec<domain::ExecutionEmission>,
             kind: &'a host_fns::ResultCode,
             wasm_store_hashes: &'a rt::errors::WasmStoreHashes,
-            storage_changes: &'a Vec<rt::vm::storage::Delta>,
+            storage_deltas: &'a Vec<rt::vm::storage::Delta>,
             subvm_hashes: &'a bytes::Bytes,
         }
 
@@ -299,8 +299,8 @@ impl FullResult {
                 enc.push_map_k("kind")?;
                 calldata::codec::Encode::encode(self.kind, enc)?;
 
-                enc.push_map_k("storage_changes")?;
-                calldata::codec::Encode::encode(self.storage_changes, enc)?;
+                enc.push_map_k("storage_deltas")?;
+                calldata::codec::Encode::encode(self.storage_deltas, enc)?;
 
                 enc.push_map_k("subvm_hashes")?;
                 enc.push_bytes(self.subvm_hashes)?;
@@ -326,7 +326,7 @@ impl FullResult {
             data: &rt_result.data,
             backtrace: &rt_result.backtrace,
             wasm_store_hashes: &rt_result.wasm_store_hashes,
-            storage_changes: &rt_result.storage_changes,
+            storage_deltas: &rt_result.storage_deltas,
             subvm_hashes: &rt_result.subvm_hashes,
             data_fees_remaining: &data_fees_remaining,
             data_fees_consumed: &data_fees_consumed,
@@ -363,8 +363,8 @@ impl FullResult {
                 backtrace: rt_result.backtrace.map(convert_backtrace),
                 wasm_store_hashes: convert_wasm_store_hashes(rt_result.wasm_store_hashes),
                 kind: convert_result_code(rt_result.kind),
-                storage_changes: rt_result
-                    .storage_changes
+                storage_deltas: rt_result
+                    .storage_deltas
                     .iter()
                     .map(convert_storage_delta)
                     .collect(),
@@ -377,7 +377,7 @@ impl FullResult {
                 nondet_disagreement,
                 data_fees_remaining,
                 data_fees_consumed: convert_buckets_consumed(data_fees_consumed),
-                llm_consumption,
+                llm_consumed_gen_wei: llm_consumption,
             },
             recorded_actions,
         }
@@ -462,8 +462,8 @@ fn convert_internal_message_params(
     params: genlayer_sdk::abi::fees::InternalMessageParams,
 ) -> genvm_modules_interfaces::fees::InternalMessageParams {
     genvm_modules_interfaces::fees::InternalMessageParams {
-        leader_timeunits_allocation: params.leader_timeunits_allocation,
-        validator_timeunits_allocation: params.validator_timeunits_allocation,
+        leader_timeunits_allocation: params.leader_time_units_allocation,
+        validator_timeunits_allocation: params.validator_time_units_allocation,
         execution_budget_per_round: params.execution_budget_per_round,
         rotations: params.rotations,
         max_price_gen_per_time_unit: params.max_price_gen_per_time_unit,
@@ -485,14 +485,14 @@ fn convert_emission(
     emission: domain::ExecutionEmission,
 ) -> genvm_modules_interfaces::ExecutionEmission {
     match emission {
-        domain::ExecutionEmission::EthSend {
+        domain::ExecutionEmission::ExternalMessage {
             address,
             calldata,
             value,
             message_fee,
             receipt_fee,
             fee_params,
-        } => genvm_modules_interfaces::ExecutionEmission::EthSend {
+        } => genvm_modules_interfaces::ExecutionEmission::ExternalMessage {
             address,
             calldata,
             value,
@@ -500,7 +500,7 @@ fn convert_emission(
             receipt_fee,
             fee_params: convert_external_message_params(fee_params),
         },
-        domain::ExecutionEmission::PostMessage {
+        domain::ExecutionEmission::InternalMessage {
             call_key,
             address,
             calldata,
@@ -511,7 +511,7 @@ fn convert_emission(
             fee_params,
             subtree,
             use_balance,
-        } => genvm_modules_interfaces::ExecutionEmission::PostMessage {
+        } => genvm_modules_interfaces::ExecutionEmission::InternalMessage {
             call_key: convert_call_key(call_key),
             address,
             calldata: calldata::unparsed::Maybe::from_raw(calldata::encode_obj(&calldata).into()),
@@ -523,7 +523,7 @@ fn convert_emission(
             subtree,
             use_balance,
         },
-        domain::ExecutionEmission::DeployContract {
+        domain::ExecutionEmission::InternalDeployMessage {
             calldata,
             code,
             value,
@@ -534,7 +534,7 @@ fn convert_emission(
             fee_params,
             subtree,
             use_balance,
-        } => genvm_modules_interfaces::ExecutionEmission::DeployContract {
+        } => genvm_modules_interfaces::ExecutionEmission::InternalDeployMessage {
             calldata: calldata::unparsed::Maybe::from_raw(calldata::encode_obj(&calldata).into()),
             code,
             value,
@@ -546,11 +546,11 @@ fn convert_emission(
             subtree,
             use_balance,
         },
-        domain::ExecutionEmission::EmitEvent {
+        domain::ExecutionEmission::Event {
             topics,
             blob,
             storage_fee,
-        } => genvm_modules_interfaces::ExecutionEmission::EmitEvent {
+        } => genvm_modules_interfaces::ExecutionEmission::Event {
             topics,
             blob,
             storage_fee,
@@ -575,7 +575,7 @@ impl Host {
 
         let mut len_buf = [0; 4];
         self.storage_read(
-            StorageType::Default,
+            StorageView::Default,
             contract_address,
             locked_slot,
             0,
@@ -606,7 +606,7 @@ impl Host {
         };
 
         self.storage_read(
-            StorageType::Default,
+            StorageView::Default,
             contract_address,
             locked_slot,
             4,
@@ -628,7 +628,7 @@ impl Host {
 
         let mut len_buf = [0; 4];
         self.storage_read(
-            StorageType::Default,
+            StorageView::Default,
             contract_address,
             upgraders_slot,
             0,
@@ -644,7 +644,7 @@ impl Host {
             let mut read_sender = [0; ADDRESS_SIZE];
 
             self.storage_read(
-                StorageType::Default,
+                StorageView::Default,
                 contract_address,
                 upgraders_slot,
                 4 + i * Address::SIZE,
@@ -661,19 +661,19 @@ impl Host {
 
     pub fn storage_read(
         &mut self,
-        mode: StorageType,
-        account: calldata::Address,
+        mode: StorageView,
+        address: calldata::Address,
         slot: SlotID,
-        index: u32,
+        offset: u32,
         buf: &mut [u8],
     ) -> Result<()> {
         let mut sock = self.lock_sock();
 
         sock.write_all(&[host_fns::Methods::StorageRead as u8])?;
         sock.write_all(&[mode as u8; 1])?;
-        sock.write_all(&account.raw())?;
+        sock.write_all(&address.raw())?;
         sock.write_all(&slot.raw())?;
-        sock.write_all(&index.to_le_bytes())?;
+        sock.write_all(&offset.to_le_bytes())?;
         let buf_len: u32 = buf.len().into_int_downcast_panicking();
         sock.write_all(&buf_len.to_le_bytes())?;
 
@@ -682,27 +682,27 @@ impl Host {
         sock.read_exact(buf)
             .with_context(|| format!("reading {} bytes from storage slot {:?}", buf.len(), slot))?;
 
-        log_trace!(slot:bytes = slot.0, index = index, data:bytes = buf; "read");
+        log_trace!(slot:bytes = slot.0, offset = offset, data:bytes = buf; "read");
 
         Ok(())
     }
 
-    pub fn resolve_callcontract_executor(
+    pub fn resolve_call_contract_executor(
         &mut self,
         contract_address: calldata::Address,
-        state_mode: StorageType,
+        state_mode: StorageView,
         advisory_major: u8,
     ) -> Result<Option<bytes::Bytes>> {
-        log_trace!("resolve_callcontract_executor");
+        log_trace!("resolve_call_contract_executor");
 
         let mut sock = self.lock_sock();
-        sock.write_all(&[host_fns::Methods::ResolveCallcontractExecutor as u8])?;
+        sock.write_all(&[host_fns::Methods::ResolveCallContractExecutor as u8])?;
         sock.write_all(&contract_address.raw())?;
         sock.write_all(&[state_mode as u8, advisory_major])?;
 
-        handle_host_error(&mut **sock, "resolve_callcontract_executor")?;
-        let encoded = read_bytes(&mut **sock, "resolve_callcontract_executor result")?;
-        calldata::decode_obj(&encoded).context("decoding resolve_callcontract_executor result")
+        handle_host_error(&mut **sock, "resolve_call_contract_executor")?;
+        let encoded = read_bytes(&mut **sock, "resolve_call_contract_executor result")?;
+        calldata::decode_obj(&encoded).context("decoding resolve_call_contract_executor result")
     }
 
     pub fn run_nested(
@@ -748,28 +748,31 @@ impl Host {
         Ok(())
     }
 
-    pub fn consume_fuel(&mut self, gas: primitive_types::U256) -> Result<()> {
-        log_trace!("consume_fuel");
+    pub fn consume_time_fee_gen_wei(
+        &mut self,
+        time_fee_gen_wei: primitive_types::U256,
+    ) -> Result<()> {
+        log_trace!("consume_time_fee_gen_wei");
 
         let mut sock = self.lock_sock();
-        sock.write_all(&[host_fns::Methods::ConsumeFuel as u8])?;
-        let buf = gas.to_little_endian();
+        sock.write_all(&[host_fns::Methods::ConsumeTimeFeeGenWei as u8])?;
+        let buf = time_fee_gen_wei.to_little_endian();
         sock.write_all(&buf)?;
 
         sock.flush()?;
         Ok(())
     }
 
-    pub fn eth_call(
+    pub fn external_call(
         &mut self,
         address: calldata::Address,
         calldata: &[u8],
         limit: u32,
     ) -> Result<Option<Box<[u8]>>> {
-        log_trace!("eth_call");
+        log_trace!("external_call");
 
         let mut sock = self.lock_sock();
-        sock.write_all(&[host_fns::Methods::EthCall as u8])?;
+        sock.write_all(&[host_fns::Methods::ExternalCall as u8])?;
 
         sock.write_all(&address.raw())?;
 
@@ -777,20 +780,23 @@ impl Host {
         sock.write_all(&calldata_len.to_le_bytes())?;
         sock.write_all(calldata)?;
 
-        handle_host_error(&mut **sock, "eth_call")?;
+        handle_host_error(&mut **sock, "external_call")?;
 
-        read_or_discard_bytes(&mut **sock, "eth_call result", limit)
+        read_or_discard_bytes(&mut **sock, "external_call result", limit)
     }
 
-    pub fn get_balance(&mut self, address: calldata::Address) -> Result<primitive_types::U256> {
-        log_trace!("get_balance");
+    pub fn get_balance_gen_wei(
+        &mut self,
+        address: calldata::Address,
+    ) -> Result<primitive_types::U256> {
+        log_trace!("get_balance_gen_wei");
 
         let mut sock = self.lock_sock();
-        sock.write_all(&[host_fns::Methods::GetBalance as u8])?;
+        sock.write_all(&[host_fns::Methods::GetBalanceGenWei as u8])?;
 
         sock.write_all(&address.raw())?;
 
-        handle_host_error(&mut **sock, "get_balance")?;
+        handle_host_error(&mut **sock, "get_balance_gen_wei")?;
 
         let mut buf: [u8; 32] = [0; 32];
         sock.read_exact(&mut buf)
@@ -798,17 +804,17 @@ impl Host {
         Ok(primitive_types::U256::from_little_endian(&buf))
     }
 
-    pub fn remaining_fuel_as_gen(&mut self) -> Result<primitive_types::U256> {
-        log_trace!("remaining_fuel_as_gen");
+    pub fn get_remaining_time_fee_gen_wei(&mut self) -> Result<primitive_types::U256> {
+        log_trace!("get_remaining_time_fee_gen_wei");
 
         let mut sock = self.lock_sock();
-        sock.write_all(&[host_fns::Methods::RemainingFuelAsGen as u8])?;
+        sock.write_all(&[host_fns::Methods::GetRemainingTimeFeeGenWei as u8])?;
 
-        handle_host_error(&mut **sock, "remaining_fuel_as_gen")?;
+        handle_host_error(&mut **sock, "get_remaining_time_fee_gen_wei")?;
 
         let mut buf: [u8; 32] = [0; 32];
         sock.read_exact(&mut buf)
-            .with_context(|| "reading remaining fuel")?;
+            .with_context(|| "reading remaining time-fee GEN wei")?;
         Ok(primitive_types::U256::from_little_endian(&buf))
     }
 
@@ -886,7 +892,7 @@ mod tests {
         (path, addr, listener)
     }
 
-    fn connect_consume_fuel_and_read(hello_data: &[u8], read_len: usize) -> Vec<u8> {
+    fn connect_consume_time_fee_gen_wei_and_read(hello_data: &[u8], read_len: usize) -> Vec<u8> {
         let (path, addr, listener) = bind_socket("hello");
         let reader = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept host connection");
@@ -896,8 +902,8 @@ mod tests {
         });
 
         let mut host = Host::connect(&addr, metrics(), hello_data).expect("connect host");
-        host.consume_fuel(primitive_types::U256::from(7))
-            .expect("consume fuel");
+        host.consume_time_fee_gen_wei(primitive_types::U256::from(7))
+            .expect("consume time-fee GEN wei");
         let buf = reader.join().expect("reader thread");
         let _ = std::fs::remove_file(path);
         buf
@@ -906,19 +912,22 @@ mod tests {
     #[test]
     fn writes_hello_before_first_method_byte() {
         let hello_data = b"hello-prefix";
-        let buf = connect_consume_fuel_and_read(hello_data, hello_data.len() + 1 + 32);
+        let buf = connect_consume_time_fee_gen_wei_and_read(hello_data, hello_data.len() + 1 + 32);
 
         assert_eq!(&buf[..hello_data.len()], hello_data);
-        assert_eq!(buf[hello_data.len()], host_fns::Methods::ConsumeFuel as u8);
+        assert_eq!(
+            buf[hello_data.len()],
+            host_fns::Methods::ConsumeTimeFeeGenWei as u8
+        );
     }
 
     #[test]
     fn short_hello_vector_means_empty_for_missing_host_index() {
         let host_hello_data = [bytes::Bytes::from_static(b"host-zero-only")];
         let hello_data = host_hello_data.get(1).map_or(&[][..], bytes::Bytes::as_ref);
-        let buf = connect_consume_fuel_and_read(hello_data, 1 + 32);
+        let buf = connect_consume_time_fee_gen_wei_and_read(hello_data, 1 + 32);
 
-        assert_eq!(buf[0], host_fns::Methods::ConsumeFuel as u8);
+        assert_eq!(buf[0], host_fns::Methods::ConsumeTimeFeeGenWei as u8);
     }
 
     fn resolve_reply(reply: Option<bytes::Bytes>) -> Option<bytes::Bytes> {
@@ -931,10 +940,10 @@ mod tests {
                 .expect("read resolve request");
             assert_eq!(
                 request[0],
-                host_fns::Methods::ResolveCallcontractExecutor as u8
+                host_fns::Methods::ResolveCallContractExecutor as u8
             );
             assert_eq!(&request[1..21], &[7; 20]);
-            assert_eq!(request[21], StorageType::LatestFinalized as u8);
+            assert_eq!(request[21], StorageView::LatestFinalized as u8);
             assert_eq!(request[22], 3);
 
             let encoded = calldata::encode_obj(&reply);
@@ -949,9 +958,9 @@ mod tests {
 
         let mut host = Host::connect(&addr, metrics(), &[]).expect("connect host");
         let result = host
-            .resolve_callcontract_executor(
+            .resolve_call_contract_executor(
                 calldata::Address::from([7; 20]),
-                StorageType::LatestFinalized,
+                StorageView::LatestFinalized,
                 3,
             )
             .expect("resolve executor");
@@ -961,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_callcontract_executor_preserves_null_and_empty_payload() {
+    fn resolve_call_contract_executor_preserves_null_and_empty_payload() {
         assert_eq!(resolve_reply(None), None);
         assert_eq!(
             resolve_reply(Some(bytes::Bytes::new())),
@@ -1016,7 +1025,7 @@ mod tests {
                 chain_id: num_bigint::BigInt::ZERO,
                 value: num_bigint::BigInt::ZERO,
                 is_init: false,
-                datetime: chrono::DateTime::parse_from_rfc3339("2026-07-28T00:00:00Z")
+                transaction_timestamp: chrono::DateTime::parse_from_rfc3339("2026-07-28T00:00:00Z")
                     .unwrap()
                     .to_utc(),
             },
@@ -1038,7 +1047,7 @@ mod tests {
     }
 
     fn eth_send_with_calldata(calldata: &[u8]) -> domain::ExecutionEmission {
-        domain::ExecutionEmission::EthSend {
+        domain::ExecutionEmission::ExternalMessage {
             address: Address::from([0; ADDRESS_SIZE]),
             calldata: bytes::Bytes::copy_from_slice(calldata),
             value: primitive_types::U256::zero(),

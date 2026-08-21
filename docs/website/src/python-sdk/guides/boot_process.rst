@@ -51,7 +51,7 @@ Error Handling
 
 The bootloader provides centralized error management:
 
-* Catches :py:class:`genlayer.gl.vm.UserError` exceptions and triggers rollback with error message
+* Catches :py:class:`genlayer.vm.UserError` exceptions and triggers rollback with error message
 * Validates contract structure and method accessibility
 * Returns appropriate error messages for invalid method calls
 

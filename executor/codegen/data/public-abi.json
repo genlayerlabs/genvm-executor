@@ -11,7 +11,7 @@
   },
   {
     "type": "enum",
-    "name": "storage_type",
+    "name": "storage_view",
     "repr": "u8",
     "values": {
       "default": 0,
@@ -145,7 +145,7 @@
                 ]
               },
               {
-                "head": "node",
+                "head": "allocation_budget",
                 "tail": [
                   {
                     "head": "#",
@@ -155,7 +155,7 @@
               }
             ]
           },
-          "vm_recursion",
+          "subvm_recursion",
           "nondet_blocks",
           "locked_slots",
           "upgraders",
@@ -166,7 +166,7 @@
         "head": "fee",
         "tail": [
           {
-            "head": "no_matching_node",
+            "head": "no_matching_allocation",
             "tail": [
               {
                 "head": "#",

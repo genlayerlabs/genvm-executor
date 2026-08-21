@@ -2,6 +2,7 @@ import typing
 from dataclasses import dataclass
 
 import genlayer._internal.get_schema as _get_schema
+import pytest
 from genlayer._internal.get_schema import get_schema
 from genlayer.types import Address, u256
 
@@ -98,3 +99,23 @@ def test_literal_bool():
 
 	# sanity-check: plain int literals still resolve to 'int'
 	assert gs._repr_type(typing.Literal[0, 1], False) == 'int'
+
+
+@pytest.mark.parametrize('first_parameter', [None, 'not_self'])
+def test_public_method_requires_self(first_parameter):
+	if first_parameter is None:
+
+		@public
+		def broken(): ...
+
+	else:
+
+		@public
+		def broken(not_self): ...
+
+	class Contract:
+		def __init__(self): ...
+
+	Contract.broken = broken
+	with pytest.raises(TypeError, match='missing self'):
+		get_schema(Contract)

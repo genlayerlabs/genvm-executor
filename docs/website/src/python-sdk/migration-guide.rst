@@ -30,9 +30,9 @@ The state before finalization is named *decided* everywhere: the ``on`` argument
    * - ``on='accepted'``
      - ``on='decided'``
    * - ``StorageType.LATEST_NON_FINAL``
-     - ``StorageType.LATEST_DECIDED``
+     - ``StorageView.LATEST_DECIDED``
    * - ``StorageType.LATEST_FINAL``
-     - ``StorageType.LATEST_FINALIZED``
+     - ``StorageView.LATEST_FINALIZED``
 
 Sandboxes and Runners
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -91,7 +91,7 @@ VM Error Codes
    * - ``invalid_contract malformed_runner``
      - ``invalid_contract runner malformed``
 
-``malformed_entry`` is new, ``out_of receipt message``, ``out_of message_fee total``, ``out_of message_fee node`` and ``fee no_matching_node`` gained ``internal``/``external`` variants, and ``ResultCode.INTERNAL_ERROR`` is gone. The ``memory_limiter_consts`` and ``top_limits`` tables were removed from ``public_abi``.
+``malformed_entry`` is new, ``out_of receipt message``, ``out_of message_fee total``, ``out_of message_fee allocation_budget`` and ``fee no_matching_allocation`` gained ``internal``/``external`` variants, and ``ResultCode.INTERNAL_ERROR`` is gone. The ``memory_limiter_consts`` and ``top_limits`` tables were removed from ``public_abi``.
 
 Storage
 ~~~~~~~
@@ -227,7 +227,7 @@ Functions for interacting with other contracts have been renamed and moved into 
 
 The ``ContractProxy`` type is renamed to ``gl.contract.Proxy``.
 
-Contract proxies, ``Contract`` itself, and the new ``gl.chain.Account`` all implement the ``gl.chain.IAccount`` protocol, exposing ``address``, ``balance``, and ``emit_transfer(value, *, on=...)``.
+GenLayer contract proxies, ``Contract`` itself, and the new ``gl.chain.Account`` all implement the ``gl.chain.IAccount`` protocol, exposing ``address``, ``balance``, and ``emit_transfer(value, *, on=...)``. EVM contract proxies expose ``emit_transfer(value)`` without ``on`` because ``EmitExternalMessage`` has no decided/finalized staging option.
 
 Value Transfers and ``on=`` Parameter
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

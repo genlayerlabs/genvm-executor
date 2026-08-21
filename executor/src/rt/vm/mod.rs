@@ -131,7 +131,7 @@ pub struct FullResult {
     pub backtrace: Option<rt::errors::Backtrace>,
     pub wasm_store_hashes: rt::errors::WasmStoreHashes,
     pub subvm_hashes: bytes::Bytes,
-    pub storage_changes: Vec<storage::Delta>,
+    pub storage_deltas: Vec<storage::Delta>,
 
     pub emissions: Vec<domain::ExecutionEmission>,
 }
@@ -161,7 +161,7 @@ impl FullResult {
             backtrace: None,
             wasm_store_hashes: rt::errors::WasmStoreHashes::default(),
             subvm_hashes: empty_subvm_hashes(),
-            storage_changes: Vec::new(),
+            storage_deltas: Vec::new(),
             emissions: Vec::new(),
         }
     }
@@ -173,7 +173,7 @@ impl FullResult {
             return;
         }
 
-        self.storage_changes.clear();
+        self.storage_deltas.clear();
         self.emissions.clear();
     }
 
@@ -451,8 +451,8 @@ mod tests {
 
     fn with_effects(run_ok: RunOk) -> FullResult {
         let mut full = FullResult::empty_from(run_ok);
-        full.storage_changes = vec![storage::Delta::for_test([7; 36], vec![1, 2, 3])];
-        full.emissions = vec![domain::ExecutionEmission::EthSend {
+        full.storage_deltas = vec![storage::Delta::for_test([7; 36], vec![1, 2, 3])];
+        full.emissions = vec![domain::ExecutionEmission::ExternalMessage {
             address: calldata::Address::zero(),
             calldata: bytes::Bytes::from_static(b"payload"),
             value: primitive_types::U256::zero(),
@@ -471,7 +471,7 @@ mod tests {
         let mut full = with_effects(RunOk::empty_return());
         full.discard_effects_unless_returned();
 
-        assert_eq!(full.storage_changes.len(), 1);
+        assert_eq!(full.storage_deltas.len(), 1);
         assert_eq!(full.emissions.len(), 1);
     }
 
@@ -485,7 +485,7 @@ mod tests {
             let mut full = with_effects(run_ok);
             full.discard_effects_unless_returned();
 
-            assert!(full.storage_changes.is_empty(), "{:?}", full.kind);
+            assert!(full.storage_deltas.is_empty(), "{:?}", full.kind);
             assert!(full.emissions.is_empty(), "{:?}", full.kind);
         }
     }

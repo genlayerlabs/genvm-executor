@@ -73,12 +73,9 @@ class _RecordDesc[T: RecordExtraFields](TypeDesc[T]):
 		return slf
 
 	def set(self, slot: Slot, off: int, val: T) -> None:
-		assert hasattr(val, '__type_desc__'), (
-			f'Is right the same storage type? `{reflect.repr_type(self.cls)}` <- `{reflect.repr_type(type(val))}`'
-		)
-		assert val.__type_desc__ == self, (
-			f'Is right the same storage type? `{reflect.repr_type(self.cls)}` <- `{reflect.repr_type(type(val))}`'
-		)
+		err = f'incompatible storage type: `{reflect.repr_type(self.cls)}` <- `{reflect.repr_type(type(val))}`'
+		if not hasattr(val, '__type_desc__') or val.__type_desc__ != self:
+			raise TypeError(err)
 		actions_apply_copy(self.copy_actions, slot, off, val._storage_slot, val._off)
 
 	def __eq__(self, other: object) -> bool:

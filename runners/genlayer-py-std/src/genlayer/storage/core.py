@@ -309,6 +309,9 @@ class Indirection[T](_WithStorageSlotAndTD):
 		Write a value through the indirection.
 
 		:param val: value to store
+
+		If encoding requires several writes and one fails, writes completed
+		before the error remain visible.
 		"""
 		self._item_desc.set(self._storage_slot.indirect(self._off), 0, val)
 
@@ -387,6 +390,9 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 		:param idx: non-negative index
 		:param val: value to set
 		:raises IndexError: when index is out of range
+
+		If encoding requires several writes and one fails, writes completed
+		before the error remain visible.
 		"""
 		if idx >= len(self) or idx < 0:
 			raise IndexError(f'{idx} out of range 0..{len(self)}')
@@ -405,6 +411,9 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 		Append a value to the end of the array.
 
 		:param val: value to append
+
+		The value is written before the length is increased. If writing fails,
+		the old length remains visible, although bytes beyond it may have changed.
 		"""
 		le = len(self)
 		self._item_desc.set(
@@ -414,14 +423,18 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 
 	def extend(self, val: collections.abc.Iterable[T], /):
 		"""
-		Add all elements from ``val``, truncating first.
+		Append all elements from ``val``.
 
 		:param val: sequence of values (or raw bytes for ``VLA[u8]``)
+
+		Completed elements remain appended if iteration or a later write fails.
+		For raw bytes, the payload is written before the length is increased.
 		"""
 		if isinstance(val, bytes):
 			from ._internal.desc_base_types import _u8_desc
 
-			assert self._item_desc == _u8_desc
+			if self._item_desc != _u8_desc:
+				raise TypeError('raw bytes can only be stored in VLA[u8]')
 			old_len = int.from_bytes(self._storage_slot.read(self._off, 4), 'little')
 			self._storage_slot.write(self._off + 4 + old_len, val)
 			self._storage_slot.write(self._off, (old_len + len(val)).to_bytes(4, 'little'))
@@ -435,11 +448,16 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 		Replace contents with elements from ``val``, truncating first.
 
 		:param val: sequence of values (or raw bytes for ``VLA[u8]``)
+
+		For an iterable, the old contents are hidden first and successfully
+		appended elements remain visible on error. For raw bytes, the new length
+		is written before the payload, so an error may expose old or partial data.
 		"""
 		if isinstance(val, bytes):
 			from ._internal.desc_base_types import _u8_desc
 
-			assert self._item_desc == _u8_desc
+			if self._item_desc != _u8_desc:
+				raise TypeError('raw bytes can only be stored in VLA[u8]')
 			self._storage_slot.write(self._off, len(val).to_bytes(4, 'little'))
 			self._storage_slot.write(self._off + 4, val)
 			return
@@ -451,7 +469,11 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 
 	def set_length(self, length: int, /):
 		"""
-		Set the array length
+		Set the array length.
+
+		Growing the array exposes bytes already present after the old end, or
+		zeroes for storage that has never been written. Elements are not
+		initialized by this method.
 		"""
 		self._storage_slot.write(self._off, length.to_bytes(4, 'little'))
 
@@ -472,6 +494,9 @@ class VLA[T](_WithStorageSlotAndTD, PseudoSequence[T]):
 
 		:param to: new length (default 0)
 		:raises IndexError: when ``to`` exceeds current length
+
+		Only the length is changed; truncated element bytes are retained and can
+		be exposed again by :py:meth:`set_length`.
 		"""
 		if to > len(self):
 			raise IndexError(f'{to} out of range 0..{len(self)}')

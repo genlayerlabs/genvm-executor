@@ -70,6 +70,12 @@ def test_vla_extend():
 	assert list(v) == [1, 2, 10, 20, 30]
 
 
+def test_vla_extend_bytes_rejects_non_byte_element_type():
+	v = new_vla()
+	with pytest.raises(TypeError, match=r'only be stored in VLA\[u8\]'):
+		v.extend(b'123')
+
+
 def test_vla_truncate():
 	v = new_vla()
 	v.append(1)
@@ -86,6 +92,14 @@ def test_vla_truncate_to_zero():
 	v.append(2)
 	v.truncate()
 	assert len(v) == 0
+
+
+def test_vla_growth_exposes_truncated_elements():
+	v = new_vla()
+	v.assign([1, 2])
+	v.truncate(1)
+	v.set_length(2)
+	assert list(v) == [1, 2]
 
 
 def test_vla_truncate_out_of_range():

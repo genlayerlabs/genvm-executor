@@ -11,10 +11,7 @@ from ..types import Address, u256
 
 class TransactionDataKwArgs(typing.TypedDict):
 	"""
-	Built-in parameters of all transaction messages that a contract can emit
-
-	.. warning::
-		parameters are subject to change!
+	Built-in parameters of transaction messages emitted by a contract
 	"""
 
 	value: typing.NotRequired[u256]
@@ -45,7 +42,7 @@ class ContractProxy[TView, TWrite]:
 	def emit(self, *, value: u256 = 0) -> TWrite:
 		return self._send(self, {'value': value})
 
-	def emit_transfer(self, *, value: u256 = 0) -> None:
+	def emit_transfer(self, value: u256) -> None:
 		self._transfer(self, {'value': value})
 
 	@property

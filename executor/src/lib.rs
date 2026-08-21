@@ -231,20 +231,20 @@ fn convert_message_data(
         chain_id: message.chain_id,
         value: message.value,
         is_init: message.is_init,
-        datetime: message.datetime,
+        datetime: message.transaction_timestamp,
     }
 }
 
 fn convert_nested_storage_type(
     state_mode: genvm_modules_interfaces::NestedStorageType,
-) -> public_abi::StorageType {
+) -> public_abi::StorageView {
     match state_mode {
-        genvm_modules_interfaces::NestedStorageType::Default => public_abi::StorageType::Default,
+        genvm_modules_interfaces::NestedStorageType::Default => public_abi::StorageView::Default,
         genvm_modules_interfaces::NestedStorageType::LatestFinalized => {
-            public_abi::StorageType::LatestFinalized
+            public_abi::StorageView::LatestFinalized
         }
         genvm_modules_interfaces::NestedStorageType::LatestDecided => {
-            public_abi::StorageType::LatestDecided
+            public_abi::StorageView::LatestDecided
         }
     }
 }
@@ -316,7 +316,7 @@ pub async fn run_with_impl(
             ),
             None => (None, None, None, Vec::new()),
         };
-    let storage_read_mode = imported_state_mode.unwrap_or(public_abi::StorageType::LatestDecided);
+    let storage_read_mode = imported_state_mode.unwrap_or(public_abi::StorageView::LatestDecided);
 
     let mut topmost_storage = rt::vm::storage::Storage::new(
         entry_data.message.contract_address,
@@ -467,7 +467,7 @@ pub async fn run_with_impl(
             needs_error_fingerprint: true,
             permissions: vm_permissions,
             execution: wasi::base::Execution {
-                state_mode: imported_state_mode.unwrap_or(crate::public_abi::StorageType::Default),
+                state_mode: imported_state_mode.unwrap_or(crate::public_abi::StorageView::Default),
                 topmost_runner_id,
             },
         },
@@ -517,7 +517,7 @@ pub async fn run_with_impl(
         subvm_hashes: bytes::Bytes::from(
             sha3::Digest::finalize(run_result.vm_data.det_subvm_hashes).to_vec(),
         ),
-        storage_changes: run_result.vm_data.storage.make_delta(),
+        storage_deltas: run_result.vm_data.storage.make_delta(),
         emissions: run_result.vm_data.accumulator.emissions,
     })
 }
