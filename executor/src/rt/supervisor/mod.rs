@@ -58,6 +58,7 @@ pub struct Ctor {
     pub limiter: rt::DetNondet<rt::memlimiter::Limiter>,
     pub locked_slots: host::LockedSlotsSet,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    pub emit_leader_public_data: bool,
     pub multi_host: host::MultiHost,
 }
 
@@ -71,6 +72,7 @@ pub struct Supervisor {
     pub balances: dashmap::DashMap<calldata::Address, primitive_types::U256>,
     pub nondet_results: tokio::sync::Mutex<Vec<bytes::Bytes>>,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    pub emit_leader_public_data: bool,
 
     queue: NondetQueue,
     runner_cache: runners::cache::Reader,
@@ -319,6 +321,7 @@ impl Supervisor {
             balances: dashmap::DashMap::new(),
             nondet_results: Default::default(),
             leader_nondet_results: ctor.leader_nondet_results,
+            emit_leader_public_data: ctor.emit_leader_public_data,
             queue: NondetQueue {
                 sender,
                 receiver,

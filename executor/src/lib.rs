@@ -2,6 +2,7 @@ pub mod caching;
 pub mod config;
 pub mod domain;
 pub mod host;
+pub mod leader_public_data;
 pub mod modules;
 pub mod rt;
 pub mod runners;
@@ -68,6 +69,7 @@ pub struct CreateSupervisorNamedArgs {
     pub gas_data: std::collections::BTreeMap<String, String>,
     pub initial_time_units_allocation: u32,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    pub emit_leader_public_data: bool,
     pub memory_limit: Option<u32>,
     /// Whether this execution holds the storage-write permission, however it
     /// was granted. Slot locks bound what a run may write, so this -- not the
@@ -154,6 +156,7 @@ pub fn create_supervisor(
         },
         locked_slots,
         leader_nondet_results: named.leader_nondet_results,
+        emit_leader_public_data: named.emit_leader_public_data,
         multi_host,
     };
 
@@ -502,14 +505,27 @@ pub async fn run_with(
     let llm_consumption = *supervisor.shared_data.llm_consumption.lock().await;
 
     let res = match res {
-        Ok((a, b)) => Ok(host::FullResult::new(
-            a,
-            supervisor.take_nondet_results().await,
-            b,
-            data_fees_remaining,
-            data_fees_consumed,
-            llm_consumption,
-        )),
+        Ok((a, b)) => {
+            let nondet_results = supervisor.take_nondet_results().await;
+            let leader_public_data = if supervisor.is_leader() && supervisor.emit_leader_public_data
+            {
+                leader_public_data::LeaderPublicData {
+                    nondet_block_outputs: nondet_results,
+                }
+                .encode()
+            } else {
+                bytes::Bytes::new()
+            };
+
+            Ok(host::FullResult::new(
+                a,
+                leader_public_data,
+                b,
+                data_fees_remaining,
+                data_fees_consumed,
+                llm_consumption,
+            ))
+        }
         Err(e) => Err(e),
     };
 

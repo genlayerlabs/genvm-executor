@@ -195,6 +195,17 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         bucket_totals.len(),
     );
 
+    let emit_leader_public_data =
+        !args.sync && !is_nested && execution_data.leader_public_data.is_none();
+    let (leader_nondet_results, malformed_leader_public_data) =
+        match execution_data.leader_public_data.as_ref() {
+            None => (None, false),
+            Some(encoded) => match genvm::leader_public_data::LeaderPublicData::decode(encoded) {
+                Ok(data) => (Some(data.nondet_block_outputs), false),
+                Err(_) => (Some(Vec::new()), true),
+            },
+        };
+
     let shared_data = sync::DArc::new(genvm::rt::SharedData {
         is_sync: args.sync,
         genvm_id: genvm_modules_interfaces::GenVMId(genvm_id),
@@ -238,15 +249,31 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         );
     }
 
-    // Charge the per-bucket up-front fees now that the hosts are connected. If a
-    // bucket cannot cover its `subtract_on_start`, report the resulting VM error
-    // to the host as a normal receipt instead of crashing during setup.
-    let insufficient_err = if is_nested {
-        None
+    let setup_run_ok = if malformed_leader_public_data {
+        Some(genvm::rt::vm::RunOk::VMError(
+            genvm::public_abi::VmError(std::borrow::Cow::Borrowed(
+                "leader_fault nondet_output malformed",
+            )),
+            None,
+        ))
     } else {
-        runtime.block_on(shared_data.data_fees_limit.consume_initial())
+        // Nested execution was already charged by its parent. For top-level
+        // execution, surface an insufficient startup bucket as a normal receipt.
+        let insufficient_err = if is_nested {
+            None
+        } else {
+            runtime.block_on(shared_data.data_fees_limit.consume_initial())
+        };
+        insufficient_err.map(|err| {
+            err.into_run_ok().unwrap_or_else(|e| {
+                genvm::rt::vm::RunOk::VMError(
+                    genvm::public_abi::VmError::oom().val(),
+                    Some(anyhow::Error::new(e)),
+                )
+            })
+        })
     };
-    if let Some(insufficient_err) = insufficient_err {
+    if let Some(setup_run_ok) = setup_run_ok {
         let host_for = |method: genvm::host::host_fns::Methods| -> usize {
             let m = method as usize;
             if m < method_hosts.len() {
@@ -258,17 +285,17 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
 
         let data_fees_remaining = runtime.block_on(shared_data.data_fees_limit.remaining());
         let data_fees_consumed = runtime.block_on(shared_data.data_fees_limit.consumed());
-        // `consume_initial` only ever yields a VM error; fall back to a generic
-        // OOM code if that ever stops holding rather than panicking during setup.
-        let insufficient_run_ok = insufficient_err.into_run_ok().unwrap_or_else(|e| {
-            genvm::rt::vm::RunOk::VMError(
-                genvm::public_abi::VmError::oom().val(),
-                Some(anyhow::Error::new(e)),
-            )
-        });
+        let leader_public_data = if emit_leader_public_data {
+            genvm::leader_public_data::LeaderPublicData {
+                nondet_block_outputs: Vec::new(),
+            }
+            .encode()
+        } else {
+            bytes::Bytes::new()
+        };
         let result: Result<genvm::host::FullResult> = Ok(genvm::host::FullResult::new(
-            genvm::rt::vm::FullResult::empty_from(insufficient_run_ok),
-            Vec::new(),
+            genvm::rt::vm::FullResult::empty_from(setup_run_ok),
+            leader_public_data,
             None,
             data_fees_remaining,
             data_fees_consumed,
@@ -312,7 +339,8 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             method_hosts,
             gas_data: execution_data.gas_data.clone(),
             initial_time_units_allocation: execution_data.initial_time_units_allocation,
-            leader_nondet_results: execution_data.leader_nondet_results.clone(),
+            leader_nondet_results,
+            emit_leader_public_data,
             memory_limit: execution_data.nested.as_ref().map(|n| n.memory_limit),
             can_write_storage,
         },

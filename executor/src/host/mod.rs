@@ -187,7 +187,7 @@ impl FullResult {
                 storage_deltas: Vec::new(),
                 emissions: Vec::new(),
                 nondet_disagreement: None,
-                nondet_results: Vec::new(),
+                leader_public_data: bytes::Bytes::new(),
                 data_fees_remaining: Vec::new(),
                 data_fees_consumed: genvm_modules_interfaces::BucketsConsumed::default(),
                 llm_consumed_gen_wei: primitive_types::U256::zero(),
@@ -199,7 +199,7 @@ impl FullResult {
 impl FullResult {
     pub fn new(
         rt_result: rt::vm::FullResult,
-        nondet_results: Vec<bytes::Bytes>,
+        leader_public_data: bytes::Bytes,
         nondet_disagreement: Option<u32>,
         data_fees_remaining: Vec<primitive_types::U256>,
         data_fees_consumed: rt::fees::BucketsConsumed,
@@ -302,7 +302,7 @@ impl FullResult {
                     .into_iter()
                     .map(convert_emission)
                     .collect(),
-                nondet_results,
+                leader_public_data,
                 nondet_disagreement,
                 data_fees_remaining,
                 data_fees_consumed: convert_buckets_consumed(data_fees_consumed),
