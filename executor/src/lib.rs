@@ -3,6 +3,7 @@ pub mod config;
 pub mod domain;
 pub mod host;
 pub mod int_traits;
+pub mod leader_public_data;
 pub mod modules;
 pub mod rt;
 pub mod runners;
@@ -83,6 +84,7 @@ pub struct CreateSupervisorNamedArgs {
     pub gas_data: std::collections::BTreeMap<String, String>,
     pub initial_time_units_allocation: u32,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    pub emit_leader_public_data: bool,
     pub record_actions: Vec<String>,
     pub memory_limit: Option<u32>,
     /// Whether this execution holds the storage-write permission, however it
@@ -207,6 +209,7 @@ pub fn create_supervisor(
         modules,
         locked_slots,
         leader_nondet_results: named.leader_nondet_results,
+        emit_leader_public_data: named.emit_leader_public_data,
         multi_host,
         record_actions: named.record_actions,
     };
@@ -614,9 +617,21 @@ pub async fn run_with(
             a.discard_effects_unless_returned();
             reporting_boundary.normalize(&mut a);
 
+            let nondet_results = supervisor.take_nondet_results().await;
+            let leader_public_data = if supervisor.shared_data.run_mode == rt::RunMode::Leader
+                && supervisor.emit_leader_public_data
+            {
+                leader_public_data::LeaderPublicData {
+                    nondet_block_outputs: nondet_results,
+                }
+                .encode()
+            } else {
+                bytes::Bytes::new()
+            };
+
             Ok(host::FullResult::new(
                 a,
-                supervisor.take_nondet_results().await,
+                leader_public_data,
                 b,
                 data_fees_remaining,
                 data_fees_consumed,
