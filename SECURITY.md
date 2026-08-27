@@ -7,9 +7,13 @@ This repository is a component of [genvm-manager]; the canonical security policy
 
 ## Reporting a vulnerability
 
-**Do not open a public issue.** Report privately via GitHub's
-[private vulnerability reporting](https://github.com/genlayerlabs/genvm-manager/security/advisories/new),
-or email kira@genlayerlabs.com
+**Before mainnet, report everything except remote code execution publicly** — open a
+regular issue. Until there is value at stake, an open report gets triaged faster and is
+useful to everyone reading along. RCE is the only exception; report it privately.
+
+For remote code execution, **do not open a public issue** — report it via GitHub's
+[private vulnerability reporting](https://github.com/genlayerlabs/genvm-manager/security/advisories/new)
+on the [genvm-manager] repository.
 
 Include a description, affected component/version, and a reproduction (a contract, calldata,
 or test case) where possible. We aim to acknowledge within a few business days.
