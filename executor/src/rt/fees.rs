@@ -358,6 +358,28 @@ impl DataLimit {
 
     async fn consume_bucket_raw(&self, bucket: &Bucket, costs: &[primitive_types::U256]) -> bool {
         let mut buckets = self.buckets.lock().await;
+        if !Self::bucket_costs_fit(&buckets, bucket, costs) {
+            return false;
+        }
+        for (i, (&bno, &cost)) in bucket.bucket_nos.iter().zip(costs.iter()).enumerate() {
+            buckets[usize::from(bno)] -= cost;
+            log_debug!(
+                bucket = bno,
+                cost:display = cost,
+                remaining:display = buckets[usize::from(bno)];
+                "consume_bucket: ok"
+            );
+            *bucket.total_consumed[i].lock().await += cost;
+        }
+        std::mem::drop(buckets);
+        true
+    }
+
+    fn bucket_costs_fit(
+        buckets: &[primitive_types::U256],
+        bucket: &Bucket,
+        costs: &[primitive_types::U256],
+    ) -> bool {
         for (idx, (&bno, &cost)) in bucket.bucket_nos.iter().zip(costs.iter()).enumerate() {
             let Some(remaining) = buckets.get(usize::from(bno)) else {
                 log_warn!(bucket = bno; "consume_bucket: bucket index out of range");
@@ -391,18 +413,17 @@ impl DataLimit {
                 return false;
             }
         }
-        for (i, (&bno, &cost)) in bucket.bucket_nos.iter().zip(costs.iter()).enumerate() {
-            buckets[usize::from(bno)] -= cost;
-            log_debug!(
-                bucket = bno,
-                cost:display = cost,
-                remaining:display = buckets[usize::from(bno)];
-                "consume_bucket: ok"
-            );
-            *bucket.total_consumed[i].lock().await += cost;
-        }
-        std::mem::drop(buckets);
         true
+    }
+
+    async fn can_consume_bucket(
+        &self,
+        bucket: &Bucket,
+        vars: &[(&str, genvm_common::expr::Value)],
+    ) -> rt::errors::Result<bool> {
+        let costs = self.calculate_bucket(bucket, vars)?;
+        let buckets = self.buckets.lock().await;
+        Ok(Self::bucket_costs_fit(&buckets, bucket, &costs.0))
     }
 
     pub async fn remaining(&self) -> Vec<primitive_types::U256> {
@@ -484,6 +505,15 @@ impl DataLimit {
         )
         .await
         .ctx("consuming nondet output")
+    }
+
+    pub async fn can_consume_nondet_output(&self, output_length: u64) -> rt::errors::Result<bool> {
+        self.can_consume_bucket(
+            &self.nondet_output,
+            &[("outputLength", output_length.into())],
+        )
+        .await
+        .ctx("checking nondet output")
     }
 
     pub async fn consume_event(

@@ -3,21 +3,147 @@ use crate::runners;
 use sha3::digest::Update;
 use std::sync::Arc;
 
-async fn consume_nondet_output(
-    shared_data: &rt::SharedData,
-    output_length: u64,
-) -> Result<(), generated::types::Error> {
-    if !shared_data
-        .data_fees_limit
+async fn consume_preflighted_nondet_output(fees: &rt::fees::DataLimit, output_length: u64) {
+    let consumed = fees
         .consume_nondet_output(output_length)
         .await
-        .map_err(internal_trap)?
-    {
-        return Err(internal_trap(rt::errors::Error::vm(
-            abi::consts::VmError::out_of().receipt().nondet_output(),
-        )));
+        .expect("preflighted nondeterministic output fee evaluation must succeed");
+    assert!(
+        consumed,
+        "preflighted nondeterministic output fee must remain available"
+    );
+}
+
+async fn can_consume_nondet_output(
+    fees: &rt::fees::DataLimit,
+    output_length: u64,
+) -> Result<bool, generated::types::Error> {
+    fees.can_consume_nondet_output(output_length)
+        .await
+        .map_err(internal_trap)
+}
+
+pub(super) struct NondetOutput {
+    pub(super) result: rt::vm::RunOk,
+    pub(super) encoded: rt::vm::ContractResultBytes,
+}
+
+impl NondetOutput {
+    pub(super) fn from_outcome(outcome: rt::vm::ContractOutcome) -> Self {
+        Self {
+            result: outcome.duplicate().into(),
+            encoded: outcome.encode(),
+        }
+    }
+
+    pub(super) fn vm_error(error: public_abi::VmError) -> Self {
+        Self::from_outcome(rt::vm::ContractOutcome::VMError(error, None))
+    }
+
+    fn duplicate(&self) -> Self {
+        Self {
+            result: self.result.duplicate(),
+            encoded: self.encoded.clone(),
+        }
+    }
+
+    fn is_fatal(&self) -> bool {
+        matches!(&self.result, rt::vm::RunOk::FatalVMError(..))
+    }
+
+    fn duplicate_preserving_fatality_of(&self, source: &Self) -> Self {
+        let mut output = self.duplicate();
+        if source.is_fatal() {
+            let rt::vm::RunOk::VMError(error, _) = output.result else {
+                unreachable!("canonical nondeterministic errors are non-fatal")
+            };
+            output.result = rt::vm::RunOk::FatalVMError(error, None);
+        }
+        output
+    }
+
+    pub(super) fn allocation_size(&self) -> u64 {
+        usize_into_u64(self.encoded.as_slice().len())
+            .saturating_add(memory_limiter_consts::NONDET_OUTPUT_BASE_SIZE.into())
+    }
+
+    pub(super) fn preflight_ram_size(&self) -> u64 {
+        self.allocation_size()
+            .saturating_add(usize_into_u64(self.encoded.as_slice().len()))
+            .saturating_add(memory_limiter_consts::FD_ALLOCATION.into())
+    }
+}
+
+pub(super) fn reserve_nondet_output(
+    limiter: &rt::memlimiter::Limiter,
+    output: NondetOutput,
+    memory_error: &NondetOutput,
+) -> Result<(NondetOutput, rt::memlimiter::PermanentAllocation), generated::types::Error> {
+    match limiter.reserve_permanent(output.allocation_size()) {
+        Some(allocation) => Ok((output, allocation)),
+        None => {
+            let output = memory_error.duplicate_preserving_fatality_of(&output);
+            let allocation = reserve_permanent(
+                limiter,
+                output.allocation_size(),
+                "nondeterministic memory error",
+            )?;
+            Ok((output, allocation))
+        }
+    }
+}
+
+pub(super) fn preflight_nondet_output_ram(
+    limiter: &rt::memlimiter::Limiter,
+    memory_error: &NondetOutput,
+    fee_error: &NondetOutput,
+) -> Result<(), generated::types::Error> {
+    let fallback_size = memory_error
+        .preflight_ram_size()
+        .max(fee_error.preflight_ram_size());
+    drop(reserve_permanent(
+        limiter,
+        fallback_size,
+        "nondeterministic fallback output",
+    )?);
+    Ok(())
+}
+
+pub(super) async fn preflight_nondet_output_fees(
+    fees: &rt::fees::DataLimit,
+    memory_error: &NondetOutput,
+    fee_error: &NondetOutput,
+) -> Result<(), generated::types::Error> {
+    for error in [memory_error, fee_error] {
+        if !can_consume_nondet_output(fees, error.encoded.as_slice().len().into_int_comptime())
+            .await?
+        {
+            return Err(internal_trap(rt::errors::Error::vm(
+                abi::consts::VmError::out_of().receipt().nondet_output(),
+            )));
+        }
     }
     Ok(())
+}
+
+pub(super) async fn charge_nondet_output(
+    limiter: &rt::memlimiter::Limiter,
+    fees: &rt::fees::DataLimit,
+    output: NondetOutput,
+    memory_error: &NondetOutput,
+    fee_error: &NondetOutput,
+) -> Result<NondetOutput, generated::types::Error> {
+    let mut output = output;
+    if !can_consume_nondet_output(fees, output.encoded.as_slice().len().into_int_comptime()).await?
+    {
+        output = fee_error.duplicate_preserving_fatality_of(&output);
+    }
+
+    let (output, allocation) = reserve_nondet_output(limiter, output, memory_error)?;
+    consume_preflighted_nondet_output(fees, output.encoded.as_slice().len().into_int_comptime())
+        .await;
+    allocation.commit();
+    Ok(output)
 }
 
 /// Is this leader-proposed `vm_error` code acceptable as-is?
@@ -162,6 +288,17 @@ pub(super) fn leader_proposal_for_validation(data: &[u8]) -> LeaderProposal {
     match parse_leader_result(data) {
         Ok(outcome) => LeaderProposal::Accepted(outcome),
         Err(vm_error) => LeaderProposal::Rejected(vm_error),
+    }
+}
+
+pub(super) fn validate_leader_output_after_caps(
+    output: &rt::vm::ContractResultBytes,
+    leader_proposed: &rt::vm::ContractResultBytes,
+) -> Result<(), public_abi::VmError> {
+    if output == leader_proposed {
+        Ok(())
+    } else {
+        Err(malformed_leader_result())
     }
 }
 
@@ -630,6 +767,17 @@ impl ContextVFS<'_> {
         )
         .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
+        let memory_error = NondetOutput::vm_error(abi::consts::VmError::out_of().memory().val());
+        let fee_error =
+            NondetOutput::vm_error(abi::consts::VmError::out_of().receipt().nondet_output());
+        preflight_nondet_output_ram(&self.context.limiter, &memory_error, &fee_error)?;
+        preflight_nondet_output_fees(
+            &self.context.data.supervisor.shared_data.data_fees_limit,
+            &memory_error,
+            &fee_error,
+        )
+        .await?;
+
         let call_no = self
             .context
             .data
@@ -643,36 +791,40 @@ impl ContextVFS<'_> {
             )));
         }
 
-        // The child gets its own budget, seeded with what the caller has left at
-        // this point: charges never flow back, and a queued nondet VM keeps a
-        // usable budget after its parent has died.
-        let child_limiter = self.context.limiter.derived();
-
-        let storage_checkpoint = self
-            .context
-            .data
-            .storage
-            .fork(child_limiter.clone())
-            .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
-
-        let run_nondet_get_vm_task_args = RunNondetGetVMTaskArgs {
-            child_topmost_id,
-            storage_checkpoint,
-            child_limiter,
-            child_custom,
-            call_no,
-        };
-
         let is_leader = self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Leader;
+        let mut child_resources = Some((child_topmost_id, child_custom));
+        // The child gets the caller's budget before this block's output charge.
+        // The snapshot also keeps queued validator work independent of its parent.
+        let mut child_limiter = Some(self.context.limiter.derived());
+        let mut validator_proposal = None;
 
-        let (result_to_return, encoded) = if is_leader {
+        let output = if is_leader {
+            let (child_topmost_id, child_custom) = child_resources
+                .take()
+                .expect("nondeterministic child resources are available");
+            let child_limiter = child_limiter
+                .take()
+                .expect("nondeterministic child limiter is available");
+            let storage_checkpoint = self
+                .context
+                .data
+                .storage
+                .fork(child_limiter.clone())
+                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+            let task_args = RunNondetGetVMTaskArgs {
+                child_topmost_id,
+                storage_checkpoint,
+                child_limiter,
+                child_custom,
+                call_no,
+            };
             let vm_ext_msg = self.context.data.message_data.fork_leader(
                 public_abi::EntryKind::ConsensusStage,
                 data_leader,
                 None,
             );
 
-            let task = self.run_nondet_get_vm_task(vm_ext_msg, run_nondet_get_vm_task_args);
+            let task = self.run_nondet_get_vm_task(vm_ext_msg, task_args);
 
             let computed_result = task
                 .run_now(&self.context.data.supervisor)
@@ -681,9 +833,7 @@ impl ContextVFS<'_> {
 
             let computed_result = leader_outcome_for_publication(computed_result)
                 .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
-            let encoded = computed_result.encode();
-
-            (computed_result.into(), encoded)
+            NondetOutput::from_outcome(computed_result)
         } else {
             let leaders_res_bytes = self
                 .context
@@ -713,40 +863,76 @@ impl ContextVFS<'_> {
                     if self.context.data.supervisor.shared_data.run_mode
                         == rt::RunMode::Validator =>
                 {
-                    let vm_ext_msg = self.context.data.message_data.fork_leader(
-                        public_abi::EntryKind::ConsensusStage,
-                        data_validator,
-                        Some(leaders_res.duplicate()),
-                    );
-
-                    let task = self.run_nondet_get_vm_task(vm_ext_msg, run_nondet_get_vm_task_args);
-
-                    rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task)
-                        .await;
+                    validator_proposal = Some(leaders_res.duplicate());
                 }
                 LeaderProposal::Accepted(_) => {}
             }
 
-            proposal.into_result_and_encoding()
+            let (result, encoded) = proposal.into_result_and_encoding();
+            NondetOutput { result, encoded }
         };
 
-        // Retention precedes the charge, so a validator replaying a run that
-        // ran out of fee here sees the same result the leader charged for.
+        let leader_proposed_encoding = output.encoded.clone();
+        let output = charge_nondet_output(
+            &self.context.limiter,
+            &self.context.data.supervisor.shared_data.data_fees_limit,
+            output,
+            &memory_error,
+            &fee_error,
+        )
+        .await?;
+
+        if let Some(leaders_res) = validator_proposal {
+            if let Err(error) =
+                validate_leader_output_after_caps(&output.encoded, &leader_proposed_encoding)
+            {
+                rt::supervisor::mark_nondet_disagreement(&self.context.data.supervisor, call_no);
+                return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
+                    rt::errors::Error::fatal_vm(error).into(),
+                )));
+            }
+
+            let (child_topmost_id, child_custom) = child_resources
+                .take()
+                .expect("nondeterministic child resources are available");
+            let child_limiter = child_limiter
+                .take()
+                .expect("nondeterministic child limiter is available");
+            let storage_checkpoint = self
+                .context
+                .data
+                .storage
+                .fork(child_limiter.clone())
+                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+            let task_args = RunNondetGetVMTaskArgs {
+                child_topmost_id,
+                storage_checkpoint,
+                child_limiter,
+                child_custom,
+                call_no,
+            };
+            let vm_ext_msg = self.context.data.message_data.fork_leader(
+                public_abi::EntryKind::ConsensusStage,
+                data_validator,
+                Some(leaders_res),
+            );
+            let task = self.run_nondet_get_vm_task(vm_ext_msg, task_args);
+            rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task).await;
+        }
+
         if is_leader {
             self.context
                 .data
                 .supervisor
-                .push_nondet_result(call_no, encoded.clone())
+                .push_nondet_result(call_no, output.encoded.clone())
                 .await;
         }
 
-        consume_nondet_output(
-            &self.context.data.supervisor.shared_data,
-            encoded.as_slice().len().into_int_comptime(),
+        self.publish_sub_vm_result_encoded(
+            output.result,
+            output.encoded.into_bytes(),
+            catch_vm_error,
         )
-        .await?;
-
-        self.publish_sub_vm_result_encoded(result_to_return, encoded.into_bytes(), catch_vm_error)
     }
 
     pub(super) async fn sandbox(

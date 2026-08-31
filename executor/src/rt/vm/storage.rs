@@ -103,7 +103,6 @@ struct StoragePagesOverride {
     pages: rpds::RedBlackTreeMap<PageID, [u8; 32], archery::ArcTK>,
     fee: Limiter,
     mem: rt::memlimiter::Limiter,
-    new_pages: u32,
 }
 
 impl StoragePagesOverride {
@@ -112,7 +111,6 @@ impl StoragePagesOverride {
             pages: Default::default(),
             fee: storage_pages_limit,
             mem,
-            new_pages: 0,
         }
     }
 
@@ -126,25 +124,19 @@ impl StoragePagesOverride {
 
     async fn write_page(&mut self, key: PageID, value: [u8; 32]) -> rt::errors::Result<()> {
         if !self.pages.contains_key(&key) {
-            let new_pages = self.new_pages.checked_add(1).ok_or_else(|| {
-                rt::errors::Error::wrap(
-                    abi::consts::VmError::out_of().memory().val(),
-                    anyhow::anyhow!("incrementing storage page count"),
-                )
-            })?;
-            if !self.mem.consume(memory_limiter_consts::NEW_STORAGE_PAGE) {
-                return Err(rt::errors::Error::wrap(
-                    abi::consts::VmError::out_of().memory().val(),
-                    anyhow::anyhow!("allocating storage page override"),
-                ));
-            }
+            let allocation = self
+                .mem
+                .reserve_permanent(memory_limiter_consts::NEW_STORAGE_PAGE.into())
+                .ok_or_else(|| {
+                    rt::errors::Error::wrap(
+                        abi::consts::VmError::out_of().memory().val(),
+                        anyhow::anyhow!("allocating storage page override"),
+                    )
+                })?;
             // Memory is charged first so a write refused for want of RAM costs no
             // fee; a write refused for want of fee must likewise cost no memory.
-            if let Err(e) = self.fee.consume(1).await {
-                self.mem.release(memory_limiter_consts::NEW_STORAGE_PAGE);
-                return Err(e);
-            }
-            self.new_pages = new_pages;
+            self.fee.consume(1).await?;
+            allocation.commit();
         }
         self.pages = self.pages.insert(key, value);
 
@@ -171,34 +163,22 @@ impl StoragePagesOverride {
             pages: self.pages.clone(),
             fee: self.fee.clone(),
             mem,
-            new_pages: 0,
         })
     }
 
     fn fold(&mut self, child: Self) -> rt::errors::Result<()> {
-        // The parent pays only when it keeps the child's new pages.
-        let new_pages = self.new_pages.checked_add(child.new_pages).ok_or_else(|| {
-            rt::errors::Error::fatal_vm_cause(
-                abi::consts::VmError::out_of().memory().val(),
-                Some(anyhow::anyhow!("folding storage page count")),
-            )
-        })?;
-        let charged = self
-            .mem
-            .consume_mul(child.new_pages, memory_limiter_consts::NEW_STORAGE_PAGE);
+        let charged = self.mem.fold_permanent(&child.mem);
         // Unreachable: the child's budget is a snapshot of ours taken at spawn,
-        // and it paid VM_SPAWN_COST out of it before writing a page, so what it
-        // owes us is strictly less than what we still hold. Getting here means a
-        // security researcher broke that invariant, so it is fatal and uncatchable.
-        debug_assert!(charged, "storage fold charge exceeded the parent budget");
+        // and it paid VM_SPAWN_COST out of it before retaining anything, so what
+        // it owes us is strictly less than what we still hold.
+        debug_assert!(charged, "permanent fold charge exceeded the parent budget");
         if !charged {
             return Err(rt::errors::Error::fatal_vm_cause(
                 abi::consts::VmError::out_of().memory().val(),
-                Some(anyhow::anyhow!("folding storage page overrides")),
+                Some(anyhow::anyhow!("folding permanent allocations")),
             ));
         }
         self.pages = child.pages;
-        self.new_pages = new_pages;
         Ok(())
     }
 }

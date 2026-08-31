@@ -6,6 +6,7 @@ use crate::rt;
 
 struct LimiterInner {
     remaining_memory: AtomicU32,
+    new_permanent_allocations: AtomicU32,
 }
 
 #[derive(Clone)]
@@ -35,6 +36,7 @@ impl Limiter {
     pub fn with_limit(limit: u32) -> Self {
         Self(Arc::new(LimiterInner {
             remaining_memory: AtomicU32::new(limit),
+            new_permanent_allocations: AtomicU32::new(0),
         }))
     }
 
@@ -45,7 +47,62 @@ impl Limiter {
                     .remaining_memory
                     .load(std::sync::atomic::Ordering::SeqCst),
             ),
+            new_permanent_allocations: AtomicU32::new(0),
         }))
+    }
+
+    pub fn reserve_permanent(&self, delta: u64) -> Option<PermanentAllocation> {
+        let delta = u32::try_from(delta).ok()?;
+        if !self.consume(delta) {
+            return None;
+        }
+        if self
+            .0
+            .new_permanent_allocations
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |current| current.checked_add(delta),
+            )
+            .is_err()
+        {
+            self.release(delta);
+            return None;
+        }
+        Some(PermanentAllocation {
+            limiter: self.clone(),
+            delta,
+            committed: false,
+        })
+    }
+
+    pub fn fold_permanent(&self, child: &Self) -> bool {
+        let delta = child
+            .0
+            .new_permanent_allocations
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if self
+            .0
+            .new_permanent_allocations
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |current| current.checked_add(delta),
+            )
+            .is_err()
+        {
+            return false;
+        }
+        if !self.consume(delta) {
+            return false;
+        }
+        true
+    }
+
+    pub fn get_new_permanent_allocations(&self) -> u32 {
+        self.0
+            .new_permanent_allocations
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Charges `delta` bytes, failing (rather than truncating) when `delta`
@@ -108,6 +165,32 @@ impl Limiter {
         }
 
         true
+    }
+}
+
+/// A RAM charge released on drop unless [`PermanentAllocation::commit`] retains it.
+pub struct PermanentAllocation {
+    limiter: Limiter,
+    delta: u32,
+    committed: bool,
+}
+
+impl PermanentAllocation {
+    pub fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PermanentAllocation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.limiter
+            .0
+            .new_permanent_allocations
+            .fetch_sub(self.delta, std::sync::atomic::Ordering::SeqCst);
+        self.limiter.release(self.delta);
     }
 }
 
