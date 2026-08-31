@@ -24,6 +24,19 @@ fn errno(e: generated::types::Error) -> generated::types::Errno {
 }
 
 #[test]
+fn emission_allocation_includes_fixed_and_payload_costs() {
+    assert_eq!(
+        emission_allocation_size(&[3, 5]),
+        u64::from(memory_limiter_consts::EXECUTION_EMISSION_BASE_SIZE) + 8
+    );
+}
+
+#[test]
+fn emission_allocation_overflow_cannot_fit_the_budget() {
+    assert_eq!(emission_allocation_size(&[u64::MAX]), u64::MAX);
+}
+
+#[test]
 fn balance_no_permission_is_forbidden() {
     let err = validate_balance_fee(false, true, Some(valid_params())).unwrap_err();
     assert_eq!(errno(err), generated::types::Errno::Forbidden);

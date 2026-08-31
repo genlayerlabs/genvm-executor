@@ -10,7 +10,10 @@
       "runner_load_cost": 4096,
       "vm_spawn_cost": 134217728,
       "new_storage_page": 256,
-      "storage_page_inherited": 128
+      "storage_page_inherited": 128,
+      "execution_emission_base_size": 256,
+      "message_fee_rotation_element_size": 32,
+      "nondet_output_base_size": 32
     }
   },
   {

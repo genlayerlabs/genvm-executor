@@ -383,6 +383,11 @@ impl ContextVFS<'_> {
 
         let calldata_length = calldata.len().into_int_comptime();
         let matched_params = convert_external_message_params_to_sdk(matched_params);
+        let allocation = reserve_permanent(
+            &self.context.limiter,
+            emission_allocation_size(&[calldata_length]),
+            "external message",
+        )?;
 
         let fees = consume_message_fee_external(
             &self.context.data.supervisor.shared_data,
@@ -408,6 +413,7 @@ impl ContextVFS<'_> {
                 receipt_fee: fees.receipt_fee.reported_fee(),
                 fee_params: matched_params,
             });
+        allocation.commit();
 
         self.context.data.accumulator.messages_value_decremented = self
             .context
@@ -471,6 +477,15 @@ impl ContextVFS<'_> {
 
         let supervisor = self.context.data.supervisor.clone();
         let topics_count = topics.len().into_int_comptime();
+        let topics_size = topics
+            .iter()
+            .map(|topic| usize_into_u64(topic.len()))
+            .sum::<u64>();
+        let allocation = reserve_permanent(
+            &self.context.limiter,
+            emission_allocation_size(&[blob_size, topics_size]),
+            "event",
+        )?;
 
         let storage_fee = supervisor
             .shared_data
@@ -493,6 +508,7 @@ impl ContextVFS<'_> {
                 blob,
                 storage_fee,
             });
+        allocation.commit();
 
         Ok(file_fd_none())
     }
@@ -540,6 +556,13 @@ impl ContextVFS<'_> {
             let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
             calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
             let calldata_length = enc.into_inner().0;
+            let rotations_size = usize_into_u64(params.rotations.len())
+                .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
+            let allocation = reserve_permanent(
+                &self.context.limiter,
+                emission_allocation_size(&[calldata_length, rotations_size]),
+                "internal message",
+            )?;
 
             let my_balance = self
                 .context
@@ -583,6 +606,7 @@ impl ContextVFS<'_> {
                     use_balance: true,
                 },
             );
+            allocation.commit();
 
             self.context.data.accumulator.messages_value_decremented = messages_value_decremented
                 .saturating_add(value)
@@ -652,6 +676,17 @@ impl ContextVFS<'_> {
                 &matched_node.children,
             ),
         );
+        let rotations_size = usize_into_u64(fee_params.rotations.len())
+            .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
+        let allocation = reserve_permanent(
+            &self.context.limiter,
+            emission_allocation_size(&[
+                calldata_length,
+                subtree.len().into_int_comptime(),
+                rotations_size,
+            ]),
+            "internal message",
+        )?;
 
         let fees = consume_message_fee_internal(
             &self.context.data.supervisor.shared_data,
@@ -683,6 +718,7 @@ impl ContextVFS<'_> {
                 subtree,
                 use_balance: false,
             });
+        allocation.commit();
 
         log_debug!(
             depth = self.context.data.depth(),
@@ -735,6 +771,13 @@ impl ContextVFS<'_> {
             let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
             calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
             let calldata_length = enc.into_inner().0;
+            let rotations_size = usize_into_u64(params.rotations.len())
+                .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
+            let allocation = reserve_permanent(
+                &self.context.limiter,
+                emission_allocation_size(&[calldata_length, code_length, rotations_size]),
+                "internal deploy message",
+            )?;
 
             let my_balance = self
                 .context
@@ -777,6 +820,7 @@ impl ContextVFS<'_> {
                     use_balance: true,
                 },
             );
+            allocation.commit();
 
             self.context.data.accumulator.messages_value_decremented = messages_value_decremented
                 .saturating_add(value)
@@ -840,6 +884,18 @@ impl ContextVFS<'_> {
                 &matched_node.children,
             ),
         );
+        let rotations_size = usize_into_u64(fee_params.rotations.len())
+            .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
+        let allocation = reserve_permanent(
+            &self.context.limiter,
+            emission_allocation_size(&[
+                calldata_length,
+                code_length,
+                subtree.len().into_int_comptime(),
+                rotations_size,
+            ]),
+            "internal deploy message",
+        )?;
 
         let fees = consume_message_fee_internal(
             &self.context.data.supervisor.shared_data,
@@ -869,6 +925,7 @@ impl ContextVFS<'_> {
                 use_balance: false,
             },
         );
+        allocation.commit();
 
         self.context.data.accumulator.messages_value_decremented = self
             .context

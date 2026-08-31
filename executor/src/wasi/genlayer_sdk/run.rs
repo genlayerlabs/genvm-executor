@@ -730,14 +730,21 @@ impl ContextVFS<'_> {
             proposal.into_result_and_encoding()
         };
 
-        // Retention precedes the charge, so a validator replaying a run that
+        // Retention precedes the fee charge, so a validator replaying a run that
         // ran out of fee here sees the same result the leader charged for.
         if is_leader {
+            let allocation = reserve_permanent(
+                &self.context.limiter,
+                usize_into_u64(encoded.as_slice().len())
+                    .saturating_add(memory_limiter_consts::NONDET_OUTPUT_BASE_SIZE.into()),
+                "nondeterministic output",
+            )?;
             self.context
                 .data
                 .supervisor
                 .push_nondet_result(call_no, encoded.clone())
                 .await;
+            allocation.commit();
         }
 
         consume_nondet_output(
