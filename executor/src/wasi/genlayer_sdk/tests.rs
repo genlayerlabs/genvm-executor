@@ -1,4 +1,7 @@
-use super::message::{validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE_BITS};
+use super::message::{
+    external_allocation_candidates, next_message_is_first, resolve_internal_allocation,
+    validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE_BITS,
+};
 use super::run::{
     call_contract_route, charge_nondet_output, derive_call_contract_permissions,
     leader_outcome_for_publication, leader_proposal_for_validation, nested_run_ok,
@@ -28,12 +31,12 @@ fn errno(e: generated::types::Error) -> generated::types::Errno {
 
 fn nondet_fees_with_delta(total: u64, nondet_delta: &str) -> rt::fees::DataLimit {
     let bucket = |delta: &str| crate::config::FeesBucketConfig {
-        bucket_no: vec![0],
+        buckets: vec![symbol_table::GlobalSymbol::from("test")],
         subtract_on_start_expr: "0".to_owned(),
         delta_expr: delta.to_owned(),
     };
     rt::fees::DataLimit::new(
-        vec![U256::from(total)],
+        std::collections::HashMap::from([("test".to_owned(), U256::from(total))]),
         crate::config::FeesConfig {
             expr_prelude: String::new(),
             storage: bucket("\\attrs = 0"),
@@ -53,7 +56,7 @@ fn nondet_fees(total: u64) -> rt::fees::DataLimit {
 
 fn emission_fees() -> crate::config::FeesConfig {
     let bucket = |delta: &str| crate::config::FeesBucketConfig {
-        bucket_no: vec![0],
+        buckets: vec![symbol_table::GlobalSymbol::from("test")],
         subtract_on_start_expr: "0".to_owned(),
         delta_expr: delta.to_owned(),
     };
@@ -102,6 +105,143 @@ fn internal_message_allocation() -> genvm_modules_interfaces::fees::MessageAlloc
         ),
         children: Vec::new(),
     }
+}
+
+fn allocation_child(
+    budget: U256,
+    children: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
+) -> genvm_modules_interfaces::fees::MessageAllocationNode {
+    let mut node = internal_message_allocation();
+    node.budget = budget;
+    node.children = children;
+    node
+}
+
+#[test]
+fn internal_allocation_prefers_exact_key_over_earlier_wildcard() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let mut wildcard = internal_message_allocation();
+    wildcard.recipient = Some(recipient);
+    wildcard.budget = U256::one();
+    let mut exact = wildcard.clone();
+    exact.call_key = Some(call_key);
+    exact.budget = U256::from(2);
+    let nodes = vec![wildcard, exact];
+
+    let (matched, _) = resolve_internal_allocation(
+        &nodes,
+        genvm_modules_interfaces::On::Finalized,
+        recipient,
+        call_key,
+    )
+    .expect("exact allocation should match");
+
+    assert_eq!(nodes[matched].budget, U256::from(2));
+}
+
+#[test]
+fn internal_allocation_skips_zero_budget_exact_key() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let mut wildcard = internal_message_allocation();
+    wildcard.recipient = Some(recipient);
+    wildcard.budget = U256::one();
+    let mut exact = wildcard.clone();
+    exact.call_key = Some(call_key);
+    exact.budget = U256::zero();
+    let nodes = vec![wildcard, exact];
+
+    let (matched, _) = resolve_internal_allocation(
+        &nodes,
+        genvm_modules_interfaces::On::Finalized,
+        recipient,
+        call_key,
+    )
+    .expect("wildcard allocation should match");
+
+    assert_eq!(nodes[matched].budget, U256::one());
+}
+
+#[test]
+fn internal_allocation_phase_is_checked_after_key_resolution() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let mut wildcard = internal_message_allocation();
+    wildcard.recipient = Some(recipient);
+    let mut exact = wildcard.clone();
+    exact.call_key = Some(call_key);
+    exact.on = genvm_modules_interfaces::On::Decided;
+    let nodes = vec![wildcard, exact];
+
+    assert!(resolve_internal_allocation(
+        &nodes,
+        genvm_modules_interfaces::On::Finalized,
+        recipient,
+        call_key,
+    )
+    .is_none());
+}
+
+#[test]
+fn internal_allocation_selects_phase_within_equal_keys() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let mut finalized = internal_message_allocation();
+    finalized.budget = U256::one();
+    let mut decided = finalized.clone();
+    decided.on = genvm_modules_interfaces::On::Decided;
+    decided.budget = U256::from(2);
+    let nodes = vec![finalized, decided];
+
+    let (matched, _) = resolve_internal_allocation(
+        &nodes,
+        genvm_modules_interfaces::On::Decided,
+        recipient,
+        call_key,
+    )
+    .expect("decided allocation should match");
+
+    assert_eq!(nodes[matched].budget, U256::from(2));
+}
+
+#[test]
+fn external_allocation_candidates_follow_consensus_precedence() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let mut global_wildcard = external_message_allocation();
+    global_wildcard.budget = U256::one();
+    let mut recipient_wildcard = global_wildcard.clone();
+    recipient_wildcard.recipient = Some(recipient);
+    recipient_wildcard.budget = U256::from(2);
+    let mut exact = recipient_wildcard.clone();
+    exact.call_key = Some(call_key);
+    exact.budget = U256::from(3);
+    let nodes = vec![global_wildcard, recipient_wildcard, exact];
+
+    let candidates = external_allocation_candidates(&nodes, recipient, call_key);
+    let budgets = candidates
+        .into_iter()
+        .map(|index| nodes[index].budget)
+        .collect::<Vec<_>>();
+
+    assert_eq!(budgets, vec![U256::from(3), U256::from(2), U256::one()]);
+}
+
+#[test]
+fn external_allocation_candidates_include_zero_budget_nodes() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let mut node = external_message_allocation();
+    node.recipient = Some(recipient);
+    node.call_key = Some(call_key);
+    node.budget = U256::zero();
+    let nodes = vec![node];
+
+    assert_eq!(
+        external_allocation_candidates(&nodes, recipient, call_key),
+        vec![0]
+    );
 }
 
 struct TestDir(std::path::PathBuf);
@@ -203,7 +343,7 @@ impl EmissionTestContext {
                 ..Default::default()
             },
             data_fees_limit: rt::fees::DataLimit::new(
-                vec![U256::from(fee_total)],
+                std::collections::HashMap::from([("test".to_owned(), U256::from(fee_total))]),
                 fees.clone(),
                 Default::default(),
             )
@@ -343,6 +483,7 @@ impl EmissionTestContext {
                         external_message_allocation(),
                         internal_message_allocation(),
                     ],
+                    message_fee_allocation_consumed: vec![U256::zero(); 2],
                 },
                 det_subvm_hashes: Default::default(),
                 granted_custom: Vec::new(),
@@ -450,6 +591,29 @@ fn emission_allocation_overflow_cannot_fit_the_budget() {
     assert_eq!(emission_allocation_size(&[u64::MAX]), u64::MAX);
 }
 
+#[test]
+fn first_message_flag_ignores_events_and_flips_after_a_message() {
+    let event = domain::ExecutionEmission::Event {
+        topics: Vec::new(),
+        blob: calldata::Map::new().into(),
+        storage_fee: U256::zero(),
+    };
+    assert!(next_message_is_first(&[event]));
+
+    let message = domain::ExecutionEmission::ExternalMessage {
+        address: calldata::Address::zero(),
+        calldata: bytes::Bytes::new(),
+        value: U256::zero(),
+        message_fee: U256::zero(),
+        receipt_fee: U256::zero(),
+        fee_params: abi::fees::ExternalMessageParams {
+            gas_limit: U256::zero(),
+            max_gas_price: U256::zero(),
+        },
+    };
+    assert!(!next_message_is_first(&[message]));
+}
+
 #[tokio::test]
 async fn messages_rejected_by_memory_are_not_appended_or_charged() {
     for emission in MessageEmission::ALL {
@@ -476,7 +640,7 @@ async fn messages_rejected_by_memory_are_not_appended_or_charged() {
                 .data_fees_limit
                 .remaining()
                 .await,
-            vec![U256::from(1)],
+            std::collections::BTreeMap::from([("test".to_owned(), U256::from(1))]),
             "{} was charged",
             emission.name()
         );
@@ -568,6 +732,186 @@ async fn messages_rejected_by_fee_are_not_appended_and_release_memory() {
 }
 
 #[tokio::test]
+async fn unallocated_external_receipt_exhaustion_is_classified_as_receipt() {
+    let mut test = EmissionTestContext::new(u32::MAX, 0);
+    test.context
+        .data
+        .accumulator
+        .message_fee_allocation
+        .retain(|node| {
+            matches!(
+                &node.fee_params,
+                genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(_)
+            )
+        });
+
+    let error = test
+        .emit_message(MessageEmission::External)
+        .await
+        .unwrap_err();
+
+    assert!(trap_message(error).contains("out_of receipt message"));
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn repeated_internal_messages_preserve_canonical_subtree_and_charge_budgets() {
+    for emission in [
+        MessageEmission::InternalAllocation,
+        MessageEmission::DeployAllocation,
+    ] {
+        let mut test = EmissionTestContext::new(u32::MAX, 14);
+        let grandchild = allocation_child(U256::one(), Vec::new());
+        let first_child = allocation_child(U256::from(2), vec![grandchild]);
+        let second_child = allocation_child(U256::from(3), Vec::new());
+        test.context.data.accumulator.message_fee_allocation[1].children =
+            vec![first_child, second_child];
+
+        test.emit_message(emission).await.unwrap();
+        test.emit_message(emission).await.unwrap();
+
+        let emission_data = |emission: &domain::ExecutionEmission| match emission {
+            domain::ExecutionEmission::InternalMessage {
+                message_fee,
+                subtree,
+                ..
+            }
+            | domain::ExecutionEmission::InternalDeployMessage {
+                message_fee,
+                subtree,
+                ..
+            } => (*message_fee, subtree.clone()),
+            other => panic!("unexpected emission: {other:?}"),
+        };
+        let first = emission_data(&test.context.data.accumulator.emissions[0]);
+        let second = emission_data(&test.context.data.accumulator.emissions[1]);
+        assert_eq!(first.0, U256::from(6), "{}", emission.name());
+        assert_eq!(second.0, U256::from(6), "{}", emission.name());
+        assert_eq!(first.1, second.1, "{} subtree changed", emission.name());
+        assert_eq!(
+            test.context.data.accumulator.message_fee_allocation[1].budget,
+            U256::from(100),
+            "{}",
+            emission.name()
+        );
+        assert_eq!(
+            test.context
+                .data
+                .accumulator
+                .message_fee_allocation_consumed[1],
+            U256::from(12),
+            "{}",
+            emission.name()
+        );
+        let consumed = test
+            .context
+            .data
+            .supervisor
+            .shared_data
+            .data_fees_limit
+            .consumed()
+            .await;
+        assert_eq!(consumed.message_fee, U256::from(12), "{}", emission.name());
+        assert_eq!(
+            consumed.message_receipt,
+            U256::from(2),
+            "{}",
+            emission.name()
+        );
+
+        test.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn child_budget_fee_failure_is_atomic() {
+    let mut test = EmissionTestContext::new(u32::MAX, 6);
+    test.context.data.accumulator.message_fee_allocation[1].children = vec![
+        allocation_child(U256::from(2), Vec::new()),
+        allocation_child(U256::from(3), Vec::new()),
+    ];
+    let memory_before = test.context.limiter.get_remaining_memory();
+
+    let error = test
+        .emit_message(MessageEmission::InternalAllocation)
+        .await
+        .unwrap_err();
+
+    assert!(
+        trap_message(error).contains("out_of message_fee total # internal"),
+        "unexpected fee error"
+    );
+    assert!(test.context.data.accumulator.emissions.is_empty());
+    assert_eq!(
+        test.context.data.accumulator.message_fee_allocation[1].budget,
+        U256::from(100)
+    );
+    assert_eq!(
+        test.context
+            .data
+            .accumulator
+            .message_fee_allocation_consumed[1],
+        U256::zero()
+    );
+    assert_eq!(test.context.limiter.get_remaining_memory(), memory_before);
+    let consumed = test
+        .context
+        .data
+        .supervisor
+        .shared_data
+        .data_fees_limit
+        .consumed()
+        .await;
+    assert_eq!(consumed.message_fee, U256::zero());
+    assert_eq!(consumed.message_receipt, U256::zero());
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn child_budget_overflow_is_internal_and_has_no_effect() {
+    let mut test = EmissionTestContext::new(u32::MAX, 1);
+    test.context.data.accumulator.message_fee_allocation[1].children =
+        vec![allocation_child(U256::MAX, Vec::new())];
+    let memory_before = test.context.limiter.get_remaining_memory();
+
+    let error = test
+        .emit_message(MessageEmission::InternalAllocation)
+        .await
+        .unwrap_err();
+
+    assert!(
+        trap_message(error).contains("message declared budget overflow"),
+        "unexpected overflow error"
+    );
+    assert!(test.context.data.accumulator.emissions.is_empty());
+    assert_eq!(
+        test.context.data.accumulator.message_fee_allocation[1].budget,
+        U256::from(100)
+    );
+    assert_eq!(
+        test.context
+            .data
+            .accumulator
+            .message_fee_allocation_consumed[1],
+        U256::zero()
+    );
+    assert_eq!(test.context.limiter.get_remaining_memory(), memory_before);
+    let consumed = test
+        .context
+        .data
+        .supervisor
+        .shared_data
+        .data_fees_limit
+        .consumed()
+        .await;
+    assert_eq!(consumed.message_fee, U256::zero());
+    assert_eq!(consumed.message_receipt, U256::zero());
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
 async fn event_rejected_by_memory_is_not_appended_or_charged() {
     let mut test = EmissionTestContext::new(0, 1);
 
@@ -591,7 +935,7 @@ async fn event_rejected_by_memory_is_not_appended_or_charged() {
             .data_fees_limit
             .remaining()
             .await,
-        vec![U256::from(1)]
+        std::collections::BTreeMap::from([("test".to_owned(), U256::from(1))])
     );
 
     test.shutdown().await;
@@ -705,7 +1049,10 @@ async fn nondet_fee_preflight_fails_before_consuming_the_fallback_fee() {
             .await
             .is_err()
     );
-    assert_eq!(fees.remaining().await, vec![U256::from(required - 1)]);
+    assert_eq!(
+        fees.remaining().await,
+        std::collections::BTreeMap::from([("test".to_owned(), U256::from(required - 1))])
+    );
     assert_eq!(fees.consumed().await.nondet_output, U256::zero());
 }
 
@@ -751,7 +1098,10 @@ async fn over_cap_nondet_payload_is_replaced_before_publication() {
         limiter.get_remaining_memory(),
         memory_budget - fee_error.allocation_size() as u32
     );
-    assert_eq!(fees.remaining().await, vec![U256::zero()]);
+    assert_eq!(
+        fees.remaining().await,
+        std::collections::BTreeMap::from([("test".to_owned(), U256::zero())])
+    );
     assert_eq!(
         fees.consumed().await.nondet_output,
         U256::from(fee_error_len)
@@ -860,8 +1210,8 @@ fn zero_price_caps_are_inval() {
 #[test]
 fn huge_magnitude_params_are_inval() {
     // Security-review N1 repro: passes the emptiness/zero checks, but the
-    // 2^250 magnitudes would push messageFeeFloor past U256 and trip the
-    // evaluator's internal `fee cost exceeds U256 range` abort.
+    // 2^250 magnitudes would push messageFeeFloor past U256 and saturate the
+    // evaluator's result to U256::MAX.
     let p = abi::fees::InternalMessageParams {
         leader_time_units_allocation: U256::one() << 250,
         validator_time_units_allocation: U256::zero(),

@@ -5,13 +5,21 @@ local util = import 'templates/util.jsonnet';
 	tags: util.features([['nondet', 'consensus', 'leader'], ['fees']], 'stable') + ['python'],
 	entry: util.addPaths([
 		simple.run('${jsonnetDir}/${fileBaseName}.py', 'main') {
-			next: [
-				super.next[0] {
+			next:
+				local exact = super.next[0] {
 					modes: 'lvs',
-					// VMError byte + "out_of receipt nondet_output"
-					bucket_totals: [1000000000, 1000000000, 29, 1000000000],
-				},
-			],
+					// 64-byte frame + one 34-byte compact VMError output
+					bucket_totals: {
+						nondet_outputs: 98,
+						// 71 message startup gas + 1024 wrapper + 34 output bytes
+						execution_data_gas: 1129,
+					},
+				};
+				[
+					exact,
+					exact {bucket_totals+: {nondet_outputs: 97}},
+					exact {bucket_totals+: {execution_data_gas: 1128}},
+				],
 		},
 	]),
 }

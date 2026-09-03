@@ -438,6 +438,7 @@ impl ContextVFS<'_> {
             messages_value_decremented: self.context.data.accumulator.messages_value_decremented,
             emissions: Vec::new(),
             message_fee_allocation: Vec::new(),
+            message_fee_allocation_consumed: Vec::new(),
         };
 
         let vm_data = Box::new(SingleVMData {
@@ -539,6 +540,7 @@ impl ContextVFS<'_> {
                 messages_value_decremented: primitive_types::U256::zero(),
                 emissions: Vec::new(),
                 message_fee_allocation: Vec::new(),
+                message_fee_allocation_consumed: Vec::new(),
             },
             det_subvm_hashes: Default::default(),
             // A CallContract child is granted the caller's full custom set;
@@ -987,6 +989,7 @@ impl ContextVFS<'_> {
             messages_value_decremented: primitive_types::U256::max_value(),
             emissions: Vec::new(),
             message_fee_allocation: Vec::new(),
+            message_fee_allocation_consumed: Vec::new(),
         };
 
         std::mem::swap(&mut self.context.data.accumulator, &mut fake_my_data);

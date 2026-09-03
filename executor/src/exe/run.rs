@@ -15,11 +15,16 @@ const EXECUTION_DATA_HELP: &str = "path to file containing encoded execution dat
 
 fn fill_nested_fee_buckets(
     is_nested: bool,
-    max_bucket_no: usize,
-    bucket_totals: &mut Vec<primitive_types::U256>,
+    bucket_names: &[symbol_table::GlobalSymbol],
+    bucket_totals: &mut std::collections::HashMap<String, primitive_types::U256>,
 ) {
     if is_nested && bucket_totals.is_empty() {
-        bucket_totals.resize(max_bucket_no + 1, primitive_types::U256::zero());
+        bucket_totals.extend(
+            bucket_names
+                .iter()
+                .copied()
+                .map(|name| (name.as_str().to_owned(), primitive_types::U256::zero())),
+        );
     }
 }
 
@@ -177,7 +182,8 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     let mut bucket_totals = execution_data
         .bucket_totals
         .iter()
-        .map(|bi| {
+        .map(|(name, bi)| {
+            anyhow::ensure!(!name.is_empty(), "bucket name must not be empty");
             let (sign, bytes) = bi.to_bytes_be();
             anyhow::ensure!(
                 sign != num_bigint::Sign::Minus,
@@ -187,30 +193,31 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             let mut buf = [0u8; 32];
             let start = 32usize.saturating_sub(bytes.len());
             buf[start..].copy_from_slice(&bytes);
-            Ok(primitive_types::U256::from_big_endian(&buf))
+            Ok((name.clone(), primitive_types::U256::from_big_endian(&buf)))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<std::collections::HashMap<_, _>>>()?;
 
-    let max_bucket_no = [
-        &config.fees.storage.bucket_no,
-        &config.fees.message_receipt.bucket_no,
-        &config.fees.nondet_output.bucket_no,
-        &config.fees.message_fee.bucket_no,
-        &config.fees.event.bucket_no,
+    let bucket_names = [
+        &config.fees.storage.buckets,
+        &config.fees.message_receipt.buckets,
+        &config.fees.nondet_output.buckets,
+        &config.fees.message_fee.buckets,
+        &config.fees.event.buckets,
     ]
     .into_iter()
     .flat_map(|v| v.iter().copied())
-    .max()
-    .unwrap_or(0);
+    .collect::<Vec<_>>();
 
     // A nested CallContract is read-only and receives no fee buckets. Keep the
     // configured bucket shape valid without granting it a spendable balance.
-    fill_nested_fee_buckets(is_nested, max_bucket_no.into(), &mut bucket_totals);
-    anyhow::ensure!(
-        usize::from(max_bucket_no) < bucket_totals.len(),
-        "fees config references bucket {max_bucket_no} but only {} bucket(s) provided",
-        bucket_totals.len(),
-    );
+    fill_nested_fee_buckets(is_nested, &bucket_names, &mut bucket_totals);
+    for name in bucket_names {
+        anyhow::ensure!(
+            bucket_totals.contains_key(name.as_str()),
+            "fees config references missing bucket `{}`",
+            name.as_str(),
+        );
+    }
 
     let emit_leader_public_data =
         !args.sync && !is_nested && execution_data.leader_public_data.is_none();
@@ -218,7 +225,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         match execution_data.leader_public_data.as_ref() {
             None => (None, false),
             Some(encoded) => match genvm::leader_public_data::LeaderPublicData::decode(encoded) {
-                Ok(data) => (Some(data.nondet_block_outputs), false),
+                Ok(data) => (Some(data.nd_outs), false),
                 Err(_) => (Some(Vec::new()), true),
             },
         };
@@ -307,7 +314,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         let data_fees_consumed = runtime.block_on(shared_data.data_fees_limit.consumed());
         let leader_public_data = if emit_leader_public_data {
             genvm::leader_public_data::LeaderPublicData {
-                nondet_block_outputs: Vec::new(),
+                nd_outs: Vec::new(),
             }
             .encode()
         } else {

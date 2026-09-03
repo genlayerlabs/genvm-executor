@@ -2,8 +2,8 @@
 import genlayer as gl
 from genlayer.vm.public_abi import Permissions
 
-# leader/validator timeunits (5) are below the node's minTimeUnitsPerPhase floor
-# (30, set in the jsonnet), so metering rejects the emission.
+# Leader/validator timeunits (5) are below their phase minima (30, set in the
+# jsonnet), so metering rejects the emission.
 _PARAMS = gl.chain.InternalMessageParams(
 	leader_time_units_allocation=5,
 	validator_time_units_allocation=5,
@@ -23,8 +23,7 @@ class Contract(gl.contract.Contract):
 
 	@gl.public.write
 	def do_emit(self):
-		# The min-timeunits floor is enforced on the balance-funded path too, so
-		# emission aborts with the `fee below_minimum` VMError.
+		# Phase bounds are enforced on the balance-funded path too.
 		gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
 			use_balance=True, fee_params=_PARAMS
 		).foo(1, 2)
