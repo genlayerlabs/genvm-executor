@@ -396,6 +396,11 @@ pub async fn run_with_impl(
             topmost_runner_id,
         },
     };
+    let message_fee_allocation = entry_data
+        .message_fee_allocation
+        .into_iter()
+        .map(convert_message_allocation_node)
+        .collect::<Vec<_>>();
 
     let essential_data = Box::new(wasi::genlayer_sdk::SingleVMData {
         // A budget minted elsewhere is a remainder, not an authority: a chain
@@ -422,11 +427,11 @@ pub async fn run_with_impl(
             data_fees_limit,
             messages_value_decremented: primitive_types::U256::zero(),
             emissions: Vec::new(),
-            message_fee_allocation: entry_data
-                .message_fee_allocation
-                .into_iter()
-                .map(convert_message_allocation_node)
-                .collect(),
+            message_fee_allocation_consumed: vec![
+                primitive_types::U256::zero();
+                message_fee_allocation.len()
+            ],
+            message_fee_allocation,
             custom_runners: Default::default(),
         },
         det_subvm_hashes: Default::default(),
@@ -510,7 +515,7 @@ pub async fn run_with(
             let leader_public_data = if supervisor.is_leader() && supervisor.emit_leader_public_data
             {
                 leader_public_data::LeaderPublicData {
-                    nondet_block_outputs: nondet_results,
+                    nd_outs: nondet_results,
                 }
                 .encode()
             } else {

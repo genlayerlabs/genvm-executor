@@ -114,7 +114,7 @@ fn value_to_u256_vec(
         genvm_common::expr::Value::Array(arr) => {
             anyhow::ensure!(
                 arr.len() == bucket_count,
-                "fee expression returned array of length {} but bucket_no has {bucket_count} entries",
+                "fee expression returned array of length {} but buckets has {bucket_count} entries",
                 arr.len(),
             );
             arr.iter()
@@ -154,12 +154,12 @@ fn eval_with_node(
 /// [`DataLimit::consume_initial`]) + Σ `delta(attrs)`. `delta` is a function
 /// closing over `node`/the prelude.
 ///
-/// `bucket_nos` can target multiple on-chain buckets. When the delta expression
+/// `bucket_names` can target multiple on-chain buckets. When the delta expression
 /// returns a scalar it is charged identically against every bucket; when it
 /// returns an array the lengths must match and each element is charged to the
 /// corresponding bucket. All subtractions are atomic (all-or-nothing).
 struct Bucket {
-    bucket_nos: Vec<u8>,
+    bucket_names: Vec<symbol_table::GlobalSymbol>,
     subtract_on_start: Vec<primitive_types::U256>,
     delta: genvm_common::expr::Value,
     oom_error: abi::consts::VmError,
@@ -170,7 +170,14 @@ struct Bucket {
 impl std::fmt::Debug for Bucket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Bucket")
-            .field("bucket_nos", &self.bucket_nos)
+            .field(
+                "bucket_names",
+                &self
+                    .bucket_names
+                    .iter()
+                    .map(symbol_table::GlobalSymbol::as_str)
+                    .collect::<Vec<_>>(),
+            )
             .field("subtract_on_start", &self.subtract_on_start)
             .finish()
     }
@@ -182,8 +189,8 @@ fn build_bucket(
     node: &genvm_common::expr::Value,
     oom_error: abi::consts::VmError,
 ) -> anyhow::Result<Bucket> {
-    let n = cfg.bucket_no.len();
-    anyhow::ensure!(n > 0, "bucket_no must have at least one entry");
+    let n = cfg.buckets.len();
+    anyhow::ensure!(n > 0, "buckets must have at least one entry");
 
     let subtract_on_start = value_to_u256_vec(
         eval_with_node(
@@ -196,8 +203,9 @@ fn build_bucket(
     )?;
 
     let delta = eval_with_node(prelude, "delta", &cfg.delta_expr, node)?;
+    debug_assert_eq!(subtract_on_start.len(), n);
     Ok(Bucket {
-        bucket_nos: cfg.bucket_no.clone(),
+        bucket_names: cfg.buckets.clone(),
         subtract_on_start,
         delta,
         oom_error,
@@ -244,7 +252,7 @@ pub struct MessageReceiptParams {
 
 #[derive(Debug)]
 pub struct DataLimit {
-    buckets: tokio::sync::Mutex<Vec<primitive_types::U256>>,
+    buckets: tokio::sync::Mutex<std::collections::HashMap<String, primitive_types::U256>>,
     storage: Bucket,
     message_receipt: Bucket,
     nondet_output: Bucket,
@@ -254,7 +262,7 @@ pub struct DataLimit {
 
 impl DataLimit {
     pub fn new(
-        bucket_totals: Vec<primitive_types::U256>,
+        bucket_totals: std::collections::HashMap<String, primitive_types::U256>,
         fees: crate::config::FeesConfig,
         gas_data: std::collections::BTreeMap<String, String>,
     ) -> anyhow::Result<Self> {
@@ -304,6 +312,24 @@ impl DataLimit {
             abi::consts::VmError::oom().storage(),
         )?;
 
+        for bucket in [
+            &storage,
+            &message_receipt,
+            &nondet_output,
+            &message_fee,
+            &event,
+        ] {
+            debug_assert_eq!(bucket.bucket_names.len(), bucket.subtract_on_start.len());
+            debug_assert_eq!(bucket.bucket_names.len(), bucket.total_consumed.len());
+            for &name in &bucket.bucket_names {
+                anyhow::ensure!(
+                    bucket_totals.contains_key(name.as_str()),
+                    "fees config references missing bucket `{}`",
+                    name.as_str(),
+                );
+            }
+        }
+
         Ok(Self {
             buckets: tokio::sync::Mutex::new(bucket_totals),
             storage,
@@ -323,9 +349,12 @@ impl DataLimit {
             .delta
             .apply_with(attrs_object(vars), no_free_vars)
             .map_err(|e| anyhow::anyhow!("{e}"))
-            .and_then(|v| value_to_u256_vec(v, bucket.bucket_nos.len()))
+            .and_then(|v| value_to_u256_vec(v, bucket.bucket_names.len()))
         {
-            Ok(costs) => Ok(CostVec(costs)),
+            Ok(costs) => {
+                debug_assert_eq!(costs.len(), bucket.bucket_names.len());
+                Ok(CostVec(costs))
+            }
             Err(e) => {
                 log_error!(error:ah = e; "failed to evaluate fee expression");
                 Err(e).context("failed to evaluate fee expression")
@@ -343,33 +372,48 @@ impl DataLimit {
     }
 
     async fn consume_bucket_raw(&self, bucket: &Bucket, costs: &[primitive_types::U256]) -> bool {
+        debug_assert_eq!(bucket.bucket_names.len(), costs.len());
+        debug_assert_eq!(bucket.bucket_names.len(), bucket.total_consumed.len());
         let mut buckets = self.buckets.lock().await;
-        for (idx, (&bno, &cost)) in bucket.bucket_nos.iter().zip(costs.iter()).enumerate() {
-            let Some(remaining) = buckets.get(bno as usize) else {
-                log_warn!(bucket = bno; "consume_bucket: bucket index out of range");
+        for (idx, (&name, &cost)) in bucket.bucket_names.iter().zip(costs.iter()).enumerate() {
+            let Some(remaining) = buckets.get(name.as_str()) else {
+                debug_assert!(
+                    buckets.contains_key(name.as_str()),
+                    "validated bucket disappeared: {}",
+                    name.as_str()
+                );
+                log_warn!(bucket = name.as_str(); "consume_bucket: bucket missing");
                 return false;
             };
             if *remaining < cost {
                 log_warn!(
-                    bucket = bno,
+                    bucket = name.as_str(),
                     cost:display = cost,
                     remaining:display = *remaining;
                     "consume_bucket: insufficient funds"
                 );
                 return false;
             }
-            // when the same bucket_no appears more than once, verify
+            // When the same bucket appears more than once, verify
             // cumulative cost fits
             let mut cumulative = cost;
-            for (&prev_bno, &prev_cost) in bucket.bucket_nos[..idx].iter().zip(costs[..idx].iter())
+            for (&prev_name, &prev_cost) in
+                bucket.bucket_names[..idx].iter().zip(costs[..idx].iter())
             {
-                if prev_bno == bno {
-                    cumulative += prev_cost;
+                if prev_name == name {
+                    let Some(total) = cumulative.checked_add(prev_cost) else {
+                        log_warn!(
+                            bucket = name.as_str();
+                            "consume_bucket: cumulative cost overflow"
+                        );
+                        return false;
+                    };
+                    cumulative = total;
                 }
             }
             if *remaining < cumulative {
                 log_warn!(
-                    bucket = bno,
+                    bucket = name.as_str(),
                     cumulative:display = cumulative,
                     remaining:display = *remaining;
                     "consume_bucket: insufficient funds (cumulative)"
@@ -377,12 +421,20 @@ impl DataLimit {
                 return false;
             }
         }
-        for (i, (&bno, &cost)) in bucket.bucket_nos.iter().zip(costs.iter()).enumerate() {
-            buckets[bno as usize] -= cost;
+        for (i, (&name, &cost)) in bucket.bucket_names.iter().zip(costs.iter()).enumerate() {
+            let Some(remaining) = buckets.get_mut(name.as_str()) else {
+                debug_assert!(
+                    buckets.contains_key(name.as_str()),
+                    "validated bucket disappeared: {}",
+                    name.as_str()
+                );
+                return false;
+            };
+            *remaining -= cost;
             log_debug!(
-                bucket = bno,
+                bucket = name.as_str(),
                 cost:display = cost,
-                remaining:display = buckets[bno as usize];
+                remaining:display = *remaining;
                 "consume_bucket: ok"
             );
             *bucket.total_consumed[i].lock().await += cost;
@@ -391,8 +443,13 @@ impl DataLimit {
         true
     }
 
-    pub async fn remaining(&self) -> Vec<primitive_types::U256> {
-        self.buckets.lock().await.clone()
+    pub async fn remaining(&self) -> std::collections::BTreeMap<String, primitive_types::U256> {
+        self.buckets
+            .lock()
+            .await
+            .iter()
+            .map(|(name, total)| (name.clone(), *total))
+            .collect()
     }
 
     async fn sum_consumed(bucket: &Bucket) -> primitive_types::U256 {
@@ -433,7 +490,11 @@ impl DataLimit {
                     bucket.oom_error.clone(),
                     anyhow::anyhow!(
                         "subtract_on_start exceeds bucket {:?} total",
-                        bucket.bucket_nos
+                        bucket
+                            .bucket_names
+                            .iter()
+                            .map(symbol_table::GlobalSymbol::as_str)
+                            .collect::<Vec<_>>()
                     ),
                 ));
             }
@@ -513,31 +574,61 @@ impl DataLimit {
     pub async fn consume_message_fee(&self, cost_fee: &CostVec, cost_receipt: &CostVec) -> bool {
         let mut buckets = self.buckets.lock().await;
 
-        // Build a cumulative deduction map: bucket_index → total to subtract.
-        let mut deductions: std::collections::BTreeMap<u8, primitive_types::U256> =
-            std::collections::BTreeMap::new();
+        debug_assert_eq!(self.message_fee.bucket_names.len(), cost_fee.0.len());
+        debug_assert_eq!(
+            self.message_receipt.bucket_names.len(),
+            cost_receipt.0.len()
+        );
+        let mut deductions: Vec<(symbol_table::GlobalSymbol, primitive_types::U256)> = Vec::new();
 
-        for (&bno, &cost) in self.message_fee.bucket_nos.iter().zip(cost_fee.0.iter()) {
-            *deductions.entry(bno).or_default() += cost;
+        for (&name, &cost) in self.message_fee.bucket_names.iter().zip(cost_fee.0.iter()) {
+            if let Some((_, total)) = deductions
+                .iter_mut()
+                .find(|(existing, _)| *existing == name)
+            {
+                let Some(sum) = total.checked_add(cost) else {
+                    log_warn!(bucket = name.as_str(); "consume_message_fee: cost overflow");
+                    return false;
+                };
+                *total = sum;
+            } else {
+                deductions.push((name, cost));
+            }
         }
-        for (&bno, &cost) in self
+        for (&name, &cost) in self
             .message_receipt
-            .bucket_nos
+            .bucket_names
             .iter()
             .zip(cost_receipt.0.iter())
         {
-            *deductions.entry(bno).or_default() += cost;
+            if let Some((_, total)) = deductions
+                .iter_mut()
+                .find(|(existing, _)| *existing == name)
+            {
+                let Some(sum) = total.checked_add(cost) else {
+                    log_warn!(bucket = name.as_str(); "consume_message_fee: cost overflow");
+                    return false;
+                };
+                *total = sum;
+            } else {
+                deductions.push((name, cost));
+            }
         }
 
         // Check all buckets first (atomic: all-or-nothing).
-        for (&bno, &total) in &deductions {
-            let Some(remaining) = buckets.get(bno as usize) else {
-                log_warn!(bucket = bno; "consume_message_fee: bucket index out of range");
+        for &(name, total) in &deductions {
+            let Some(remaining) = buckets.get(name.as_str()) else {
+                debug_assert!(
+                    buckets.contains_key(name.as_str()),
+                    "validated bucket disappeared: {}",
+                    name.as_str()
+                );
+                log_warn!(bucket = name.as_str(); "consume_message_fee: bucket missing");
                 return false;
             };
             if *remaining < total {
                 log_warn!(
-                    bucket = bno,
+                    bucket = name.as_str(),
                     cost:display = total,
                     remaining:display = *remaining;
                     "consume_message_fee: insufficient funds"
@@ -547,8 +638,11 @@ impl DataLimit {
         }
 
         // Apply all deductions.
-        for (&bno, &total) in &deductions {
-            buckets[bno as usize] -= total;
+        for &(name, total) in &deductions {
+            let remaining = buckets
+                .get_mut(name.as_str())
+                .expect("validated fee bucket must remain present");
+            *remaining -= total;
         }
         std::mem::drop(buckets);
 

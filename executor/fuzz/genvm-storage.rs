@@ -151,31 +151,31 @@ async fn run_storage_fuzz(input: FuzzInput) -> anyhow::Result<()> {
         address,
         genvm::rt::vm::storage::Limiter::new(sync::DArc::new(
             rt::fees::DataLimit::new(
-                vec![primitive_types::U256::MAX],
+                std::collections::HashMap::from([("test".to_owned(), primitive_types::U256::MAX)]),
                 genvm::config::FeesConfig {
                     expr_prelude: String::new(),
                     storage: genvm::config::FeesBucketConfig {
-                        bucket_no: vec![0],
+                        buckets: vec![symbol_table::GlobalSymbol::from("test")],
                         subtract_on_start_expr: "0".into(),
                         delta_expr: r"\attrs = 0".into(),
                     },
                     message_receipt: genvm::config::FeesBucketConfig {
-                        bucket_no: vec![0],
+                        buckets: vec![symbol_table::GlobalSymbol::from("test")],
                         subtract_on_start_expr: "0".into(),
                         delta_expr: r"\attrs = 0".into(),
                     },
                     nondet_output: genvm::config::FeesBucketConfig {
-                        bucket_no: vec![0],
+                        buckets: vec![symbol_table::GlobalSymbol::from("test")],
                         subtract_on_start_expr: "0".into(),
                         delta_expr: r"\attrs = 0".into(),
                     },
                     message_fee: genvm::config::FeesBucketConfig {
-                        bucket_no: vec![0],
+                        buckets: vec![symbol_table::GlobalSymbol::from("test")],
                         subtract_on_start_expr: "0".into(),
                         delta_expr: r"\attrs = 0".into(),
                     },
                     event: genvm::config::FeesBucketConfig {
-                        bucket_no: vec![0],
+                        buckets: vec![symbol_table::GlobalSymbol::from("test")],
                         subtract_on_start_expr: "0".into(),
                         delta_expr: r"\attrs = 0".into(),
                     },
