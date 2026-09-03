@@ -100,7 +100,8 @@ struct ConsumeInternalArgs {
 
 async fn consume_message_fee_internal(
     shared_data: &rt::SharedData,
-    node: &mut domain::fees::MessageAllocationNode,
+    node: &domain::fees::MessageAllocationNode,
+    consumed: &mut primitive_types::U256,
     fee_params: Arc<domain::fees::InternalMessageParams>,
     on: gl_call::On,
     args: ConsumeInternalArgs,
@@ -111,11 +112,16 @@ async fn consume_message_fee_internal(
         .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
 
     let fee_total = fee_cost.sum();
-    if fee_total > node.budget {
+    let remaining_budget = node.budget.checked_sub(*consumed).ok_or_else(|| {
+        generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
+            "message allocation consumed budget exceeds its total"
+        )))
+    })?;
+    if fee_total > remaining_budget {
         log_warn!(
             node:cd = *node,
             fee_cost:cd = fee_total,
-            budget: cd = node.budget;
+            budget: cd = remaining_budget;
             "message fee cost exceeds node budget"
         );
         return Err(oom_trap(abi::consts::VmError::oom().fees().internal()));
@@ -150,7 +156,7 @@ async fn consume_message_fee_internal(
         return Err(oom_trap(abi::consts::VmError::oom().fees().internal()));
     }
 
-    node.budget -= fee_total;
+    *consumed += fee_total;
 
     Ok(rt::fees::MessageFeeConsumption {
         message_fee: fee_cost,
@@ -166,7 +172,8 @@ struct ConsumeExternalArgs {
 
 async fn consume_message_fee_external(
     shared_data: &rt::SharedData,
-    node: &mut domain::fees::MessageAllocationNode,
+    node: &domain::fees::MessageAllocationNode,
+    consumed: &mut primitive_types::U256,
     params: domain::fees::ExternalMessageParams,
     // External messages are always emitted on finalization; carried for signature
     // symmetry with the internal path.
@@ -179,7 +186,12 @@ async fn consume_message_fee_external(
         .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
 
     let fee_total = fee_cost.sum();
-    if fee_total > node.budget {
+    let remaining_budget = node.budget.checked_sub(*consumed).ok_or_else(|| {
+        generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
+            "message allocation consumed budget exceeds its total"
+        )))
+    })?;
+    if fee_total > remaining_budget {
         return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
     }
 
@@ -202,7 +214,7 @@ async fn consume_message_fee_external(
         return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
     }
 
-    node.budget -= fee_total;
+    *consumed += fee_total;
 
     Ok(rt::fees::MessageFeeConsumption {
         message_fee: fee_cost,
@@ -312,6 +324,7 @@ pub struct VMDataAccumulator {
     pub messages_value_decremented: primitive_types::U256,
     pub emissions: Vec<domain::ExecutionEmission>,
     pub message_fee_allocation: Vec<domain::fees::MessageAllocationNode>,
+    pub message_fee_allocation_consumed: Vec<primitive_types::U256>,
     /// Custom runner hashes registered in (and inherited into) this execution
     /// scope. Only these may be resolved via `custom:<hash>`. A nondet sub-VM
     /// starts empty, so it cannot see runners the deterministic scope registered.
@@ -704,15 +717,16 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     call_key.0[..4].copy_from_slice(&calldata[..4]);
                 }
 
-                let Some((matched_node, matched_params)) = self
+                let Some((matched_index, matched_params)) = self
                     .context
                     .data
                     .accumulator
                     .message_fee_allocation
-                    .iter_mut()
-                    .find_map(|node| {
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, node)| {
                         node.matches_external(address, call_key)
-                            .map(|params| (node, params))
+                            .map(|params| (index, params))
                     })
                 else {
                     log_warn!(
@@ -725,10 +739,14 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 };
 
                 let calldata_length = calldata.len() as u64;
+                let shared_data = self.context.data.supervisor.shared_data.clone();
+                let accumulator = &mut self.context.data.accumulator;
+                let matched_node = &accumulator.message_fee_allocation[matched_index];
 
                 let fees = consume_message_fee_external(
-                    &self.context.data.supervisor.shared_data,
+                    &shared_data,
                     matched_node,
+                    &mut accumulator.message_fee_allocation_consumed[matched_index],
                     matched_params,
                     gl_call::On::Finalized,
                     ConsumeExternalArgs {
@@ -889,6 +907,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                             .messages_value_decremented,
                         emissions: Vec::new(),
                         message_fee_allocation: Vec::new(),
+                        message_fee_allocation_consumed: Vec::new(),
                         // CallContract is a deterministic sub-call: inherit the
                         // runners registered so far.
                         custom_runners: self.context.data.accumulator.custom_runners.clone(),
@@ -1136,15 +1155,16 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     }
                 }
 
-                let Some((matched_node, matched_params)) = self
+                let Some((matched_index, matched_params)) = self
                     .context
                     .data
                     .accumulator
                     .message_fee_allocation
-                    .iter_mut()
-                    .find_map(|node| {
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, node)| {
                         node.matches_internal(on, address, call_key)
-                            .map(|params| (node, params))
+                            .map(|params| (index, params))
                     })
                 else {
                     log_warn!(
@@ -1169,13 +1189,14 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let calldata_length = enc.into_inner().0;
 
                 let fee_params = (*matched_params).clone();
-                let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
-                    &matched_node.children,
-                ));
+                let accumulator = &mut self.context.data.accumulator;
+                let matched_node = &accumulator.message_fee_allocation[matched_index];
+                let subtree = bytes::Bytes::from(matched_node.abi_encode());
 
                 let fees = consume_message_fee_internal(
-                    &self.context.data.supervisor.shared_data,
+                    &sd,
                     matched_node,
+                    &mut accumulator.message_fee_allocation_consumed[matched_index],
                     matched_params,
                     on,
                     ConsumeInternalArgs {
@@ -1247,15 +1268,16 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     }
                 }
 
-                let Some((matched_node, matched_params)) = self
+                let Some((matched_index, matched_params)) = self
                     .context
                     .data
                     .accumulator
                     .message_fee_allocation
-                    .iter_mut()
-                    .find_map(|node| {
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, node)| {
                         node.matches_internal(on, calldata::Address::zero(), abi::CallKey::DEPLOY)
-                            .map(|params| (node, params))
+                            .map(|params| (index, params))
                     })
                 else {
                     log_warn!(
@@ -1274,13 +1296,14 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let calldata_length = enc.into_inner().0;
 
                 let fee_params = (*matched_params).clone();
-                let subtree = bytes::Bytes::from(domain::fees::MessageAllocationNode::abi_encode(
-                    &matched_node.children,
-                ));
+                let accumulator = &mut self.context.data.accumulator;
+                let matched_node = &accumulator.message_fee_allocation[matched_index];
+                let subtree = bytes::Bytes::from(matched_node.abi_encode());
 
                 let fees = consume_message_fee_internal(
-                    &self.context.data.supervisor.shared_data,
+                    &sd,
                     matched_node,
+                    &mut accumulator.message_fee_allocation_consumed[matched_index],
                     matched_params,
                     on,
                     ConsumeInternalArgs {
@@ -2058,6 +2081,7 @@ impl ContextVFS<'_> {
                     .messages_value_decremented,
                 emissions: Vec::new(),
                 message_fee_allocation: Vec::new(),
+                message_fee_allocation_consumed: Vec::new(),
                 // Nondet is an isolated execution scope: it must NOT see custom
                 // runners registered by the deterministic scope.
                 custom_runners: Default::default(),
@@ -2152,6 +2176,7 @@ impl ContextVFS<'_> {
             messages_value_decremented: primitive_types::U256::max_value(),
             emissions: Vec::new(),
             message_fee_allocation: Vec::new(),
+            message_fee_allocation_consumed: Vec::new(),
             // Sandbox is a deterministic sub-VM: inherit the registered runners.
             custom_runners: self.context.data.accumulator.custom_runners.clone(),
         };

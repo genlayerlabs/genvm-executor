@@ -8,35 +8,35 @@ modules:
 
 log_level: info
 
-# NOTE: we on purpose set all to 0 in this legacy version
+# This legacy executor line intentionally charges every fee category at zero
 fees:
   expr_prelude: ""
   storage:
-    bucket_no: 0
+    buckets: execution_data_gas
     subtract_on_start_expr: |
       0
     delta_expr: |
       \a = 0
   message_receipt:
-    bucket_no: 0
+    buckets: execution_data_gas
     subtract_on_start_expr: |
       0
     delta_expr: |
       \a = 0
   nondet_output:
-    bucket_no: 0
+    buckets: execution_data_gas
     subtract_on_start_expr: |
       0
     delta_expr: |
       \a = 0
   message_fee:
-    bucket_no: 0
+    buckets: execution_data_gas
     subtract_on_start_expr: |
       0
     delta_expr: |
       \a = 0
   event:
-    bucket_no: 0
+    buckets: execution_data_gas
     subtract_on_start_expr: |
       0
     delta_expr: |
