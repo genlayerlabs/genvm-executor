@@ -12,8 +12,13 @@ local gasData = {
 	bootloaderOverhead: '0',
 	fixedProposeReceiptGas: '0',
 	fixedMessageRevealGas: '0',
+	overlaySplitBps: '1500',
+	receiptWrapperBytes: '1024',
 	genPerTimeUnit: '7',
-	minTimeUnitsPerPhase: '0',
+	minProposeTimeout: '1',
+	maxProposeTimeout: '340282366920938463463374607431768211455',
+	minCommitTimeout: '1',
+	maxCommitTimeout: '340282366920938463463374607431768211455',
 	messageBudgetFloor: '0',
 };
 

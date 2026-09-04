@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use genvm_common::internal_constants::top_limits;
+use genvm_common::internal_constants::{memory_limiter_consts, top_limits};
 use genvm_common::sync::DArc;
 use genvm_common::*;
 
@@ -33,6 +33,30 @@ fn default_entry_stage_data() -> calldata::Value {
 
 fn internal_trap(error: rt::errors::Error) -> generated::types::Error {
     generated::types::Error::trap(anyhow_to_wasmtime(error.into()))
+}
+
+fn reserve_permanent(
+    limiter: &rt::memlimiter::Limiter,
+    amount: u64,
+    allocation: &'static str,
+) -> Result<rt::memlimiter::PermanentAllocation, generated::types::Error> {
+    limiter.reserve_permanent(amount).ok_or_else(|| {
+        internal_trap(rt::errors::Error::wrap(
+            abi::consts::VmError::out_of().memory().val(),
+            anyhow::anyhow!("retaining {amount} bytes for {allocation}"),
+        ))
+    })
+}
+
+fn emission_allocation_size(payload_sizes: &[u64]) -> u64 {
+    payload_sizes
+        .iter()
+        .copied()
+        .try_fold(
+            memory_limiter_consts::EXECUTION_EMISSION_BASE_SIZE.into(),
+            u64::checked_add,
+        )
+        .unwrap_or(u64::MAX)
 }
 
 /// Extension methods for ExtendedMessage specific to the executor
@@ -121,6 +145,7 @@ pub struct VMDataAccumulator {
     pub messages_value_decremented: primitive_types::U256,
     pub emissions: Vec<domain::ExecutionEmission>,
     pub message_fee_allocation: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
+    pub message_fee_allocation_consumed: Vec<primitive_types::U256>,
 }
 
 impl VMDataAccumulator {

@@ -10,6 +10,9 @@ pub mod memory_limiter_consts {
     pub const VM_SPAWN_COST: u32 = 134217728;
     pub const NEW_STORAGE_PAGE: u32 = 256;
     pub const STORAGE_PAGE_INHERITED: u32 = 128;
+    pub const EXECUTION_EMISSION_BASE_SIZE: u32 = 256;
+    pub const MESSAGE_FEE_ROTATION_ELEMENT_SIZE: u32 = 32;
+    pub const NONDET_OUTPUT_BASE_SIZE: u32 = 32;
 }
 
 pub mod top_limits {

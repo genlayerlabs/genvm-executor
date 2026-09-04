@@ -34,6 +34,8 @@ impl std::error::Error for ParseError {}
 pub enum EvalError {
     #[error("script VM error: {0}")]
     ScriptVMError(String),
+    #[error("script internal error: {0}")]
+    ScriptInternalError(String),
 
     #[error("undefined variable `{0}`")]
     UndefinedVariable(String),
@@ -169,9 +171,15 @@ pub enum Value {
 #[derive(Clone)]
 pub struct Thunk(Arc<Mutex<ThunkState>>);
 
+enum ThunkStateFailure {
+    Generic(String),
+    VMError(String),
+    InternalError(String),
+}
+
 enum ThunkState {
     Forced(Value),
-    Failed(String),
+    Failed(ThunkStateFailure),
     Deferred(Box<dyn FnOnce() -> Result<Value, EvalError> + Send>),
     InProgress,
 }
@@ -194,7 +202,13 @@ impl Thunk {
                     return Ok(v);
                 }
                 ThunkState::Failed(msg) => {
-                    let err = EvalError::AlreadyFailed(msg.clone());
+                    let err = match &msg {
+                        ThunkStateFailure::Generic(m) => EvalError::AlreadyFailed(m.clone()),
+                        ThunkStateFailure::InternalError(m) => {
+                            EvalError::ScriptInternalError(m.clone())
+                        }
+                        ThunkStateFailure::VMError(m) => EvalError::ScriptVMError(m.clone()),
+                    };
                     *state = ThunkState::Failed(msg);
                     return Err(err);
                 }
@@ -213,7 +227,13 @@ impl Thunk {
         // A failed computation is not retried either: later forces report that failure
         *state = match &result {
             Ok(v) => ThunkState::Forced(v.clone()),
-            Err(e) => ThunkState::Failed(e.to_string()),
+            Err(EvalError::ScriptVMError(msg)) => {
+                ThunkState::Failed(ThunkStateFailure::VMError(msg.clone()))
+            }
+            Err(EvalError::ScriptInternalError(msg)) => {
+                ThunkState::Failed(ThunkStateFailure::InternalError(msg.clone()))
+            }
+            Err(e) => ThunkState::Failed(ThunkStateFailure::Generic(e.to_string())),
         };
 
         result
