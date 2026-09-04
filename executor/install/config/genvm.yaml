@@ -119,6 +119,12 @@ fees:
       #    up on the time-unit pool only; integer division matches Solidity
       let timeUnitPool =
         if multiplier > 0 then multiplier * consensusTerm else consensusTerm in
+      # the overlay is a share of the gross pool, so bps must stay below 100%;
+      # at or above it the gross-up denominator is zero or negative, which would
+      # silently underprice the message instead of failing
+      if node.overlaySplitBps >= 10000
+      then internalError "node.overlaySplitBps must be below 10000"
+      else
       let overlaySplit =
         idiv (timeUnitPool * node.overlaySplitBps) (10000 - node.overlaySplitBps) in
       # 7. minimum primary fees
@@ -201,6 +207,10 @@ fees:
       0
     delta_expr: |
       \a =
+      # `a.matchedFeeParams` is shaped by the branch: internal params here,
+      # `{gasLimit, maxGasPrice}` on the external one. The bindings below read
+      # internal-only keys and stay correct because `let` is call-by-need --
+      # the external branch never forces them. Do not hoist them past the `if`.
       # Both-zero is the chain's explicit phase-timeout opt-out. Otherwise each
       # allocation must fit its phase's current Idleness bounds or child creation
       # reverts PhaseTimeoutOutOfBounds.

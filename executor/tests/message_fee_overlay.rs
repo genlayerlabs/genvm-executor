@@ -74,3 +74,22 @@ fn missing_overlay_split_is_not_treated_as_zero() {
         "unexpected error: {message}"
     );
 }
+
+#[test]
+fn overlay_split_at_or_above_full_share_is_rejected() {
+    for bps in ["10000", "12000"] {
+        let mut gas_data = gas_data_without_overlay();
+        gas_data.insert("overlaySplitBps".to_owned(), bps.to_owned());
+        let fees = DataLimit::new(bucket_totals(), default_fees(), gas_data).unwrap();
+
+        let error = fees
+            .calculate_message_fee_internal(&fee_params())
+            .unwrap_err();
+        let message = error.to_string();
+
+        assert!(
+            message.contains("overlaySplitBps must be below 10000"),
+            "unexpected error for {bps}: {message}"
+        );
+    }
+}
