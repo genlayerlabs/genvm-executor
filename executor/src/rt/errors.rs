@@ -107,7 +107,7 @@ impl UnwrapDynError {
 /// independent of the wasm store and can be done even after it is consumed.
 pub fn extract_backtrace(err: &UnwrapDynError) -> Option<Backtrace> {
     let Some(bt) = err.downcast_ref::<wasmtime::WasmBacktrace>() else {
-        log_warn!("no backtrace attached");
+        log_debug!("no backtrace attached");
         return None;
     };
 

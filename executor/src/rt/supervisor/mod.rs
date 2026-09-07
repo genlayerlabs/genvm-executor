@@ -111,7 +111,6 @@ pub fn create_engines(
         .wasm_features(WasmFeatures::SIGN_EXTENSION, true)
         .wasm_features(WasmFeatures::MUTABLE_GLOBAL, true)
         .wasm_features(WasmFeatures::MULTI_VALUE, true)
-        .wasm_features(WasmFeatures::SATURATING_FLOAT_TO_INT, false)
         //.wasm_features(WasmFeatures::REFERENCE_TYPES, false)
         .wasm_features(WasmFeatures::SATURATING_FLOAT_TO_INT, true);
 
