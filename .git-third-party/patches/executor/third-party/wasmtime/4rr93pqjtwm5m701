@@ -11,17 +11,15 @@ f32x4/f64x2 splat, extract_lane and replace_lane are bit-exact copies
 (no rounding or NaN semantics), matching the existing exception for
 loads/bitcasts; genvm-floats-to-soft intentionally leaves them in
 place, so trapping on them broke real numpy code paths.
-
-Claude-Session: https://claude.ai/code/session_013QtkVNJFxWsNwCLhTp5idV
 ---
  crates/cranelift/src/translate/code_translator.rs | 7 ++++---
  1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 9dde783c..927df0f8 100644
+index 5c33b47..0a02c4d 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -1750,7 +1750,8 @@ pub fn translate_operator(
+@@ -1804,7 +1804,8 @@ pub fn translate_operator(
          }
          Operator::F32x4Splat
          | Operator::F64x2Splat => {
@@ -31,7 +29,7 @@ index 9dde783c..927df0f8 100644
              let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
              environ.stacks.push1(splatted)
          }
-@@ -1839,7 +1840,7 @@ pub fn translate_operator(
+@@ -1893,7 +1894,7 @@ pub fn translate_operator(
          }
          Operator::F32x4ExtractLane { lane }
          | Operator::F64x2ExtractLane { lane } => {
@@ -40,7 +38,7 @@ index 9dde783c..927df0f8 100644
              let vector = pop1_with_bitcast(environ, type_of(op), builder);
              environ
                  .stacks
-@@ -1864,7 +1865,7 @@ pub fn translate_operator(
+@@ -1918,7 +1919,7 @@ pub fn translate_operator(
          }
          Operator::F32x4ReplaceLane { lane }
          | Operator::F64x2ReplaceLane { lane } => {

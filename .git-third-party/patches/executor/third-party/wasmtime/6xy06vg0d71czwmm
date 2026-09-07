@@ -1,0 +1,1391 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: kp2pml30 <kp2pml30@gmail.com>
+Date: Tue, 7 Jul 2026 14:03:52 +0900
+Subject: [PATCH] feat(genvm): configure wasm stack limits
+
+---
+ crates/cranelift/src/alias_region.rs          |  86 +++++
+ crates/cranelift/src/compiler.rs              |  31 --
+ crates/cranelift/src/func_environ.rs          | 116 +++++--
+ .../src/translate/code_translator.rs          | 324 ++++++++++++------
+ .../src/translate/func_translator.rs          |  13 +-
+ crates/cranelift/src/translate/stack.rs       |  34 +-
+ crates/wasmtime/src/config.rs                 |  15 +
+ crates/wasmtime/src/engine/serialization.rs   |   6 +-
+ crates/wasmtime/src/runtime/func.rs           |  13 +-
+ crates/wasmtime/src/runtime/store.rs          |   5 +-
+ crates/wasmtime/src/runtime/vm/vmcontext.rs   |   8 +
+ crates/wiggle/generate/src/wasmtime.rs        |  11 +-
+ 12 files changed, 479 insertions(+), 183 deletions(-)
+
+diff --git a/crates/cranelift/src/alias_region.rs b/crates/cranelift/src/alias_region.rs
+index 873f34b..b63e651 100644
+--- a/crates/cranelift/src/alias_region.rs
++++ b/crates/cranelift/src/alias_region.rs
+@@ -1440,6 +1440,92 @@ where
+         )
+     }
+ 
++    /// Load the remaining semantic Wasm call depth.
++    pub fn vmstore_context_call_stack_limit_reverse(
++        &mut self,
++        cursor: &mut FuncCursor<'_>,
++        vmstore_ctx: ir::Value,
++    ) -> ir::Value {
++        let offset = self
++            .offsets
++            .get_ptr_size()
++            .vm_store_context()
++            .call_stack_limit_reverse()
++            .into();
++        self.vmstore_context_load(
++            cursor,
++            ir::types::I32,
++            ir::MemFlagsData::trusted(),
++            vmstore_ctx,
++            offset,
++        )
++    }
++
++    /// Store the remaining semantic Wasm call depth.
++    pub fn store_vmstore_context_call_stack_limit_reverse(
++        &mut self,
++        cursor: &mut FuncCursor<'_>,
++        vmstore_ctx: ir::Value,
++        limit: ir::Value,
++    ) {
++        let offset = self
++            .offsets
++            .get_ptr_size()
++            .vm_store_context()
++            .call_stack_limit_reverse()
++            .into();
++        self.vmstore_context_store(
++            cursor,
++            ir::MemFlagsData::trusted(),
++            vmstore_ctx,
++            offset,
++            limit,
++        )
++    }
++
++    /// Load the remaining semantic Wasm value slots.
++    pub fn vmstore_context_value_stack_limit_reverse(
++        &mut self,
++        cursor: &mut FuncCursor<'_>,
++        vmstore_ctx: ir::Value,
++    ) -> ir::Value {
++        let offset = self
++            .offsets
++            .get_ptr_size()
++            .vm_store_context()
++            .value_stack_limit_reverse()
++            .into();
++        self.vmstore_context_load(
++            cursor,
++            ir::types::I32,
++            ir::MemFlagsData::trusted(),
++            vmstore_ctx,
++            offset,
++        )
++    }
++
++    /// Store the remaining semantic Wasm value slots.
++    pub fn store_vmstore_context_value_stack_limit_reverse(
++        &mut self,
++        cursor: &mut FuncCursor<'_>,
++        vmstore_ctx: ir::Value,
++        limit: ir::Value,
++    ) {
++        let offset = self
++            .offsets
++            .get_ptr_size()
++            .vm_store_context()
++            .value_stack_limit_reverse()
++            .into();
++        self.vmstore_context_store(
++            cursor,
++            ir::MemFlagsData::trusted(),
++            vmstore_ctx,
++            offset,
++            limit,
++        )
++    }
++
+     /// Load the `VMStoreContext::epoch_deadline` field.
+     pub fn vmstore_context_epoch_deadline(
+         &mut self,
+diff --git a/crates/cranelift/src/compiler.rs b/crates/cranelift/src/compiler.rs
+index afa5ab6..5f3fdee 100644
+--- a/crates/cranelift/src/compiler.rs
++++ b/crates/cranelift/src/compiler.rs
+@@ -561,37 +561,6 @@ impl wasmtime_environ::Compiler for Compiler {
+             } else {
+                 func_env.stack_limit_at_function_entry = Some(stack_limit);
+             }
+-
+-            let store_ctx = VmctxLoadChain::new([store_ctx].into()).emit_global(&mut context.func);
+-            func_env.call_stack_depth_reverse = Some(context.func.create_global_value(
+-                ir::GlobalValueData::IAddImm {
+-                    base: store_ctx,
+-                    offset: i64::from(
+-                        func_env
+-                            .offsets
+-                            .ptr
+-                            .vm_store_context()
+-                            .call_stack_limit_reverse(),
+-                    )
+-                    .into(),
+-                    global_type: isa.pointer_type(),
+-                },
+-            ));
+-
+-            func_env.value_stack_depth_reverse = Some(context.func.create_global_value(
+-                ir::GlobalValueData::IAddImm {
+-                    base: store_ctx,
+-                    offset: i64::from(
+-                        func_env
+-                            .offsets
+-                            .ptr
+-                            .vm_store_context()
+-                            .value_stack_limit_reverse(),
+-                    )
+-                    .into(),
+-                    global_type: isa.pointer_type(),
+-                },
+-            ));
+         }
+         let mut validator =
+             validator.into_validator(mem::take(&mut compiler.cx.validator_allocations));
+diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
+index 7dea98f..ee471b7 100644
+--- a/crates/cranelift/src/func_environ.rs
++++ b/crates/cranelift/src/func_environ.rs
+@@ -52,6 +52,14 @@ pub(crate) enum Extension {
+     Zero,
+ }
+ 
++#[derive(Copy, Clone)]
++struct SemanticStackLimits {
++    caller_call_limit: ir::Value,
++    caller_value_limit: ir::Value,
++    current_call_limit: ir::Value,
++    current_value_limit: ir::Value,
++}
++
+ /// A struct with an `Option<ir::FuncRef>` member for every builtin
+ /// function, to de-duplicate constructing/getting its function.
+ pub(crate) struct BuiltinFunctions {
+@@ -211,8 +219,7 @@ pub struct FuncEnvironment<'module_environment> {
+     /// into the host to trap when signal handlers are disabled.
+     pub(crate) stack_limit_at_function_entry: Option<VmctxLoadChain>,
+ 
+-    pub call_stack_depth_reverse: Option<ir::GlobalValue>,
+-    pub value_stack_depth_reverse: Option<ir::GlobalValue>,
++    semantic_stack_limits: Option<SemanticStackLimits>,
+ 
+     /// Used by the stack switching feature. If set, we have a allocated a
+     /// slot on this function's stack to be used for the
+@@ -301,9 +308,7 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
+             translation,
+ 
+             stack_limit_at_function_entry: None,
+-
+-            call_stack_depth_reverse: None,
+-            value_stack_depth_reverse: None,
++            semantic_stack_limits: None,
+ 
+             stack_switching_handler_list_buffer: None,
+             stack_switching_values_buffer: None,
+@@ -5144,25 +5149,42 @@ impl FuncEnvironment<'_> {
+ 
+         self.update_state_slot_vmctx(builder);
+ 
+-        if let Some(gv) = self.call_stack_depth_reverse {
+-            let limit_addr = builder.ins().global_value(self.pointer_type(), gv);
++        if let Some(value_slots) = builder.value_stack_size {
++            let vmstore_ctx = self.get_vmstore_context_ptr(builder);
++            let old_call_limit = self
++                .alias_regions
++                .vmstore_context_call_stack_limit_reverse(&mut builder.cursor(), vmstore_ctx);
+             let one = builder.ins().iconst(I32, 1);
+-            let old_val = builder.ins().load(ir::types::I32, ir::MemFlags::trusted(), limit_addr, 0);
+-            let (new_val, overflowed) = builder.ins().usub_overflow(old_val, one);
+-            self.trapnz(builder, overflowed, ir::TrapCode::STACK_OVERFLOW);
+-            builder.ins().store(ir::MemFlags::trusted(), new_val, limit_addr, 0);
+-        }
++            let (new_call_limit, call_limit_exhausted) =
++                builder.ins().usub_overflow(old_call_limit, one);
++            self.trapnz(builder, call_limit_exhausted, ir::TrapCode::STACK_OVERFLOW);
++            self.alias_regions
++                .store_vmstore_context_call_stack_limit_reverse(
++                    &mut builder.cursor(),
++                    vmstore_ctx,
++                    new_call_limit,
++                );
+ 
+-        if let Some(gv) = self.value_stack_depth_reverse {
+-            if let Some(delta_val) = builder.value_stack_size {
+-                let limit_addr = builder.ins().global_value(self.pointer_type(), gv);
+-                let old_val = builder.ins().load(ir::types::I32, ir::MemFlags::trusted(), limit_addr, 0);
+-                let (new_val, overflowed) = builder.ins().usub_overflow(old_val, delta_val);
+-                self.trapnz(builder, overflowed, ir::TrapCode::STACK_OVERFLOW);
+-                builder.ins().store(ir::MemFlags::trusted(), new_val, limit_addr, 0);
+-            }
+-        }
++            let old_value_limit = self
++                .alias_regions
++                .vmstore_context_value_stack_limit_reverse(&mut builder.cursor(), vmstore_ctx);
++            let (new_value_limit, value_limit_exhausted) =
++                builder.ins().usub_overflow(old_value_limit, value_slots);
++            self.trapnz(builder, value_limit_exhausted, ir::TrapCode::STACK_OVERFLOW);
++            self.alias_regions
++                .store_vmstore_context_value_stack_limit_reverse(
++                    &mut builder.cursor(),
++                    vmstore_ctx,
++                    new_value_limit,
++                );
+ 
++            self.semantic_stack_limits = Some(SemanticStackLimits {
++                caller_call_limit: old_call_limit,
++                caller_value_limit: old_value_limit,
++                current_call_limit: new_call_limit,
++                current_value_limit: new_value_limit,
++            });
++        }
+ 
+         // Additionally we initialize `fuel_var` if it will get used.
+         if self.tunables.consume_fuel {
+@@ -5225,22 +5247,44 @@ impl FuncEnvironment<'_> {
+     }
+ 
+     pub fn before_return(&mut self, builder: &mut FunctionBuilder) {
+-        if let Some(gv) = self.call_stack_depth_reverse {
+-            let limit_addr = builder.ins().global_value(self.pointer_type(), gv);
+-            let one = builder.ins().iconst(I32, 1);
+-            let old_val = builder.ins().load(ir::types::I32, ir::MemFlags::trusted(), limit_addr, 0);
+-            let (new_val, _) = builder.ins().uadd_overflow(old_val, one);
+-            builder.ins().store(ir::MemFlags::trusted(), new_val, limit_addr, 0);
+-        }
++        let Some(limits) = self.semantic_stack_limits else {
++            return;
++        };
++        let vmstore_ctx = self.get_vmstore_context_ptr(builder);
++        self.alias_regions
++            .store_vmstore_context_call_stack_limit_reverse(
++                &mut builder.cursor(),
++                vmstore_ctx,
++                limits.caller_call_limit,
++            );
++        self.alias_regions
++            .store_vmstore_context_value_stack_limit_reverse(
++                &mut builder.cursor(),
++                vmstore_ctx,
++                limits.caller_value_limit,
++            );
++    }
+ 
+-        if let Some(gv) = self.value_stack_depth_reverse {
+-            if let Some(delta_val) = builder.value_stack_size {
+-                let limit_addr = builder.ins().global_value(self.pointer_type(), gv);
+-                let old_val = builder.ins().load(ir::types::I32, ir::MemFlags::trusted(), limit_addr, 0);
+-                let (new_val, _) = builder.ins().uadd_overflow(old_val, delta_val);
+-                builder.ins().store(ir::MemFlags::trusted(), new_val, limit_addr, 0);
+-            }
+-        }
++    pub(crate) fn restore_semantic_stack_limits_after_exception(
++        &mut self,
++        builder: &mut FunctionBuilder,
++    ) {
++        let Some(limits) = self.semantic_stack_limits else {
++            return;
++        };
++        let vmstore_ctx = self.get_vmstore_context_ptr(builder);
++        self.alias_regions
++            .store_vmstore_context_call_stack_limit_reverse(
++                &mut builder.cursor(),
++                vmstore_ctx,
++                limits.current_call_limit,
++            );
++        self.alias_regions
++            .store_vmstore_context_value_stack_limit_reverse(
++                &mut builder.cursor(),
++                vmstore_ctx,
++                limits.current_value_limit,
++            );
+     }
+ 
+     pub fn translate_cont_bind(
+diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
+index 772f112..a7bf09c 100644
+--- a/crates/cranelift/src/translate/code_translator.rs
++++ b/crates/cranelift/src/translate/code_translator.rs
+@@ -368,22 +368,17 @@ pub fn translate_operator(
+         Operator::Else => {
+             let i = environ.stacks.control_stack.len() - 1;
+             let reachable = environ.is_reachable();
++            environ.stacks.finish_if_consequent(i, reachable);
+             match environ.stacks.control_stack[i] {
+                 ControlStackFrame::If {
+                     ref else_data,
+                     head_is_reachable,
+-                    ref mut consequent_ends_reachable,
+                     num_return_values,
+                     blocktype,
+                     destination,
+                     else_is_cold,
+                     ..
+                 } => {
+-                    // We finished the consequent, so record its final
+-                    // reachability state.
+-                    debug_assert!(consequent_ends_reachable.is_none());
+-                    *consequent_ends_reachable = Some(reachable);
+-
+                     if head_is_reachable {
+                         // We have a branch from the head of the `if` to the `else`.
+                         environ.stacks.reachable = true;
+@@ -453,7 +448,7 @@ pub fn translate_operator(
+             }
+         }
+         Operator::End => {
+-            let frame = environ.stacks.control_stack.pop().unwrap();
++            let frame = environ.stacks.pop_control();
+             let next_block = frame.following_code();
+             let return_count = frame.num_return_values();
+ 
+@@ -1071,145 +1066,195 @@ pub fn translate_operator(
+             environ.stacks.push1(builder.ins().ireduce(I32, val));
+         }
+         Operator::F32Sqrt | Operator::F64Sqrt => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().sqrt(arg));
+         }
+         Operator::F32Ceil => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.ceil_f32(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64Ceil => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.ceil_f64(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F32Floor => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.floor_f32(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64Floor => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.floor_f64(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F32Trunc => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.trunc_f32(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64Trunc => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.trunc_f64(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F32Nearest => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.nearest_f32(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64Nearest => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             let result = environ.nearest_f64(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F32Abs | Operator::F64Abs => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fabs(val));
+         }
+         Operator::F32Neg | Operator::F64Neg => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fneg(arg));
+         }
+         Operator::F64ConvertI64U | Operator::F64ConvertI32U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fcvt_from_uint(F64, val));
+         }
+         Operator::F64ConvertI64S | Operator::F64ConvertI32S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fcvt_from_sint(F64, val));
+         }
+         Operator::F32ConvertI64S | Operator::F32ConvertI32S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fcvt_from_sint(F32, val));
+         }
+         Operator::F32ConvertI64U | Operator::F32ConvertI32U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fcvt_from_uint(F32, val));
+         }
+         Operator::F64PromoteF32 => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fpromote(F64, val));
+         }
+         Operator::F32DemoteF64 => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ.stacks.push1(builder.ins().fdemote(F32, val));
+         }
+         Operator::I64TruncF64S | Operator::I64TruncF32S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             let result = environ.translate_fcvt_to_sint(builder, I64, val);
+             environ.stacks.push1(result);
+         }
+         Operator::I32TruncF64S | Operator::I32TruncF32S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             let result = environ.translate_fcvt_to_sint(builder, I32, val);
+             environ.stacks.push1(result);
+         }
+         Operator::I64TruncF64U | Operator::I64TruncF32U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             let result = environ.translate_fcvt_to_uint(builder, I64, val);
+             environ.stacks.push1(result);
+         }
+         Operator::I32TruncF64U | Operator::I32TruncF32U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             let result = environ.translate_fcvt_to_uint(builder, I32, val);
+             environ.stacks.push1(result);
+         }
+         Operator::I64TruncSatF64S | Operator::I64TruncSatF32S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ
+                 .stacks
+                 .push1(builder.ins().fcvt_to_sint_sat(I64, val));
+         }
+         Operator::I32TruncSatF64S | Operator::I32TruncSatF32S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ
+                 .stacks
+                 .push1(builder.ins().fcvt_to_sint_sat(I32, val));
+         }
+         Operator::I64TruncSatF64U | Operator::I64TruncSatF32U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ
+                 .stacks
+                 .push1(builder.ins().fcvt_to_uint_sat(I64, val));
+         }
+         Operator::I32TruncSatF64U | Operator::I32TruncSatF32U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let val = environ.stacks.pop1();
+             environ
+                 .stacks
+@@ -1307,7 +1352,9 @@ pub fn translate_operator(
+             environ.stacks.push1(builder.ins().rotr(arg1, arg2));
+         }
+         Operator::F32Add | Operator::F64Add => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (arg1, arg2) = environ.stacks.pop2();
+             environ.stacks.push1(builder.ins().fadd(arg1, arg2));
+         }
+@@ -1316,7 +1363,9 @@ pub fn translate_operator(
+             environ.stacks.push1(builder.ins().isub(arg1, arg2));
+         }
+         Operator::F32Sub | Operator::F64Sub => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (arg1, arg2) = environ.stacks.pop2();
+             environ.stacks.push1(builder.ins().fsub(arg1, arg2));
+         }
+@@ -1325,12 +1374,16 @@ pub fn translate_operator(
+             environ.stacks.push1(builder.ins().imul(arg1, arg2));
+         }
+         Operator::F32Mul | Operator::F64Mul => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (arg1, arg2) = environ.stacks.pop2();
+             environ.stacks.push1(builder.ins().fmul(arg1, arg2));
+         }
+         Operator::F32Div | Operator::F64Div => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (arg1, arg2) = environ.stacks.pop2();
+             environ.stacks.push1(builder.ins().fdiv(arg1, arg2));
+         }
+@@ -1355,17 +1408,23 @@ pub fn translate_operator(
+             environ.stacks.push1(result);
+         }
+         Operator::F32Min | Operator::F64Min => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (arg1, arg2) = environ.stacks.pop2();
+             environ.stacks.push1(builder.ins().fmin(arg1, arg2));
+         }
+         Operator::F32Max | Operator::F64Max => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (arg1, arg2) = environ.stacks.pop2();
+             environ.stacks.push1(builder.ins().fmax(arg1, arg2));
+         }
+         Operator::F32Copysign | Operator::F64Copysign => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (arg1, arg2) = environ.stacks.pop2();
+             environ.stacks.push1(builder.ins().fcopysign(arg1, arg2));
+         }
+@@ -1797,13 +1856,11 @@ pub fn translate_operator(
+             let splatted = builder.ins().splat(type_of(op), reduced);
+             environ.stacks.push1(splatted)
+         }
+-        Operator::I32x4Splat
+-        | Operator::I64x2Splat => {
++        Operator::I32x4Splat | Operator::I64x2Splat => {
+             let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
+             environ.stacks.push1(splatted)
+         }
+-        Operator::F32x4Splat
+-        | Operator::F64x2Splat => {
++        Operator::F32x4Splat | Operator::F64x2Splat => {
+             // Lane duplication is a bit-exact copy (no rounding/NaN semantics),
+             // so it stays allowed in deterministic mode.
+             let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
+@@ -1885,15 +1942,13 @@ pub fn translate_operator(
+             // uextend could be elided; for now, uextend is needed for Cranelift's type checks to
+             // work.
+         }
+-        Operator::I32x4ExtractLane { lane }
+-        | Operator::I64x2ExtractLane { lane } => {
++        Operator::I32x4ExtractLane { lane } | Operator::I64x2ExtractLane { lane } => {
+             let vector = pop1_with_bitcast(environ, type_of(op), builder);
+             environ
+                 .stacks
+                 .push1(builder.ins().extractlane(vector, *lane))
+         }
+-        Operator::F32x4ExtractLane { lane }
+-        | Operator::F64x2ExtractLane { lane } => {
++        Operator::F32x4ExtractLane { lane } | Operator::F64x2ExtractLane { lane } => {
+             // Bit-exact lane copy; allowed in deterministic mode.
+             let vector = pop1_with_bitcast(environ, type_of(op), builder);
+             environ
+@@ -1909,16 +1964,14 @@ pub fn translate_operator(
+                 .stacks
+                 .push1(builder.ins().insertlane(vector, reduced, *lane))
+         }
+-        Operator::I32x4ReplaceLane { lane }
+-        | Operator::I64x2ReplaceLane { lane } => {
++        Operator::I32x4ReplaceLane { lane } | Operator::I64x2ReplaceLane { lane } => {
+             let (vector, replacement) = environ.stacks.pop2();
+             let vector = optionally_bitcast_vector(vector, type_of(op), builder);
+             environ
+                 .stacks
+                 .push1(builder.ins().insertlane(vector, replacement, *lane))
+         }
+-        Operator::F32x4ReplaceLane { lane }
+-        | Operator::F64x2ReplaceLane { lane } => {
++        Operator::F32x4ReplaceLane { lane } | Operator::F64x2ReplaceLane { lane } => {
+             // Bit-exact lane copy; allowed in deterministic mode.
+             let (vector, replacement) = environ.stacks.pop2();
+             let vector = optionally_bitcast_vector(vector, type_of(op), builder);
+@@ -2127,37 +2180,51 @@ pub fn translate_operator(
+             translate_vector_fcmp(FloatCC::GreaterThanOrEqual, type_of(op), builder, environ)
+         }
+         Operator::F32x4Add | Operator::F64x2Add => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b) = pop2_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fadd(a, b))
+         }
+         Operator::F32x4Sub | Operator::F64x2Sub => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b) = pop2_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fsub(a, b))
+         }
+         Operator::F32x4Mul | Operator::F64x2Mul => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b) = pop2_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fmul(a, b))
+         }
+         Operator::F32x4Div | Operator::F64x2Div => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b) = pop2_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fdiv(a, b))
+         }
+         Operator::F32x4Max | Operator::F64x2Max => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b) = pop2_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fmax(a, b))
+         }
+         Operator::F32x4Min | Operator::F64x2Min => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b) = pop2_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fmin(a, b))
+         }
+         Operator::F32x4PMax | Operator::F64x2PMax => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             // Note the careful ordering here with respect to `fcmp` and
+             // `bitselect`. This matches the spec definition of:
+             //
+@@ -2171,7 +2238,9 @@ pub fn translate_operator(
+             environ.stacks.push1(builder.ins().bitselect(cmp, b, a))
+         }
+         Operator::F32x4PMin | Operator::F64x2PMin => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             // Note the careful ordering here which is similar to `pmax` above:
+             //
+             //  fpmin(z1, z2) =
+@@ -2184,32 +2253,44 @@ pub fn translate_operator(
+             environ.stacks.push1(builder.ins().bitselect(cmp, b, a))
+         }
+         Operator::F32x4Sqrt | Operator::F64x2Sqrt => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().sqrt(a))
+         }
+         Operator::F32x4Neg | Operator::F64x2Neg => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fneg(a))
+         }
+         Operator::F32x4Abs | Operator::F64x2Abs => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, type_of(op), builder);
+             environ.stacks.push1(builder.ins().fabs(a))
+         }
+         Operator::F32x4ConvertI32x4S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, I32X4, builder);
+             environ.stacks.push1(builder.ins().fcvt_from_sint(F32X4, a))
+         }
+         Operator::F32x4ConvertI32x4U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, I32X4, builder);
+             environ.stacks.push1(builder.ins().fcvt_from_uint(F32X4, a))
+         }
+         Operator::F64x2ConvertLowI32x4S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, I32X4, builder);
+             let widened_a = builder.ins().swiden_low(a);
+             environ
+@@ -2217,7 +2298,9 @@ pub fn translate_operator(
+                 .push1(builder.ins().fcvt_from_sint(F64X2, widened_a));
+         }
+         Operator::F64x2ConvertLowI32x4U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, I32X4, builder);
+             let widened_a = builder.ins().uwiden_low(a);
+             environ
+@@ -2225,24 +2308,32 @@ pub fn translate_operator(
+                 .push1(builder.ins().fcvt_from_uint(F64X2, widened_a));
+         }
+         Operator::F64x2PromoteLowF32x4 => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F32X4, builder);
+             environ.stacks.push1(builder.ins().fvpromote_low(a));
+         }
+         Operator::F32x4DemoteF64x2Zero => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F64X2, builder);
+             environ.stacks.push1(builder.ins().fvdemote(a));
+         }
+         Operator::I32x4TruncSatF32x4S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F32X4, builder);
+             environ
+                 .stacks
+                 .push1(builder.ins().fcvt_to_sint_sat(I32X4, a))
+         }
+         Operator::I32x4TruncSatF64x2SZero => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F64X2, builder);
+             let converted_a = builder.ins().fcvt_to_sint_sat(I64X2, a);
+             let handle = builder.func.dfg.constants.insert(vec![0u8; 16].into());
+@@ -2265,14 +2356,18 @@ pub fn translate_operator(
+         // perhaps for other backends too) should be added and the codegen for
+         // the relaxed instruction should conditionally be different.
+         Operator::I32x4RelaxedTruncF32x4U | Operator::I32x4TruncSatF32x4U => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F32X4, builder);
+             environ
+                 .stacks
+                 .push1(builder.ins().fcvt_to_uint_sat(I32X4, a))
+         }
+         Operator::I32x4RelaxedTruncF64x2UZero | Operator::I32x4TruncSatF64x2UZero => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F64X2, builder);
+             let zero_constant = builder.func.dfg.constants.insert(vec![0u8; 16].into());
+             let result = if environ.is_x86() && !environ.isa().has_round() {
+@@ -2393,49 +2488,65 @@ pub fn translate_operator(
+                 .push1(builder.ins().iadd_pairwise(widen_low, widen_high));
+         }
+         Operator::F32x4Ceil => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F32X4, builder);
+             let result = environ.ceil_f32x4(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64x2Ceil => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F64X2, builder);
+             let result = environ.ceil_f64x2(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F32x4Floor => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F32X4, builder);
+             let result = environ.floor_f32x4(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64x2Floor => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F64X2, builder);
+             let result = environ.floor_f64x2(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F32x4Trunc => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F32X4, builder);
+             let result = environ.trunc_f32x4(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64x2Trunc => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F64X2, builder);
+             let result = environ.trunc_f64x2(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F32x4Nearest => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F32X4, builder);
+             let result = environ.nearest_f32x4(builder, arg);
+             environ.stacks.push1(result);
+         }
+         Operator::F64x2Nearest => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let arg = pop1_with_bitcast(environ, F64X2, builder);
+             let result = environ.nearest_f64x2(builder, arg);
+             environ.stacks.push1(result);
+@@ -2538,7 +2649,9 @@ pub fn translate_operator(
+         }
+ 
+         Operator::F32x4RelaxedMax | Operator::F64x2RelaxedMax => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let ty = type_of(op);
+             let (a, b) = pop2_with_bitcast(environ, ty, builder);
+             environ.stacks.push1(
+@@ -2558,7 +2671,9 @@ pub fn translate_operator(
+         }
+ 
+         Operator::F32x4RelaxedMin | Operator::F64x2RelaxedMin => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let ty = type_of(op);
+             let (a, b) = pop2_with_bitcast(environ, ty, builder);
+             environ.stacks.push1(
+@@ -2584,26 +2699,34 @@ pub fn translate_operator(
+         }
+ 
+         Operator::F32x4RelaxedMadd => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b, c) = pop3_with_bitcast(environ, type_of(op), builder);
+             let result = environ.fma_f32x4(builder, a, b, c);
+             environ.stacks.push1(result);
+         }
+         Operator::F64x2RelaxedMadd => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b, c) = pop3_with_bitcast(environ, type_of(op), builder);
+             let result = environ.fma_f64x2(builder, a, b, c);
+             environ.stacks.push1(result);
+         }
+         Operator::F32x4RelaxedNmadd => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b, c) = pop3_with_bitcast(environ, type_of(op), builder);
+             let a = builder.ins().fneg(a);
+             let result = environ.fma_f32x4(builder, a, b, c);
+             environ.stacks.push1(result);
+         }
+         Operator::F64x2RelaxedNmadd => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let (a, b, c) = pop3_with_bitcast(environ, type_of(op), builder);
+             let a = builder.ins().fneg(a);
+             let result = environ.fma_f64x2(builder, a, b, c);
+@@ -2633,7 +2756,9 @@ pub fn translate_operator(
+         }
+ 
+         Operator::I32x4RelaxedTruncF32x4S => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F32X4, builder);
+             environ.stacks.push1(
+                 if environ.relaxed_simd_deterministic() || !environ.is_x86() {
+@@ -2646,7 +2771,9 @@ pub fn translate_operator(
+             )
+         }
+         Operator::I32x4RelaxedTruncF64x2SZero => {
+-            if float_op_unreachable_check(environ, builder) { return Ok(()) }
++            if float_op_unreachable_check(environ, builder) {
++                return Ok(());
++            }
+             let a = pop1_with_bitcast(environ, F64X2, builder);
+             let converted_a = if environ.relaxed_simd_deterministic() || !environ.is_x86() {
+                 // Deterministic semantics are to match the
+@@ -3558,16 +3685,13 @@ fn translate_unreachable_operator(
+         Operator::Else => {
+             let i = environ.stacks.control_stack.len() - 1;
+             let reachable = environ.is_reachable();
++            environ.stacks.finish_if_consequent(i, reachable);
+             match environ.stacks.control_stack[i] {
+                 ControlStackFrame::If {
+                     ref else_data,
+                     head_is_reachable,
+-                    ref mut consequent_ends_reachable,
+                     ..
+                 } => {
+-                    debug_assert!(consequent_ends_reachable.is_none());
+-                    *consequent_ends_reachable = Some(reachable);
+-
+                     if head_is_reachable {
+                         // We have a branch from the head of the `if` to the `else`.
+                         environ.stacks.reachable = true;
+@@ -3615,7 +3739,7 @@ fn translate_unreachable_operator(
+             }
+         }
+         Operator::End => {
+-            let frame = environ.stacks.control_stack.pop().unwrap();
++            let frame = environ.stacks.pop_control();
+ 
+             frame.restore_catch_handlers(&mut environ.stacks.handlers, builder);
+ 
+@@ -4168,7 +4292,9 @@ fn translate_vector_icmp(
+ }
+ 
+ fn translate_fcmp(cc: FloatCC, builder: &mut FunctionBuilder, env: &mut FuncEnvironment<'_>) {
+-    if float_op_unreachable_check(env, builder) { return }
++    if float_op_unreachable_check(env, builder) {
++        return;
++    }
+     let (arg0, arg1) = env.stacks.pop2();
+     let val = builder.ins().fcmp(cc, arg0, arg1);
+     env.stacks.push1(builder.ins().uextend(I32, val));
+@@ -4180,7 +4306,9 @@ fn translate_vector_fcmp(
+     builder: &mut FunctionBuilder,
+     env: &mut FuncEnvironment<'_>,
+ ) {
+-    if float_op_unreachable_check(env, builder) { return }
++    if float_op_unreachable_check(env, builder) {
++        return;
++    }
+     let (a, b) = env.stacks.pop2();
+     let bitcast_a = optionally_bitcast_vector(a, needed_type, builder);
+     let bitcast_b = optionally_bitcast_vector(b, needed_type, builder);
+@@ -4720,6 +4848,7 @@ fn create_catch_block(
+     let block = builder.create_block();
+     let exn_ref = builder.append_block_param(block, exn_payload_ty);
+     builder.switch_to_block(block);
++    environ.restore_semantic_stack_limits_after_exception(builder);
+     debug_assert!(exn_ref_ty.bits() <= exn_payload_ty.bits());
+     let exn_ref = if exn_ref_ty.bits() < exn_payload_ty.bits() {
+         builder.ins().ireduce(exn_ref_ty, exn_ref)
+@@ -4760,7 +4889,10 @@ fn create_catch_block(
+     Ok(block)
+ }
+ 
+-fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut FunctionBuilder) -> bool {
++fn float_op_unreachable_check(
++    environ: &mut FuncEnvironment<'_>,
++    builder: &mut FunctionBuilder,
++) -> bool {
+     if environ.are_floats_enabled() {
+         return false;
+     }
+diff --git a/crates/cranelift/src/translate/func_translator.rs b/crates/cranelift/src/translate/func_translator.rs
+index 3177a6b..1b448fe 100644
+--- a/crates/cranelift/src/translate/func_translator.rs
++++ b/crates/cranelift/src/translate/func_translator.rs
+@@ -121,18 +121,19 @@ impl FuncTranslator {
+ 
+         parse_function_body(validator, reader, &mut builder, environ)?;
+ 
+-        let total_slots = u64::from(total_locals) + environ.stacks.max_stack as u64;
+-        if total_slots > u64::from(u16::MAX) {
++        let total_slots =
++            num_params as u64 + u64::from(total_locals) + environ.stacks.max_stack as u64;
++        if total_slots > u64::from(u32::MAX) {
+             return Err(wasmtime_environ::WasmError::InvalidWebAssembly {
+                 message: "too many locals and operand stack values".to_owned(),
+                 offset: 0,
+             });
+         }
+         let placeholder = builder.func.dfg.value_def(value_stack_size).unwrap_inst();
+-        builder.func.dfg.replace(placeholder).iconst(
+-            cranelift_codegen::ir::types::I32,
+-            total_slots as i64,
+-        );
++        builder
++            .func
++            .replace(placeholder)
++            .iconst(cranelift_codegen::ir::types::I32, total_slots as i64);
+ 
+         builder.finalize(environ.target_config());
+         crate::alias_region::debug_assert_all_mem_insts_have_alias_regions(func);
+diff --git a/crates/cranelift/src/translate/stack.rs b/crates/cranelift/src/translate/stack.rs
+index 8772f54..8fd876f 100644
+--- a/crates/cranelift/src/translate/stack.rs
++++ b/crates/cranelift/src/translate/stack.rs
+@@ -261,6 +261,7 @@ pub struct FuncTranslationStacks {
+     /// point.
+     pub(crate) stack: Vec<Value>,
+     pub(crate) max_stack: usize,
++    hidden_if_params: usize,
+     /// "Shape" of stack at each index, if emitting debug instrumentation.
+     ///
+     /// When we pop `stack`, we automatically pop `stack_shape` as
+@@ -311,6 +312,7 @@ impl FuncTranslationStacks {
+         Self {
+             stack: Vec::new(),
+             max_stack: 0,
++            hidden_if_params: 0,
+             stack_shape: Vec::new(),
+             control_stack: Vec::new(),
+             block_param_vars: SecondaryMap::new(),
+@@ -321,7 +323,7 @@ impl FuncTranslationStacks {
+ 
+     ///
+     pub fn recalc_stack(&mut self) {
+-        self.max_stack = self.max_stack.max(self.stack.len());
++        self.max_stack = self.max_stack.max(self.stack.len() - self.hidden_if_params);
+     }
+ 
+     fn clear(&mut self) {
+@@ -329,8 +331,10 @@ impl FuncTranslationStacks {
+         debug_assert!(self.stack_shape.is_empty());
+         debug_assert!(self.control_stack.is_empty());
+         debug_assert!(self.handlers.is_empty());
++        debug_assert_eq!(self.hidden_if_params, 0);
+         self.block_param_vars.clear();
+         self.max_stack = 0;
++        self.hidden_if_params = 0;
+         self.reachable = true;
+     }
+ 
+@@ -560,6 +564,7 @@ impl FuncTranslationStacks {
+                 self.stack_shape.push(shape);
+             }
+         }
++        self.hidden_if_params += num_param_types;
+ 
+         self.control_stack.push(ControlStackFrame::If {
+             destination,
+@@ -575,6 +580,33 @@ impl FuncTranslationStacks {
+         });
+     }
+ 
++    pub(crate) fn finish_if_consequent(&mut self, index: usize, reachable: bool) {
++        let ControlStackFrame::If {
++            num_param_values,
++            consequent_ends_reachable,
++            ..
++        } = &mut self.control_stack[index]
++        else {
++            unreachable!()
++        };
++        debug_assert!(consequent_ends_reachable.is_none());
++        *consequent_ends_reachable = Some(reachable);
++        self.hidden_if_params -= *num_param_values;
++    }
++
++    pub(crate) fn pop_control(&mut self) -> ControlStackFrame {
++        let frame = self.control_stack.pop().unwrap();
++        if let ControlStackFrame::If {
++            num_param_values,
++            consequent_ends_reachable: None,
++            ..
++        } = &frame
++        {
++            self.hidden_if_params -= *num_param_values;
++        }
++        frame
++    }
++
+     pub(crate) fn assert_debug_stack_is_synced(&self) {
+         debug_assert!(self.stack_shape.is_empty() || self.stack_shape.len() == self.stack.len());
+     }
+diff --git a/crates/wasmtime/src/config.rs b/crates/wasmtime/src/config.rs
+index cc5640b..b3bd0cd 100644
+--- a/crates/wasmtime/src/config.rs
++++ b/crates/wasmtime/src/config.rs
+@@ -173,6 +173,8 @@ pub struct Config {
+     pub(crate) custom_code_memory: Option<Arc<dyn CustomCodeMemory>>,
+     pub(crate) allocation_strategy: InstanceAllocationStrategy,
+     pub(crate) max_wasm_stack: usize,
++    pub(crate) wasm_call_stack_limit: u32,
++    pub(crate) wasm_value_stack_limit: u32,
+     /// Explicitly enabled features via `Config::wasm_*` methods. This is a
+     /// signal that the embedder specifically wants something turned on
+     /// regardless of the defaults that Wasmtime might otherwise have enabled.
+@@ -293,6 +295,8 @@ impl Config {
+             // 1` forces this), or at least it passed when this change was
+             // committed.
+             max_wasm_stack: 512 * 1024,
++            wasm_call_stack_limit: 1024,
++            wasm_value_stack_limit: 65535,
+             wasm_backtrace_details_env_used: false,
+             wasm_backtrace_max_frames: Some(DEFAULT_WASM_BACKTRACE_MAX_FRAMES),
+             native_unwind_info: None,
+@@ -855,6 +859,17 @@ impl Config {
+         self
+     }
+ 
++    /// Configures semantic WebAssembly stack limits.
++    ///
++    /// `call_depth` is the maximum number of nested Wasm function calls and
++    /// `value_slots` is the maximum combined number of local and operand-stack
++    /// slots across active Wasm calls.
++    pub fn wasm_stack_limits(&mut self, call_depth: u32, value_slots: u32) -> &mut Self {
++        self.wasm_call_stack_limit = call_depth;
++        self.wasm_value_stack_limit = value_slots;
++        self
++    }
++
+     /// Configures the size of the stacks used for asynchronous execution.
+     ///
+     /// This setting configures the size of the stacks that are allocated for
+diff --git a/crates/wasmtime/src/engine/serialization.rs b/crates/wasmtime/src/engine/serialization.rs
+index bd8f42f..b90a75d 100644
+--- a/crates/wasmtime/src/engine/serialization.rs
++++ b/crates/wasmtime/src/engine/serialization.rs
+@@ -403,11 +403,7 @@ impl Metadata<'_> {
+             other.signals_based_traps,
+             "Signals-based traps",
+         )?;
+-        Self::check_bool(
+-            floats_enabled,
+-            other.floats_enabled,
+-            "Floats enabled",
+-        )?;
++        Self::check_bool(floats_enabled, other.floats_enabled, "Floats enabled")?;
+         Self::check_bool(
+             memory_init_cow,
+             other.memory_init_cow,
+diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
+index c657833..b129bed 100644
+--- a/crates/wasmtime/src/runtime/func.rs
++++ b/crates/wasmtime/src/runtime/func.rs
+@@ -1509,7 +1509,10 @@ impl<'a, T: 'static> StoreContextMut<'a, T> {
+                 duplicate += 1;
+             }
+ 
+-            for mem in inst.all_memories(store.0.store_opaque_mut()).collect::<Vec<_>>() {
++            for mem in inst
++                .all_memories(store.0.store_opaque_mut())
++                .collect::<Vec<_>>()
++            {
+                 let data = match &mem.1 {
+                     crate::runtime::vm::ExportMemory::Unshared(m) => m.data(&store),
+                     crate::runtime::vm::ExportMemory::Shared(_sm, _) => &[],
+@@ -1581,6 +1584,8 @@ pub(crate) struct EntryStoreContext {
+     pub last_wasm_entry_sp: usize,
+     pub last_wasm_entry_trap_handler: usize,
+     pub stack_chain: VMStackChain,
++    pub call_stack_limit_reverse: u32,
++    pub value_stack_limit_reverse: u32,
+ 
+     /// We need a pointer to the runtime limits, so we can update them from
+     /// `drop`/`exit_wasm`.
+@@ -1686,6 +1691,8 @@ impl EntryStoreContext {
+                     .last_wasm_entry_trap_handler
+                     .get(),
+                 stack_chain,
++                call_stack_limit_reverse: *(*vm_store_context).call_stack_limit_reverse.get(),
++                value_stack_limit_reverse: *(*vm_store_context).value_stack_limit_reverse.get(),
+                 vm_store_context,
+             }
+         }
+@@ -1710,6 +1717,10 @@ impl EntryStoreContext {
+             *(*self.vm_store_context).last_wasm_entry_trap_handler.get() =
+                 self.last_wasm_entry_trap_handler;
+             *(*self.vm_store_context).stack_chain.get() = self.stack_chain.clone();
++            *(*self.vm_store_context).call_stack_limit_reverse.get() =
++                self.call_stack_limit_reverse;
++            *(*self.vm_store_context).value_stack_limit_reverse.get() =
++                self.value_stack_limit_reverse;
+         }
+     }
+ }
+diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
+index f7ab83b..cad9d79 100644
+--- a/crates/wasmtime/src/runtime/store.rs
++++ b/crates/wasmtime/src/runtime/store.rs
+@@ -737,7 +737,10 @@ impl<T> Store<T> {
+         let inner = StoreOpaque {
+             _marker: marker::PhantomPinned,
+             engine: engine.clone(),
+-            vm_store_context: Default::default(),
++            vm_store_context: VMStoreContext::new(
++                engine.config().wasm_call_stack_limit,
++                engine.config().wasm_value_stack_limit,
++            ),
+             #[cfg(feature = "stack-switching")]
+             continuations: Vec::new(),
+             instances: TryPrimaryMap::new(),
+diff --git a/crates/wasmtime/src/runtime/vm/vmcontext.rs b/crates/wasmtime/src/runtime/vm/vmcontext.rs
+index 4509bc4..a086355 100644
+--- a/crates/wasmtime/src/runtime/vm/vmcontext.rs
++++ b/crates/wasmtime/src/runtime/vm/vmcontext.rs
+@@ -721,6 +721,14 @@ const _: () = {
+ };
+ 
+ impl VMStoreContext {
++    pub(crate) fn new(wasm_call_stack_limit: u32, wasm_value_stack_limit: u32) -> VMStoreContext {
++        VMStoreContext {
++            call_stack_limit_reverse: UnsafeCell::new(wasm_call_stack_limit),
++            value_stack_limit_reverse: UnsafeCell::new(wasm_value_stack_limit),
++            ..Default::default()
++        }
++    }
++
+     /// From the current saved trampoline FP, get the FP of the last
+     /// Wasm frame. If the current saved trampoline FP is null, return
+     /// null.
+diff --git a/crates/wiggle/generate/src/wasmtime.rs b/crates/wiggle/generate/src/wasmtime.rs
+index ad86140..6147c72 100644
+--- a/crates/wiggle/generate/src/wasmtime.rs
++++ b/crates/wiggle/generate/src/wasmtime.rs
+@@ -53,7 +53,10 @@ pub fn link_module(
+         let trait_name = if target_path.is_none() {
+             format_ident!("AddToLinkerFn")
+         } else {
+-            format_ident!("Add{}ToLinkerFn", module.name.as_str().to_upper_camel_case())
++            format_ident!(
++                "Add{}ToLinkerFn",
++                module.name.as_str().to_upper_camel_case()
++            )
+         };
+         return quote! {
+             pub trait #trait_name<T> {
+@@ -149,11 +152,7 @@ fn generate_func(
+         quote!(get_cx)
+     };
+ 
+-    let cx_ref = if ctx_ref_type {
+-        quote!(&mut)
+-    } else {
+-        quote!()
+-    };
++    let cx_ref = if ctx_ref_type { quote!(&mut) } else { quote!() };
+ 
+     let body = quote! {
+         let export = caller.get_export("memory");
