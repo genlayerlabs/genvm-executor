@@ -1,0 +1,5 @@
+# Managed by git-third-party.
+
+# Scratch left behind by an interrupted write.
+*.tmp
+patches/**/*.tmp
