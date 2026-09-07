@@ -1,0 +1,6 @@
+# Managed by git-third-party.
+
+# Patch names are a digest of the patch bytes: normalizing them changes what
+# gets applied, and breaks the name.
+patches/** -text
+manifest.json text eol=lf
