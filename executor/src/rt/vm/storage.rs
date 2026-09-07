@@ -185,6 +185,9 @@ impl StoragePagesOverride {
 
 const STORAGE_CACHE_SIZE: usize = 128;
 
+/// Octets a single slot holds; an access must end at or before it.
+pub const SLOT_SIZE: u64 = 1 << 32;
+
 pub struct Storage<HS: Send + Sync> {
     pub address: calldata::Address,
     host: HS,

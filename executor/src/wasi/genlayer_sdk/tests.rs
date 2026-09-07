@@ -817,6 +817,24 @@ fn validator_treats_a_post_cap_leader_mismatch_as_a_leader_fault() {
 }
 
 #[test]
+fn a_slot_access_may_end_at_the_slot_end() {
+    assert!(slot_access_fits(0, 0));
+    assert!(slot_access_fits(1, u32::MAX));
+    assert!(slot_access_fits(u32::MAX - 1, 2));
+    assert!(
+        slot_access_fits(u32::MAX, 1),
+        "the last octet is addressable"
+    );
+}
+
+#[test]
+fn a_slot_access_may_not_run_past_the_slot_end() {
+    assert!(!slot_access_fits(u32::MAX, 2));
+    assert!(!slot_access_fits(2, u32::MAX));
+    assert!(!slot_access_fits(u32::MAX, u32::MAX));
+}
+
+#[test]
 fn balance_no_permission_is_forbidden() {
     let err = validate_balance_fee(false, true, Some(valid_params())).unwrap_err();
     assert_eq!(errno(err), generated::types::Errno::Forbidden);

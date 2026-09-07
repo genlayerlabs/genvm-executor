@@ -519,6 +519,17 @@ fn checked_sum_le(
     a <= c_minus_b
 }
 
+/// Returns `true` iff an access of `buf_len` octets at `index` ends inside the
+/// slot.
+///
+/// Both operands are widened before adding: a slot ends at `SLOT_SIZE`, which
+/// is one past what a `u32` sum can represent, so the last octet would
+/// otherwise be unreachable.
+#[inline]
+fn slot_access_fits(index: u32, buf_len: u32) -> bool {
+    u64::from(index) + u64::from(buf_len) <= rt::vm::storage::SLOT_SIZE
+}
+
 use message::EmitInternalDeployMessageArgs;
 
 #[allow(unused_variables)]
@@ -690,7 +701,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
     ) -> Result<(), generated::types::Error> {
         let buf = buf.as_array(buf_len);
 
-        if index.checked_add(buf_len).is_none() {
+        if !slot_access_fits(index, buf_len) {
             return Err(generated::types::Errno::Inval.into());
         }
 
@@ -757,7 +768,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
             return Err(generated::types::Errno::Forbidden.into());
         }
 
-        if index.checked_add(buf_len).is_none() {
+        if !slot_access_fits(index, buf_len) {
             return Err(generated::types::Errno::Inval.into());
         }
 
