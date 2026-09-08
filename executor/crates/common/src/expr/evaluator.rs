@@ -205,6 +205,14 @@ static BUILTINS: std::sync::LazyLock<std::collections::HashMap<&'static str, Arc
             }),
         );
         m.insert(
+            "internalError",
+            Arc::new(|arg: &Value| {
+                let msg = arg.as_str()?.to_string();
+
+                Err(EvalError::ScriptInternalError(msg))
+            }),
+        );
+        m.insert(
             "vmError",
             Arc::new(|arg: &Value| {
                 let msg = arg.as_str()?.to_string();
