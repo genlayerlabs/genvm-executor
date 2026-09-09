@@ -91,7 +91,11 @@ VM Error Codes
    * - ``invalid_contract malformed_runner``
      - ``invalid_contract runner malformed``
 
-``malformed_entry`` is new, ``out_of receipt message``, ``out_of message_fee total``, ``out_of message_fee allocation_budget`` and ``fee no_matching_allocation`` gained ``internal``/``external`` variants, and ``ResultCode.INTERNAL_ERROR`` is gone. The ``memory_limiter_consts`` and ``top_limits`` tables were removed from ``public_abi``.
+``malformed_entry`` is new, ``out_of receipt message``, ``out_of message_fee total``,
+``out_of message_fee allocation_budget`` and ``fee no_matching_allocation``
+gained ``internal``/``external`` variants, and ``ResultCode.INTERNAL_ERROR`` is
+gone. The ``memory_limiter_consts`` and ``top_limits`` tables were removed from
+``public_abi``.
 
 Storage
 ~~~~~~~

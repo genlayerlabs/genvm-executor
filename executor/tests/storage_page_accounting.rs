@@ -31,7 +31,7 @@ impl HostStorageLocking for FakeHost {
 /// A minimal `DataLimit` whose storage bucket charges one unit per page.
 fn data_fees(total_pages: u64) -> Limiter {
     let bucket = |delta: &str| FeesBucketConfig {
-        bucket_no: vec![0],
+        buckets: vec![symbol_table::GlobalSymbol::from("test")],
         subtract_on_start_expr: "0".to_owned(),
         delta_expr: delta.to_owned(),
     };
@@ -44,7 +44,10 @@ fn data_fees(total_pages: u64) -> Limiter {
         event: bucket("\\attrs = 0"),
     };
     let dl = rt::fees::DataLimit::new(
-        vec![primitive_types::U256::from(total_pages)],
+        std::collections::HashMap::from([(
+            "test".to_owned(),
+            primitive_types::U256::from(total_pages),
+        )]),
         fees,
         Default::default(),
     )

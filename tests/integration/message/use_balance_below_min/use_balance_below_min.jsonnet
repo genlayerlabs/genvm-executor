@@ -1,7 +1,7 @@
 local deploy_then = import 'templates/simple_deploy_then_write.jsonnet';
 local util = import 'templates/util.jsonnet';
 
-// Pin a per-phase timeunit floor (30) above the emitted message's timeunits (5).
+// Pin both phase minima (30) above the emitted message's timeunits (5).
 // gas_data replaces DEFAULT_GAS_DATA wholesale, so all required node fields are
 // restated here (kept minimal/deterministic, matching DEFAULT_GAS_DATA).
 local gasData = {
@@ -12,11 +12,16 @@ local gasData = {
 	bootloaderOverhead: '0',
 	fixedProposeReceiptGas: '0',
 	fixedMessageRevealGas: '0',
+	overlaySplitBps: '0',
+	receiptWrapperBytes: '1024',
 	genPerTimeUnit: '0',
-	minTimeUnitsPerPhase: '30',
+	minProposeTimeout: '30',
+	maxProposeTimeout: '340282366920938463463374607431768211455',
+	minCommitTimeout: '30',
+	maxCommitTimeout: '340282366920938463463374607431768211455',
 };
 
-// Ample balance so the rejection isolates the timeunit floor, not the balance.
+// Ample balance so the rejection isolates the phase bounds, not the balance.
 local extra = {
 	'balances': {
 		'AQAAAAAAAAAAAAAAAAAAAAAAAAA=': 1000000,

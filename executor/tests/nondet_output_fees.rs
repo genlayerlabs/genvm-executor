@@ -3,7 +3,7 @@ use genvm::rt::fees::DataLimit;
 
 fn nondet_fees(total: u64) -> DataLimit {
     let bucket = |delta: &str| FeesBucketConfig {
-        bucket_no: vec![0],
+        buckets: vec![symbol_table::GlobalSymbol::from("test")],
         subtract_on_start_expr: "0".to_owned(),
         delta_expr: delta.to_owned(),
     };
@@ -16,7 +16,7 @@ fn nondet_fees(total: u64) -> DataLimit {
         event: bucket("\\attrs = 0"),
     };
     DataLimit::new(
-        vec![primitive_types::U256::from(total)],
+        std::collections::HashMap::from([("test".to_owned(), primitive_types::U256::from(total))]),
         fees,
         Default::default(),
     )
@@ -29,7 +29,10 @@ async fn nondet_fee_preflight_checks_without_consuming() {
 
     assert!(fees.can_consume_nondet_output(5).await.unwrap());
     assert!(!fees.can_consume_nondet_output(6).await.unwrap());
-    assert_eq!(fees.remaining().await, vec![primitive_types::U256::from(5)]);
+    assert_eq!(
+        fees.remaining().await,
+        std::collections::BTreeMap::from([("test".to_owned(), primitive_types::U256::from(5),)])
+    );
     assert_eq!(
         fees.consumed().await.nondet_output,
         primitive_types::U256::zero()
@@ -42,7 +45,10 @@ async fn nondet_fee_preflight_leaves_the_checked_charge_available() {
 
     assert!(fees.can_consume_nondet_output(5).await.unwrap());
     assert!(fees.consume_nondet_output(5).await.unwrap());
-    assert_eq!(fees.remaining().await, vec![primitive_types::U256::zero()]);
+    assert_eq!(
+        fees.remaining().await,
+        std::collections::BTreeMap::from([("test".to_owned(), primitive_types::U256::zero(),)])
+    );
     assert_eq!(
         fees.consumed().await.nondet_output,
         primitive_types::U256::from(5)
