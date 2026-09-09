@@ -438,6 +438,7 @@ impl ContextVFS<'_> {
             messages_value_decremented: self.context.data.accumulator.messages_value_decremented,
             emissions: Vec::new(),
             message_fee_allocation: Vec::new(),
+            message_fee_allocation_consumed: Vec::new(),
         };
 
         let vm_data = Box::new(SingleVMData {
@@ -539,6 +540,7 @@ impl ContextVFS<'_> {
                 messages_value_decremented: primitive_types::U256::zero(),
                 emissions: Vec::new(),
                 message_fee_allocation: Vec::new(),
+                message_fee_allocation_consumed: Vec::new(),
             },
             det_subvm_hashes: Default::default(),
             // A CallContract child is granted the caller's full custom set;
@@ -791,11 +793,16 @@ impl ContextVFS<'_> {
             )));
         }
 
-        let is_leader = self.context.data.supervisor.shared_data.run_mode == rt::RunMode::Leader;
+        let run_mode = self.context.data.supervisor.shared_data.run_mode;
+        let is_leader = run_mode == rt::RunMode::Leader;
+        let is_validator = run_mode == rt::RunMode::Validator;
         let mut child_resources = Some((child_topmost_id, child_custom));
         // The child gets the caller's budget before this block's output charge.
         // The snapshot also keeps queued validator work independent of its parent.
         let mut child_limiter = Some(self.context.limiter.derived());
+        // Every non-leader mode re-checks an accepted proposal after caps; only
+        // a validator additionally puts it to the contract's principle.
+        let mut accepted_leader_proposal = false;
         let mut validator_proposal = None;
 
         let output = if is_leader {
@@ -852,20 +859,16 @@ impl ContextVFS<'_> {
             match &proposal {
                 // Rejecting is already the disagreement; putting it to the
                 // contract's principle would let a `True` vote it away
-                LeaderProposal::Rejected(_)
-                    if self.context.data.supervisor.shared_data.run_mode
-                        == rt::RunMode::Validator =>
-                {
+                LeaderProposal::Rejected(_) if is_validator => {
                     rt::supervisor::mark_nondet_disagreement(&self.context.data.supervisor, call_no)
                 }
                 LeaderProposal::Rejected(_) => {}
-                LeaderProposal::Accepted(leaders_res)
-                    if self.context.data.supervisor.shared_data.run_mode
-                        == rt::RunMode::Validator =>
-                {
-                    validator_proposal = Some(leaders_res.duplicate());
+                LeaderProposal::Accepted(leaders_res) => {
+                    accepted_leader_proposal = true;
+                    if is_validator {
+                        validator_proposal = Some(leaders_res.duplicate());
+                    }
                 }
-                LeaderProposal::Accepted(_) => {}
             }
 
             let (result, encoded) = proposal.into_result_and_encoding();
@@ -882,16 +885,23 @@ impl ContextVFS<'_> {
         )
         .await?;
 
-        if let Some(leaders_res) = validator_proposal {
+        if accepted_leader_proposal {
             if let Err(error) =
                 validate_leader_output_after_caps(&output.encoded, &leader_proposed_encoding)
             {
-                rt::supervisor::mark_nondet_disagreement(&self.context.data.supervisor, call_no);
+                if is_validator {
+                    rt::supervisor::mark_nondet_disagreement(
+                        &self.context.data.supervisor,
+                        call_no,
+                    );
+                }
                 return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                     rt::errors::Error::fatal_vm(error).into(),
                 )));
             }
+        }
 
+        if let Some(leaders_res) = validator_proposal {
             let (child_topmost_id, child_custom) = child_resources
                 .take()
                 .expect("nondeterministic child resources are available");
@@ -987,6 +997,7 @@ impl ContextVFS<'_> {
             messages_value_decremented: primitive_types::U256::max_value(),
             emissions: Vec::new(),
             message_fee_allocation: Vec::new(),
+            message_fee_allocation_consumed: Vec::new(),
         };
 
         std::mem::swap(&mut self.context.data.accumulator, &mut fake_my_data);

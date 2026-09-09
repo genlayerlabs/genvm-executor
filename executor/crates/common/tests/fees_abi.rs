@@ -71,11 +71,11 @@ fn internal_node(
 #[test]
 fn external_root_node_matches_exact_encoding() {
     let recipient = [0x11u8; 20];
-    let encoded =
-        MessageAllocationNode::abi_encode(&[external_node(Some(recipient), None, 5, 7, 9, vec![])]);
+    let root = external_node(Some(recipient), None, 5, 7, 9, vec![]);
+    let encoded = root.abi_encode();
 
-    // `abi.encode(MessageAllocationNode[])` of a single external root node:
-    // array offset, length, element offset, then the 10-word element tuple
+    // `abi.encode(MessageAllocationNode[])`: array offset, length, element
+    // offset, then the 10-word element tuple
     // (messageType=External, onAcceptance=false, parent=sentinel, recipient,
     // callKey wildcard, budget, feeParams offset, feeParams len, gasLimit, maxGasPrice).
     let expected = words(&[
@@ -86,12 +86,12 @@ fn external_root_node_matches_exact_encoding() {
         U256::from(0),                     // onAcceptance = false
         U256::MAX,                         // parentIndex = NODE_ROOT_SENTINEL
         U256::from_big_endian(&recipient), // recipient (left-padded)
-        U256::from(0),                     // callKey = CALL_KEY_WILDCARD
-        U256::from(5),                     // budget
-        U256::from(0xE0),                  // feeParams offset (7 head words)
-        U256::from(64),                    // feeParams bytes length
-        U256::from(7),                     // gasLimit
-        U256::from(9),                     // maxGasPrice
+        U256::from_big_endian(&genvm_modules_interfaces::fees::CALL_KEY_WILDCARD.0),
+        U256::from(5),    // budget
+        U256::from(0xE0), // feeParams offset (7 head words)
+        U256::from(64),   // feeParams bytes length
+        U256::from(7),    // gasLimit
+        U256::from(9),    // maxGasPrice
     ]);
 
     assert_eq!(encoded, expected);
@@ -101,25 +101,29 @@ fn external_root_node_matches_exact_encoding() {
 
 #[test]
 fn nested_internal_flattens_with_parent_pointers() {
-    // root (internal, accepted) with a single external child.
-    let child = external_node(Some([0x22u8; 20]), None, 1, 100, 200, vec![]);
+    let grandchild = external_node(Some([0x44u8; 20]), None, 1, 100, 200, vec![]);
+    let first_child = external_node(Some([0x22u8; 20]), None, 2, 100, 200, vec![grandchild]);
+    let second_child = external_node(Some([0x33u8; 20]), None, 3, 100, 200, vec![]);
     let root = internal_node(
         genvm_modules_interfaces::On::Decided,
         10,
         &[2, 3],
-        vec![child],
+        vec![first_child, second_child],
     );
 
-    let encoded = MessageAllocationNode::abi_encode(&[root]);
+    let encoded = root.abi_encode();
 
     assert_eq!(word(&encoded, 0), U256::from(0x20));
-    assert_eq!(word(&encoded, 1), U256::from(2), "two flattened nodes");
+    assert_eq!(word(&encoded, 1), U256::from(4), "four flattened nodes");
 
-    // Heads region begins right after the length word (word index 2), and the
+    // Heads region begins right after the array length word, and the
     // per-element offsets there are relative to it.
     let heads_base = 2 * 32;
-    let root_idx = (heads_base + word(&encoded, 2).as_usize()) / 32;
-    let child_idx = (heads_base + word(&encoded, 3).as_usize()) / 32;
+    let element_idx = |index: usize| (heads_base + word(&encoded, 2 + index).as_usize()) / 32;
+    let root_idx = element_idx(0);
+    let first_child_idx = element_idx(1);
+    let second_child_idx = element_idx(2);
+    let grandchild_idx = element_idx(3);
 
     // Root: messageType Internal (1), onAcceptance true, parent = sentinel.
     assert_eq!(
@@ -138,21 +142,21 @@ fn nested_internal_flattens_with_parent_pointers() {
         "root parent = sentinel"
     );
 
-    // Child: messageType External (0), parent index = 0 (root is first flattened node).
+    // Both children precede the grandchild in BFS order.
     assert_eq!(
-        word(&encoded, child_idx),
-        U256::from(0),
-        "child messageType External"
+        word(&encoded, first_child_idx + 2),
+        U256::zero(),
+        "first child parent index 0"
     );
     assert_eq!(
-        word(&encoded, child_idx + 1),
+        word(&encoded, second_child_idx + 2),
         U256::zero(),
-        "child onAcceptance false"
+        "second child parent index 0"
     );
     assert_eq!(
-        word(&encoded, child_idx + 2),
-        U256::zero(),
-        "child parent index 0"
+        word(&encoded, grandchild_idx + 2),
+        U256::one(),
+        "grandchild parent index 1"
     );
 }
 
@@ -162,12 +166,13 @@ fn nested_internal_flattens_with_parent_pointers() {
 fn internal_params_encode_derived_appeal_rounds() {
     // appealRounds is not stored on the Rust side; it is reconstructed as
     // len(rotations) - 1 when encoding.
-    let encoded = MessageAllocationNode::abi_encode(&[internal_node(
+    let root = internal_node(
         genvm_modules_interfaces::On::Finalized,
         10,
         &[2, 3, 4],
         vec![],
-    )]);
+    );
+    let encoded = root.abi_encode();
 
     // Walk to the feeParams bytes inside the single element.
     let heads_base = 2 * 32;

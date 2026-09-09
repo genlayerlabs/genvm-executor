@@ -1,7 +1,7 @@
 local simple_deploy = import 'templates/simple_deploy.jsonnet';
 local util = import 'templates/util.jsonnet';
 
-// Pin a per-phase timeunit floor above the emitted message's child timeunits.
+// Pin each phase minimum above the emitted message's child timeunits.
 // gas_data replaces DEFAULT_GAS_DATA wholesale, so all required node fields are
 // restated here (kept minimal/deterministic, matching DEFAULT_GAS_DATA).
 local gasData = {
@@ -12,9 +12,14 @@ local gasData = {
 	bootloaderOverhead: '0',
 	fixedProposeReceiptGas: '0',
 	fixedMessageRevealGas: '0',
+	overlaySplitBps: '0',
+	receiptWrapperBytes: '1024',
 	genPerTimeUnit: '0',
 	// leader 5 / validator 10 (below) are rejected at emission.
-	minTimeUnitsPerPhase: '30',
+	minProposeTimeout: '30',
+	maxProposeTimeout: '340282366920938463463374607431768211455',
+	minCommitTimeout: '30',
+	maxCommitTimeout: '340282366920938463463374607431768211455',
 };
 
 // A single wildcard internal allocation that matches the emitted message, funded
