@@ -145,6 +145,7 @@ pub struct VMDataAccumulator {
     pub messages_value_decremented: primitive_types::U256,
     pub emissions: Vec<domain::ExecutionEmission>,
     pub message_fee_allocation: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
+    pub message_fee_allocation_consumed: Vec<primitive_types::U256>,
 }
 
 impl VMDataAccumulator {

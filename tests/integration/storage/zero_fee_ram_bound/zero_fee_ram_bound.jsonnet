@@ -11,6 +11,7 @@ local freeStorageGasData = {
 	bootloaderOverhead: '0',
 	fixedProposeReceiptGas: '0',
 	fixedMessageRevealGas: '0',
+	receiptWrapperBytes: '1024',
 	genPerTimeUnit: '0',
 };
 
@@ -19,6 +20,5 @@ local base = simple.run('${jsonnetDir}/${fileBaseName}.py');
 	entry: util.addPaths([base + {
 		// Validator and sync modes would make their multi-GiB allocations concurrently.
 		modes: 'l',
-		bucket_totals: [1000000000, 1000000000, 1000000000, 1000000000],
 		gas_data: freeStorageGasData,
 	}])}
