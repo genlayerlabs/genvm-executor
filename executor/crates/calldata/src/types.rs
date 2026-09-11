@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 pub const ADDRESS_SIZE: usize = 20;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Address(pub(super) [u8; ADDRESS_SIZE]);
 
 impl std::fmt::Debug for Address {

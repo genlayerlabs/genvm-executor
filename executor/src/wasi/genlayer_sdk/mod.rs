@@ -849,8 +849,8 @@ impl Context {
         &mut self,
         address: calldata::Address,
     ) -> Result<primitive_types::U256, generated::types::Error> {
-        if let Some(res) = self.data.supervisor.balances.get(&address) {
-            return Ok(*res);
+        if let Some(res) = self.data.supervisor.balances.get(address) {
+            return Ok(res);
         }
 
         let res = self
@@ -862,7 +862,7 @@ impl Context {
             .get_balance_gen_wei(address)
             .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e)))?;
 
-        let _ = self.data.supervisor.balances.insert(address, res);
+        self.data.supervisor.balances.insert(address, res);
 
         Ok(res)
     }

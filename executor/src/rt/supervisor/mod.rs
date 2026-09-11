@@ -18,6 +18,45 @@ use crate::{
 pub mod actions;
 mod compilation;
 
+const BALANCE_CACHE_SIZE: usize = 128;
+
+type BalanceLru = const_lru::ConstLru<calldata::Address, primitive_types::U256, BALANCE_CACHE_SIZE>;
+
+/// Read-through cache of host balances, shared by every sub-VM of a run.
+///
+/// Bounded rather than metered: an entry outlives the sub-VM that inserted it,
+/// so a per-VM charge would be released while the entry stays resident. Evicting
+/// is safe because the host answers from a fixed pre-state and in-run changes are
+/// applied on top of the cached value, so a miss costs a round trip and never a
+/// different answer.
+///
+/// [`Self::get`] and [`Self::insert`] are the entire surface on purpose: both
+/// take the lock, finish in `O(1)` and drop it, so no guard can reach an
+/// `await` and deadlock the runtime.
+pub struct BalanceCache(std::sync::Mutex<BalanceLru>);
+
+impl BalanceCache {
+    fn new() -> Self {
+        Self(std::sync::Mutex::new(const_lru::ConstLru::new()))
+    }
+
+    pub fn get(&self, address: calldata::Address) -> Option<primitive_types::U256> {
+        // Nothing under the lock can panic, so it cannot be poisoned.
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&address)
+            .copied()
+    }
+
+    pub fn insert(&self, address: calldata::Address, balance: primitive_types::U256) {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(address, balance);
+    }
+}
+
 struct WasmModuleCache {
     cache_dir: Option<std::path::PathBuf>,
     wasm_modules_cache: sync::CacheMap<DetNondet<wasmtime::Module>>,
@@ -109,7 +148,7 @@ pub struct Supervisor {
     pub locked_slots: host::LockedSlotsSet,
 
     pub nondet_call_no: AtomicU32,
-    pub balances: dashmap::DashMap<calldata::Address, primitive_types::U256>,
+    pub balances: BalanceCache,
     pub nondet_results: tokio::sync::Mutex<Vec<bytes::Bytes>>,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
     pub emit_leader_public_data: bool,
@@ -365,7 +404,7 @@ impl Supervisor {
             modules: ctor.modules,
             locked_slots: ctor.locked_slots,
             nondet_call_no: AtomicU32::new(0),
-            balances: dashmap::DashMap::new(),
+            balances: BalanceCache::new(),
             nondet_results: Default::default(),
             leader_nondet_results: ctor.leader_nondet_results,
             emit_leader_public_data: ctor.emit_leader_public_data,
@@ -732,4 +771,55 @@ async fn nondet_vm_processor(
 
     std::mem::drop(read_permit);
     log_debug!(count = count; "nondet worker done");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn addr(n: u8) -> calldata::Address {
+        calldata::Address::from([n; 20])
+    }
+
+    fn balance(n: u8) -> primitive_types::U256 {
+        primitive_types::U256::from(n)
+    }
+
+    fn filled_cache() -> BalanceCache {
+        let cache = BalanceCache::new();
+        for n in 0..BALANCE_CACHE_SIZE {
+            let n = n.into_int_downcast_panicking();
+            cache.insert(addr(n), balance(n));
+        }
+        cache
+    }
+
+    fn past_capacity() -> u8 {
+        BALANCE_CACHE_SIZE.into_int_downcast_panicking()
+    }
+
+    #[test]
+    fn balance_cache_evicts_the_least_recently_used_entry() {
+        let cache = filled_cache();
+
+        cache.insert(addr(past_capacity()), balance(past_capacity()));
+
+        assert_eq!(cache.get(addr(0)), None, "oldest entry must be evicted");
+        assert_eq!(cache.get(addr(1)), Some(balance(1)));
+        assert_eq!(
+            cache.get(addr(past_capacity())),
+            Some(balance(past_capacity()))
+        );
+    }
+
+    #[test]
+    fn balance_cache_read_refreshes_an_entry() {
+        let cache = filled_cache();
+        assert_eq!(cache.get(addr(0)), Some(balance(0)));
+
+        cache.insert(addr(past_capacity()), balance(past_capacity()));
+
+        assert_eq!(cache.get(addr(0)), Some(balance(0)), "a read keeps it live");
+        assert_eq!(cache.get(addr(1)), None, "next-oldest is evicted instead");
+    }
 }
