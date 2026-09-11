@@ -119,7 +119,7 @@ pub enum FileDescriptor {
     Stdout,
     Stderr,
     File(FileContents),
-    Dir { path: Vec<String> },
+    Dir { path: Vec<symbol_table::Symbol> },
 }
 
 #[allow(dead_code)]
@@ -131,6 +131,7 @@ pub(crate) struct VFS {
     pub next_free_descriptor: Fd,
 
     pub limiter: rt::memlimiter::Limiter,
+    pub file_names: symbol_table::SymbolTable,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -185,6 +186,7 @@ impl VFS {
             next_free_descriptor,
             free_descriptors: Vec::new(),
             limiter,
+            file_names: Default::default(),
         })
     }
 

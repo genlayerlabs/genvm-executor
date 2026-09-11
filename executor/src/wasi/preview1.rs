@@ -316,16 +316,16 @@ impl Context {
     }
 }
 
-pub fn join_dir_and_path<'a, T>(
+pub fn join_dir_and_path<'a, T: ?Sized>(
     preopen: &vfs::Trie<()>,
-    dir: &'a [T],
+    dir: impl Iterator<Item = &'a T> + Clone,
     path: &'a str,
 ) -> Result<Vec<&'a str>, generated::types::Error>
 where
     T: AsRef<str> + 'a,
 {
     let all_comp =
-        vfs::split_normalize_paths(dir.iter().map(|s| s.as_ref()).chain(path.split('/')), true);
+        vfs::split_normalize_paths(dir.clone().map(|s| s.as_ref()).chain(path.split('/')), true);
 
     match preopen.follow(all_comp.iter().map(std::ops::Deref::deref)) {
         vfs::TrieFollowResult::NotFound => return Err(generated::types::Errno::Notcapable.into()),
@@ -977,7 +977,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         };
 
         let dirent = self.dir_fd_get_trie(&vfs::split_normalize_paths(
-            dir_path.iter().map(String::as_str),
+            dir_path.iter().map(|x| self.vfs.file_names.resolve(*x)),
             true,
         ))?;
 
@@ -1084,7 +1084,11 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         let Some(vfs::FileDescriptor::Dir { path: dir_path }) = self.vfs.fds.get(&fdi) else {
             return Err(generated::types::Errno::Badf.into());
         };
-        let path_components = join_dir_and_path(&self.context.preopen, dir_path, &path)?;
+        let path_components = join_dir_and_path(
+            &self.context.preopen,
+            dir_path.iter().map(|x| self.vfs.file_names.resolve(*x)),
+            &path,
+        )?;
         let cur_trie = self.dir_fd_get_trie(&path_components)?;
         match cur_trie {
             FilesTrie::Leaf(data) => Ok(filestat(
@@ -1158,7 +1162,11 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             {
                 return Err(generated::types::Errno::Notcapable.into());
             }
-            let path_components = join_dir_and_path(&self.context.preopen, dir_path, &file_path)?;
+            let path_components = join_dir_and_path(
+                &self.context.preopen,
+                dir_path.iter().map(|x| self.vfs.file_names.resolve(*x)),
+                &file_path,
+            )?;
             let cur_trie = self.dir_fd_get_trie(&path_components)?;
             match cur_trie {
                 FilesTrie::Leaf(data) => {
@@ -1189,7 +1197,10 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
                     );
                     (
                         vfs::FileDescriptor::Dir {
-                            path: path_components.into_iter().map(String::from).collect(),
+                            path: path_components
+                                .into_iter()
+                                .map(|x| self.vfs.file_names.intern(x))
+                                .collect(),
                         },
                         rights,
                     )

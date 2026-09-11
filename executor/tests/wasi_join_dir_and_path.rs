@@ -15,14 +15,14 @@ fn granted(path: &[&str]) -> Trie<()> {
 // -- Component algebra, with the whole filesystem granted -------------
 #[test]
 fn relative_path_is_appended_to_the_directory() {
-    let joined = join_dir_and_path(&granted(&[]), &["a"], "b/c").unwrap();
+    let joined = join_dir_and_path(&granted(&[]), ["a"].iter(), "b/c").unwrap();
 
     assert_eq!(joined, ["a", "b", "c"]);
 }
 
 #[test]
 fn dot_and_empty_components_are_dropped() {
-    let joined = join_dir_and_path(&granted(&[]), &["a"], "./b//c/.").unwrap();
+    let joined = join_dir_and_path(&granted(&[]), ["a"].iter(), "./b//c/.").unwrap();
 
     assert_eq!(joined, ["a", "b", "c"]);
 }
@@ -31,7 +31,7 @@ fn dot_and_empty_components_are_dropped() {
 /// `..` that stays under the preopen root must resolve rather than be refused.
 #[test]
 fn parent_component_resolves_within_the_preopen() {
-    let joined = join_dir_and_path(&granted(&[]), &["parent", "child"], "..")
+    let joined = join_dir_and_path(&granted(&[]), ["parent", "child"].iter(), "..")
         .expect("`..` that stays inside the preopen must resolve its parent");
 
     assert_eq!(joined, ["parent"]);
@@ -39,14 +39,14 @@ fn parent_component_resolves_within_the_preopen() {
 
 #[test]
 fn parent_components_clamp_at_the_root() {
-    let joined = join_dir_and_path(&granted(&[]), &["a"], "../../../b").unwrap();
+    let joined = join_dir_and_path::<&str>(&granted(&[]), ["a"].iter(), "../../../b").unwrap();
 
     assert_eq!(joined, ["b"]);
 }
 
 #[test]
 fn the_root_itself_is_reachable_when_granted() {
-    let joined = join_dir_and_path(&granted(&[]), &[] as &[&str], "").unwrap();
+    let joined = join_dir_and_path::<&str>(&granted(&[]), [].iter(), "").unwrap();
 
     assert_eq!(joined, [] as [&str; 0]);
 }
@@ -57,18 +57,18 @@ fn a_path_under_the_grant_is_allowed() {
     let preopen = granted(&["allowed"]);
 
     assert_eq!(
-        join_dir_and_path(&preopen, &["allowed"], "file").unwrap(),
+        join_dir_and_path(&preopen, ["allowed"].iter(), "file").unwrap(),
         ["allowed", "file"]
     );
     assert_eq!(
-        join_dir_and_path(&preopen, &["allowed", "deep"], "file").unwrap(),
+        join_dir_and_path(&preopen, ["allowed", "deep"].iter(), "file").unwrap(),
         ["allowed", "deep", "file"]
     );
 }
 
 #[test]
 fn the_granted_directory_itself_is_allowed() {
-    let joined = join_dir_and_path(&granted(&["allowed"]), &["allowed"], "").unwrap();
+    let joined = join_dir_and_path(&granted(&["allowed"]), ["allowed"].iter(), "").unwrap();
 
     assert_eq!(joined, ["allowed"]);
 }
@@ -76,7 +76,7 @@ fn the_granted_directory_itself_is_allowed() {
 #[test]
 fn a_sibling_of_the_grant_is_refused() {
     assert!(
-        join_dir_and_path(&granted(&["allowed"]), &[] as &[&str], "other/file").is_err(),
+        join_dir_and_path::<&str>(&granted(&["allowed"]), [].iter(), "other/file").is_err(),
         "a path outside the granted subtree must not resolve"
     );
 }
@@ -86,7 +86,7 @@ fn a_sibling_of_the_grant_is_refused() {
 #[test]
 fn an_ancestor_of_the_grant_is_refused() {
     assert!(
-        join_dir_and_path(&granted(&["allowed"]), &[] as &[&str], "").is_err(),
+        join_dir_and_path::<&str>(&granted(&["allowed"]), [].iter(), "").is_err(),
         "the root must not resolve when only a subtree is granted"
     );
 }
@@ -98,18 +98,18 @@ fn parent_components_cannot_escape_the_grant() {
     let preopen = granted(&["allowed"]);
 
     assert!(
-        join_dir_and_path(&preopen, &["allowed", "sub"], "../../other").is_err(),
+        join_dir_and_path(&preopen, ["allowed", "sub"].iter(), "../../other").is_err(),
         "`..` must not reach a sibling of the granted subtree"
     );
     assert!(
-        join_dir_and_path(&preopen, &["allowed"], "..").is_err(),
+        join_dir_and_path(&preopen, ["allowed"].iter(), "..").is_err(),
         "`..` must not reach the ungranted parent of the grant"
     );
 }
 
 #[test]
 fn parent_components_inside_the_grant_still_resolve() {
-    let joined = join_dir_and_path(&granted(&["allowed"]), &["allowed", "sub"], "..")
+    let joined = join_dir_and_path(&granted(&["allowed"]), ["allowed", "sub"].iter(), "..")
         .expect("`..` staying inside the grant must resolve");
 
     assert_eq!(joined, ["allowed"]);
@@ -121,11 +121,11 @@ fn a_multi_component_grant_covers_only_its_own_subtree() {
     let preopen = granted(&["deep", "nested"]);
 
     assert_eq!(
-        join_dir_and_path(&preopen, &["deep", "nested"], "file").unwrap(),
+        join_dir_and_path::<&str>(&preopen, ["deep", "nested"].iter(), "file").unwrap(),
         ["deep", "nested", "file"]
     );
     assert_eq!(
-        join_dir_and_path(&preopen, &[] as &[&str], "deep/nested").unwrap(),
+        join_dir_and_path::<&str>(&preopen, [].iter(), "deep/nested").unwrap(),
         ["deep", "nested"]
     );
 }
@@ -137,11 +137,11 @@ fn an_intermediate_component_of_the_grant_is_refused() {
     let preopen = granted(&["deep", "nested"]);
 
     assert!(
-        join_dir_and_path(&preopen, &[] as &[&str], "deep").is_err(),
+        join_dir_and_path::<&str>(&preopen, [].iter(), "deep").is_err(),
         "the intermediate `/deep` must not resolve"
     );
     assert!(
-        join_dir_and_path(&preopen, &["deep"], "sibling").is_err(),
+        join_dir_and_path(&preopen, ["deep"].iter(), "sibling").is_err(),
         "a sibling of the grant under `/deep` must not resolve"
     );
 }
@@ -151,11 +151,11 @@ fn parent_components_cannot_escape_a_multi_component_grant() {
     let preopen = granted(&["deep", "nested"]);
 
     assert!(
-        join_dir_and_path(&preopen, &["deep", "nested"], "../sibling").is_err(),
+        join_dir_and_path(&preopen, ["deep", "nested"].iter(), "../sibling").is_err(),
         "`..` must not step out of the grant into its parent directory"
     );
     assert_eq!(
-        join_dir_and_path(&preopen, &["deep", "nested", "sub"], "..").unwrap(),
+        join_dir_and_path(&preopen, ["deep", "nested", "sub"].iter(), "..").unwrap(),
         ["deep", "nested"],
         "`..` back onto the grant itself must still resolve"
     );
@@ -174,11 +174,11 @@ fn each_grant_resolves_independently() {
     let preopen = two_grants();
 
     assert_eq!(
-        join_dir_and_path(&preopen, &["first"], "file").unwrap(),
+        join_dir_and_path(&preopen, ["first"].iter(), "file").unwrap(),
         ["first", "file"]
     );
     assert_eq!(
-        join_dir_and_path(&preopen, &["second"], "file").unwrap(),
+        join_dir_and_path(&preopen, ["second"].iter(), "file").unwrap(),
         ["second", "file"]
     );
 }
@@ -186,7 +186,7 @@ fn each_grant_resolves_independently() {
 #[test]
 fn an_ungranted_sibling_of_the_grants_is_refused() {
     assert!(
-        join_dir_and_path(&two_grants(), &[] as &[&str], "third").is_err(),
+        join_dir_and_path::<&str>(&two_grants(), [].iter(), "third").is_err(),
         "an ungranted sibling must not resolve"
     );
 }
