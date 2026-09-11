@@ -7,6 +7,7 @@ use super::run::{
     CallContractRoute, LeaderProposal, NondetOutput,
 };
 use super::*;
+use generated::genlayer_sdk::GenlayerSdk as _;
 use genvm_common::Bytes32Hash;
 use primitive_types::U256;
 
@@ -626,6 +627,150 @@ async fn event_rejected_by_fee_is_not_appended_and_releases_memory() {
             .await
             .event,
         U256::zero()
+    );
+
+    test.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// gl_call decodes straight from the wire: `Maybe` payloads stay unparsed.
+// ---------------------------------------------------------------------------
+
+fn nested_blob() -> calldata::Map<calldata::Value> {
+    calldata::Map::from([
+        (
+            "list".to_owned(),
+            calldata::Value::Array(vec![
+                calldata::Value::Number(num_bigint::BigInt::from(7)),
+                calldata::Value::Bool(true),
+                calldata::Value::Null,
+            ]),
+        ),
+        (
+            "nested".to_owned(),
+            calldata::Value::Map(calldata::Map::from([(
+                "deep".to_owned(),
+                calldata::Value::Str("value".to_owned()),
+            )])),
+        ),
+    ])
+}
+
+async fn gl_call_wire(
+    test: &mut EmissionTestContext,
+    request: &[u8],
+) -> Result<generated::types::Fd, generated::types::Error> {
+    let mut guest = request.to_vec();
+    let len = u32::try_from(guest.len()).unwrap();
+    let mut mem = wiggle::GuestMemory::Unshared(&mut guest);
+
+    test.wasi()
+        .gl_call(&mut mem, wiggle::GuestPtr::new(0), len)
+        .await
+}
+
+fn assert_checked<T: std::fmt::Debug>(
+    maybe: &calldata::unparsed::Maybe<T>,
+    what: &str,
+) -> calldata::unparsed::Raw {
+    match maybe {
+        calldata::unparsed::Maybe::Checked(raw) => raw.clone(),
+        calldata::unparsed::Maybe::Materialized(_) => panic!("{what} was materialized: {maybe:?}"),
+    }
+}
+
+#[tokio::test]
+async fn gl_call_event_retains_the_blob_as_validated_wire_bytes() {
+    let mut test = EmissionTestContext::new(u32::MAX, 1_000_000);
+    let blob = nested_blob();
+    let request = calldata::encode_obj(&gl_call::Message::EmitEvent {
+        topics: vec![bytes::Bytes::from_static(&[7u8; 32])],
+        blob: blob.clone().into(),
+    });
+
+    gl_call_wire(&mut test, &request).await.unwrap();
+
+    let emissions = &test.context.data.accumulator.emissions;
+    let [domain::ExecutionEmission::Event {
+        topics,
+        blob: stored,
+        ..
+    }] = &emissions[..]
+    else {
+        panic!("unexpected emissions: {emissions:?}");
+    };
+    assert_eq!(topics, &[bytes::Bytes::from_static(&[7u8; 32])]);
+    let raw = assert_checked(stored, "event blob");
+    assert_eq!(
+        raw.0.as_ref(),
+        calldata::encode(&calldata::Value::Map(blob)).as_slice()
+    );
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn gl_call_internal_message_retains_calldata_args_as_validated_wire_bytes() {
+    let mut test = EmissionTestContext::new(u32::MAX, 1_000_000);
+    let arg = calldata::Value::Map(nested_blob());
+    let request = calldata::encode_obj(&gl_call::Message::EmitInternalMessage {
+        address: calldata::Address::zero(),
+        calldata: abi::entry::MainCallData {
+            name: None,
+            args: Some(vec![
+                arg.clone().into(),
+                calldata::Value::Str("plain".to_owned()).into(),
+            ]),
+            kwargs: Some(calldata::Map::from([("kw".to_owned(), arg.clone().into())])),
+        },
+        value: U256::zero(),
+        on: gl_call::On::Finalized,
+        use_balance: false,
+        fee_params: None,
+    });
+
+    gl_call_wire(&mut test, &request).await.unwrap();
+
+    let emissions = &test.context.data.accumulator.emissions;
+    let [domain::ExecutionEmission::InternalMessage {
+        calldata: stored, ..
+    }] = &emissions[..]
+    else {
+        panic!("unexpected emissions: {emissions:?}");
+    };
+    let args = stored.args.as_ref().unwrap();
+    assert_eq!(args.len(), 2);
+    assert_eq!(
+        assert_checked(&args[0], "args[0]").0.as_ref(),
+        calldata::encode(&arg).as_slice()
+    );
+    assert_checked(&args[1], "args[1]");
+    let kwargs = stored.kwargs.as_ref().unwrap();
+    assert_eq!(
+        assert_checked(&kwargs["kw"], "kwargs[kw]").0.as_ref(),
+        calldata::encode(&arg).as_slice()
+    );
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn gl_call_rejects_a_truncated_request_without_emitting() {
+    let mut test = EmissionTestContext::new(u32::MAX, 1_000_000);
+    let request = calldata::encode_obj(&gl_call::Message::EmitEvent {
+        topics: Vec::new(),
+        blob: nested_blob().into(),
+    });
+
+    let error = gl_call_wire(&mut test, &request[..request.len() / 2])
+        .await
+        .unwrap_err();
+
+    assert_eq!(errno(error), generated::types::Errno::Inval);
+    assert!(
+        test.context.data.accumulator.emissions.is_empty(),
+        "unexpected emissions: {:?}",
+        test.context.data.accumulator.emissions
     );
 
     test.shutdown().await;

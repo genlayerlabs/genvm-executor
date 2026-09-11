@@ -543,18 +543,9 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
         let request = request.as_array(request_len);
         let request = read_owned_vec(mem, request)?;
 
-        let request = match calldata::decode(&request) {
-            Err(e) => {
-                log_info!(error:err = &e; "calldata parse failed");
-
-                return Err(generated::types::Errno::Inval.into());
-            }
-            Ok(v) => v,
-        };
-
-        log_trace!(request:cd = request; "gl_call");
-
-        let request: gl_call::Message = match calldata::from_value(request) {
+        // Decode straight from the wire so `Maybe` payloads stay as validated
+        // bytes; a `Value` detour would materialize every emission as a tree.
+        let request: gl_call::Message = match calldata::decode_obj(&request) {
             Ok(v) => v,
             Err(e) => {
                 log_info!(error:err = e; "calldata deserialization failed");
@@ -562,6 +553,8 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 return Err(generated::types::Errno::Inval.into());
             }
         };
+
+        log_trace!(request:cd = request; "gl_call");
 
         match request {
             gl_call::Message::EmitExternalMessage {

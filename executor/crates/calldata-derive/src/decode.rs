@@ -118,24 +118,49 @@ fn decode_struct(name: &syn::Ident, fields: &Fields) -> syn::Result<TokenStream>
     }
 }
 
-/// Generate decode for named fields (used for structs and enum struct variants).
-/// `constructor` is e.g. `quote!(MyStruct)` or `quote!(MyEnum::Variant)`.
 fn decode_named_fields(
     name: &syn::Ident,
     fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
 ) -> syn::Result<TokenStream> {
+    let visitor = named_fields_visitor(name, quote!(#name), fields, true)?;
+    Ok(quote! {
+        #visitor
+        __deserializer.deserialize(__V)
+    })
+}
+
+/// Emit `struct __V` with a `visit_map` that decodes named fields and builds
+/// `#constructor { .. }`. Shared by structs and enum struct variants;
+/// `option_as_absence` is only meaningful on the former.
+///
+/// Fields are read with `__map.next_key` / `next_value` so each value decodes
+/// straight from the underlying deserializer -- keeping `Maybe`/`Raw` fields
+/// deferred -- instead of being materialized into a `Value` first. The key is
+/// mapped to an index before the value is read so its borrow is released.
+fn named_fields_visitor(
+    value_ty: &syn::Ident,
+    constructor: TokenStream,
+    fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+    allow_option_as_absence: bool,
+) -> syn::Result<TokenStream> {
     let mut var_decls: Vec<TokenStream> = Vec::new();
-    let mut match_arms: Vec<TokenStream> = Vec::new();
+    let mut key_arms: Vec<TokenStream> = Vec::new();
+    let mut assign_arms: Vec<TokenStream> = Vec::new();
     let mut field_constructions: Vec<TokenStream> = Vec::new();
 
-    for f in fields {
+    for (j, f) in fields.iter().enumerate() {
         let ident = f.ident.as_ref().unwrap().clone();
         let ty = &f.ty;
         let attrs = FieldAttrs::from_ast(&f.attrs)?;
         let wire = attrs.wire_name(&ident);
         let var = syn::Ident::new(&format!("__f_{ident}"), proc_macro2::Span::call_site());
+        let idx = proc_macro2::Literal::usize_unsuffixed(j);
+        key_arms.push(quote! { #wire => #idx, });
 
         if attrs.option_as_absence {
+            if !allow_option_as_absence {
+                attrs.reject_option_as_absence_here(&ident)?;
+            }
             // The accumulator IS the field's own `Option<T>`: absent key stays
             // `None`, present key becomes `Some(decoded inner T)`. No
             // `FieldMissing` -- absence is a valid value.
@@ -148,13 +173,9 @@ fn decode_named_fields(
             var_decls.push(quote! {
                 let mut #var: #ty = ::core::option::Option::None;
             });
-            match_arms.push(quote! {
-                #wire => {
-                    #var = ::core::option::Option::Some(
-                        <#inner as genlayer_calldata::codec::Decode>::decode(
-                            genlayer_calldata::codec::ValueDeserializer(__val)
-                        )?
-                    );
+            assign_arms.push(quote! {
+                #idx => {
+                    #var = ::core::option::Option::Some(__map.next_value::<#inner>()?);
                 }
             });
             field_constructions.push(quote! { #ident: #var });
@@ -165,15 +186,18 @@ fn decode_named_fields(
             let mut #var: ::core::option::Option<#ty> = ::core::option::Option::None;
         });
         let decode_expr = if let Some(func) = &attrs.deserialize_with {
-            quote! { #func(__val)? }
-        } else {
             quote! {
-                <#ty as genlayer_calldata::codec::Decode>::decode(
-                    genlayer_calldata::codec::ValueDeserializer(__val)
-                )?
+                {
+                    let __val = __map.next_value::<genlayer_calldata::Value>()?;
+                    #func(__val)?
+                }
             }
+        } else {
+            quote! { __map.next_value::<#ty>()? }
         };
-        match_arms.push(quote! { #wire => { #var = ::core::option::Option::Some(#decode_expr); } });
+        assign_arms.push(quote! {
+            #idx => { #var = ::core::option::Option::Some(#decode_expr); }
+        });
         if let Some(default_fn) = &attrs.default {
             field_constructions.push(quote! { #ident: #var.unwrap_or_else(#default_fn) });
         } else {
@@ -185,36 +209,46 @@ fn decode_named_fields(
         }
     }
 
+    let unknown_field = quote! {
+        return ::core::result::Result::Err(
+            genlayer_calldata::codec::DecodeError::UnknownField(__key.to_owned())
+        );
+    };
+    // With no fields every key is unknown; a `match __idx` after an
+    // always-returning key match would be unreachable code.
+    let entry_body = if assign_arms.is_empty() {
+        unknown_field
+    } else {
+        quote! {
+            let __idx: usize = match __key {
+                #(#key_arms)*
+                _ => { #unknown_field }
+            };
+            match __idx {
+                #(#assign_arms)*
+                _ => ::core::unreachable!(),
+            }
+        }
+    };
+
     Ok(quote! {
         struct __V;
         impl genlayer_calldata::codec::Visitor for __V {
-            type Value = #name;
+            type Value = #value_ty;
             fn visit_map<__A: genlayer_calldata::codec::MapAccess>(
                 self,
                 _len: u64,
                 mut __map: __A,
-            ) -> ::core::result::Result<#name, genlayer_calldata::codec::DecodeError> {
+            ) -> ::core::result::Result<#value_ty, genlayer_calldata::codec::DecodeError> {
                 #(#var_decls)*
-                while let ::core::option::Option::Some((__key, __val)) =
-                    __map.next_element::<genlayer_calldata::Value>()?
-                {
-                    match __key {
-                        #(#match_arms)*
-                        __other => {
-                            return ::core::result::Result::Err(
-                                genlayer_calldata::codec::DecodeError::UnknownField(
-                                    __other.to_owned()
-                                )
-                            );
-                        }
-                    }
+                while let ::core::option::Option::Some(__key) = __map.next_key()? {
+                    #entry_body
                 }
-                Ok(#name {
+                ::core::result::Result::Ok(#constructor {
                     #(#field_constructions),*
                 })
             }
         }
-        __deserializer.deserialize(__V)
     })
 }
 
@@ -628,97 +662,15 @@ fn decode_variant_payload(
         }
 
         Fields::Named(fields) => {
-            let mut entries: Vec<(String, &syn::Ident, &syn::Type, FieldAttrs)> = Vec::new();
-            for f in &fields.named {
-                let ident = f.ident.as_ref().unwrap();
-                let attrs = FieldAttrs::from_ast(&f.attrs)?;
-                attrs.reject_option_as_absence_here(ident)?;
-                let wire = attrs.wire_name(ident);
-                entries.push((wire, ident, &f.ty, attrs));
-            }
-
-            let option_vars: Vec<_> = entries
-                .iter()
-                .map(|(_, ident, _, _)| {
-                    syn::Ident::new(&format!("__f_{ident}"), proc_macro2::Span::call_site())
-                })
-                .collect();
-
-            let field_tys: Vec<_> = entries.iter().map(|(_, _, ty, _)| *ty).collect();
-
-            // Two-phase per-field dispatch (key -> index -> typed value), so the
-            // key borrow is released before `next_value` reads the value.
-            let mut key_arms: Vec<TokenStream> = Vec::new();
-            let mut assign_arms: Vec<TokenStream> = Vec::new();
-            for (j, ((_, _, ty, attrs), var)) in entries.iter().zip(&option_vars).enumerate() {
-                let wire = &entries[j].0;
-                let idx = proc_macro2::Literal::usize_unsuffixed(j);
-                key_arms.push(quote! { #wire => #idx, });
-                let assign = if let Some(func) = &attrs.deserialize_with {
-                    quote! {
-                        #idx => {
-                            let __v = __m.next_value::<genlayer_calldata::Value>()?;
-                            #var = ::core::option::Option::Some(#func(__v)?);
-                        }
-                    }
-                } else {
-                    quote! {
-                        #idx => { #var = ::core::option::Option::Some(__m.next_value::<#ty>()?); }
-                    }
-                };
-                assign_arms.push(assign);
-            }
-
-            let field_constructions =
-                entries
-                    .iter()
-                    .zip(&option_vars)
-                    .map(|((wire, ident, _, attrs), var)| {
-                        if let Some(default_fn) = &attrs.default {
-                            quote! { #ident: #var.unwrap_or_else(#default_fn) }
-                        } else {
-                            quote! {
-                                #ident: #var.ok_or(
-                                    genlayer_calldata::codec::DecodeError::FieldMissing(#wire)
-                                )?
-                            }
-                        }
-                    });
-
+            let visitor = named_fields_visitor(
+                enum_name,
+                quote!(#enum_name::#variant_ident),
+                &fields.named,
+                false,
+            )?;
             Ok(quote! {
-                struct __PayloadV;
-                impl genlayer_calldata::codec::Visitor for __PayloadV {
-                    type Value = #enum_name;
-                    fn visit_map<__M: genlayer_calldata::codec::MapAccess>(
-                        self,
-                        _len: u64,
-                        mut __m: __M,
-                    ) -> ::core::result::Result<#enum_name, genlayer_calldata::codec::DecodeError> {
-                        #(
-                            let mut #option_vars: ::core::option::Option<#field_tys> = ::core::option::Option::None;
-                        )*
-                        while let ::core::option::Option::Some(__key) = __m.next_key()? {
-                            let __idx: usize = match __key {
-                                #(#key_arms)*
-                                __other => {
-                                    return ::core::result::Result::Err(
-                                        genlayer_calldata::codec::DecodeError::UnknownField(
-                                            __other.to_owned()
-                                        )
-                                    );
-                                }
-                            };
-                            match __idx {
-                                #(#assign_arms)*
-                                _ => ::core::unreachable!(),
-                            }
-                        }
-                        ::core::result::Result::Ok(#enum_name::#variant_ident {
-                            #(#field_constructions),*
-                        })
-                    }
-                }
-                __map.next_value_visit(__PayloadV)
+                #visitor
+                __map.next_value_visit(__V)
             })
         }
     }
