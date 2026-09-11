@@ -50,10 +50,17 @@ impl BalanceCache {
     }
 
     pub fn insert(&self, address: calldata::Address, balance: primitive_types::U256) {
-        self.0
+        let evicted = self
+            .0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(address, balance);
+        if let Some(const_lru::InsertReplaced::OldValue(old)) = evicted {
+            assert_eq!(
+                old, balance,
+                "balance cache should not be updated with a different value"
+            );
+        }
     }
 }
 
