@@ -76,18 +76,18 @@ pub struct MainCallData {
     #[calldata(rename = "", option_as_absence)]
     pub name: Option<String>,
     #[calldata(option_as_absence)]
-    pub args: Option<Vec<calldata::unparsed::Maybe<Value>>>,
+    pub args: Option<calldata::unparsed::Maybe<Vec<Value>>>,
     #[calldata(option_as_absence)]
-    pub kwargs: Option<calldata::Map<calldata::unparsed::Maybe<Value>>>,
+    pub kwargs: Option<calldata::unparsed::Maybe<calldata::Map<Value>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, calldata::Encode, calldata::Decode)]
 #[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct MainDeployData {
     #[calldata(option_as_absence)]
-    pub args: Option<Vec<calldata::unparsed::Maybe<Value>>>,
+    pub args: Option<calldata::unparsed::Maybe<Vec<Value>>>,
     #[calldata(option_as_absence)]
-    pub kwargs: Option<calldata::Map<calldata::unparsed::Maybe<Value>>>,
+    pub kwargs: Option<calldata::unparsed::Maybe<calldata::Map<Value>>>,
 }
 
 /// Core message data that represents the transaction context.

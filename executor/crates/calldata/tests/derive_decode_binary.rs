@@ -76,7 +76,7 @@ struct CallData {
     #[calldata(rename = "", option_as_absence)]
     name: Option<String>,
     #[calldata(option_as_absence)]
-    args: Option<Vec<Maybe<Value>>>,
+    args: Option<Maybe<Vec<Value>>>,
 }
 
 #[derive(Debug, PartialEq, Decode)]
@@ -209,7 +209,10 @@ fn empty_key_carries_the_renamed_field() {
         got,
         CallData {
             name: Some("method".into()),
-            args: Some(vec![checked(&Value::Null)]),
+            args: Some(Maybe::Checked(Raw(encode(&Value::Array(vec![
+                Value::Null
+            ]))
+            .into()))),
         }
     );
 }
@@ -221,7 +224,7 @@ fn empty_key_absent_is_none() {
         got,
         CallData {
             name: None,
-            args: Some(vec![]),
+            args: Some(Maybe::Checked(Raw(encode(&Value::Array(vec![])).into()))),
         }
     );
 }

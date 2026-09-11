@@ -679,6 +679,136 @@ fn assert_checked<T: std::fmt::Debug>(
     }
 }
 
+fn flat_argument_request(deploy: bool) -> (Vec<u8>, u32) {
+    let calldata = abi::entry::MainDeployData {
+        args: Some(vec![calldata::Value::Null; 16_384].into()),
+        kwargs: Some(
+            (0..1024)
+                .map(|i| (format!("k{i}"), calldata::Value::Null))
+                .collect::<calldata::Map<_>>()
+                .into(),
+        ),
+    };
+    let params = valid_params();
+    let memory = memory_limiter_consts::EXECUTION_EMISSION_BASE_SIZE
+        + u32::try_from(calldata::encode_obj(&calldata).len()).unwrap()
+        + u32::try_from(params.rotations.len()).unwrap()
+            * memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE;
+    let request = if deploy {
+        gl_call::Message::EmitInternalDeployMessage {
+            calldata,
+            code: bytes::Bytes::new(),
+            value: U256::zero(),
+            on: gl_call::On::Finalized,
+            salt_nonce: U256::zero(),
+            use_balance: true,
+            fee_params: Some(params),
+        }
+    } else {
+        gl_call::Message::EmitInternalMessage {
+            address: calldata::Address::zero(),
+            calldata: abi::entry::MainCallData {
+                name: None,
+                args: calldata.args,
+                kwargs: calldata.kwargs,
+            },
+            value: U256::zero(),
+            on: gl_call::On::Finalized,
+            use_balance: true,
+            fee_params: Some(params),
+        }
+    };
+    (calldata::encode_obj(&request), memory)
+}
+
+#[tokio::test]
+async fn gl_call_flat_arguments_fit_their_wire_budget_and_preserve_the_execution_hash() {
+    for deploy in [false, true] {
+        let (request, memory) = flat_argument_request(deploy);
+        let mut test = EmissionTestContext::new(memory, 1);
+        gl_call_wire(&mut test, &request).await.unwrap();
+
+        assert_eq!(test.context.limiter.get_remaining_memory(), 0);
+        assert_eq!(test.context.limiter.get_new_permanent_allocations(), memory);
+        let [stored] = &test.context.data.accumulator.emissions[..] else {
+            panic!("expected one emission");
+        };
+        let mut eager = stored.clone();
+        let (args, kwargs) = match &mut eager {
+            domain::ExecutionEmission::InternalMessage { calldata, .. } => {
+                (&mut calldata.args, &mut calldata.kwargs)
+            }
+            domain::ExecutionEmission::InternalDeployMessage { calldata, .. } => {
+                (&mut calldata.args, &mut calldata.kwargs)
+            }
+            other => panic!("unexpected emission: {other:?}"),
+        };
+        assert_checked(args.as_ref().unwrap(), "flat args");
+        assert_checked(kwargs.as_ref().unwrap(), "flat kwargs");
+        *args = Some(args.take().unwrap().materialize().unwrap().into());
+        *kwargs = Some(kwargs.take().unwrap().materialize().unwrap().into());
+        assert_eq!(calldata::encode_obj(stored), calldata::encode_obj(&eager));
+
+        let report = |emission| {
+            let mut result = rt::vm::FullResult::empty_from(rt::vm::RunOk::empty_return());
+            result.emissions = vec![emission];
+            host::FullResult::new(
+                result,
+                bytes::Bytes::new(),
+                None,
+                Default::default(),
+                Default::default(),
+                U256::zero(),
+                Vec::new(),
+            )
+            .reported
+        };
+        assert_eq!(
+            report(stored.clone()).execution_hash,
+            report(eager).execution_hash
+        );
+        let consumed = test
+            .context
+            .data
+            .supervisor
+            .shared_data
+            .data_fees_limit
+            .consumed()
+            .await;
+        assert_eq!(consumed.message_fee, U256::zero());
+        assert_eq!(consumed.message_receipt, U256::one());
+        assert_eq!(
+            test.context.data.accumulator.messages_value_decremented,
+            U256::one()
+        );
+        test.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn gl_call_flat_arguments_over_budget_have_no_effects() {
+    for deploy in [false, true] {
+        let (request, memory) = flat_argument_request(deploy);
+        let mut test = EmissionTestContext::new(memory - 1, 1);
+        let error = gl_call_wire(&mut test, &request).await.unwrap_err();
+
+        assert!(trap_message(error).contains("out_of memory"));
+        assert!(test.context.data.accumulator.emissions.is_empty());
+        assert_eq!(test.context.limiter.get_remaining_memory(), memory - 1);
+        assert_eq!(test.context.limiter.get_new_permanent_allocations(), 0);
+        assert_eq!(
+            test.context.data.accumulator.messages_value_decremented,
+            U256::zero()
+        );
+        let fees = &test.context.data.supervisor.shared_data.data_fees_limit;
+        assert_eq!(fees.remaining().await[0], U256::one());
+        let consumed = fees.consumed().await;
+        assert_eq!(consumed.message_fee, U256::zero());
+        assert_eq!(consumed.message_receipt, U256::zero());
+        test.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn gl_call_event_retains_the_blob_as_validated_wire_bytes() {
     let mut test = EmissionTestContext::new(u32::MAX, 1_000_000);
@@ -713,15 +843,14 @@ async fn gl_call_event_retains_the_blob_as_validated_wire_bytes() {
 async fn gl_call_internal_message_retains_calldata_args_as_validated_wire_bytes() {
     let mut test = EmissionTestContext::new(u32::MAX, 1_000_000);
     let arg = calldata::Value::Map(nested_blob());
+    let args = vec![arg.clone(), calldata::Value::Str("plain".to_owned())];
+    let kwargs = calldata::Map::from([("kw".to_owned(), arg)]);
     let request = calldata::encode_obj(&gl_call::Message::EmitInternalMessage {
         address: calldata::Address::zero(),
         calldata: abi::entry::MainCallData {
             name: None,
-            args: Some(vec![
-                arg.clone().into(),
-                calldata::Value::Str("plain".to_owned()).into(),
-            ]),
-            kwargs: Some(calldata::Map::from([("kw".to_owned(), arg.clone().into())])),
+            args: Some(args.clone().into()),
+            kwargs: Some(kwargs.clone().into()),
         },
         value: U256::zero(),
         on: gl_call::On::Finalized,
@@ -738,17 +867,17 @@ async fn gl_call_internal_message_retains_calldata_args_as_validated_wire_bytes(
     else {
         panic!("unexpected emissions: {emissions:?}");
     };
-    let args = stored.args.as_ref().unwrap();
-    assert_eq!(args.len(), 2);
     assert_eq!(
-        assert_checked(&args[0], "args[0]").0.as_ref(),
-        calldata::encode(&arg).as_slice()
+        assert_checked(stored.args.as_ref().unwrap(), "args")
+            .0
+            .as_ref(),
+        calldata::encode_obj(&args).as_slice()
     );
-    assert_checked(&args[1], "args[1]");
-    let kwargs = stored.kwargs.as_ref().unwrap();
     assert_eq!(
-        assert_checked(&kwargs["kw"], "kwargs[kw]").0.as_ref(),
-        calldata::encode(&arg).as_slice()
+        assert_checked(stored.kwargs.as_ref().unwrap(), "kwargs")
+            .0
+            .as_ref(),
+        calldata::encode_obj(&kwargs).as_slice()
     );
 
     test.shutdown().await;
