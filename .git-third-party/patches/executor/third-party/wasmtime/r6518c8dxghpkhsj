@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: kp2pml30 <kp2pml30@gmail.com>
+Date: Thu, 2 Jul 2026 22:33:10 +0900
+Subject: [PATCH] =?UTF-8?q?chore(wasm):=20rename=20DeterministicMode=20tra?=
+ =?UTF-8?q?p=20to=20NondetInstruction=20=E2=99=BB=EF=B8=8F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ crates/c-api/include/wasmtime/trap.h              | 4 ++--
+ crates/c-api/src/trap.rs                          | 2 +-
+ crates/cranelift/src/func_environ.rs              | 4 ++--
+ crates/cranelift/src/lib.rs                       | 4 ++--
+ crates/cranelift/src/translate/code_translator.rs | 2 +-
+ crates/environ/src/trap_encoding.rs               | 4 ++--
+ 6 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/crates/c-api/include/wasmtime/trap.h b/crates/c-api/include/wasmtime/trap.h
+index f5dfe91..d58a268 100644
+--- a/crates/c-api/include/wasmtime/trap.h
++++ b/crates/c-api/include/wasmtime/trap.h
+@@ -144,8 +144,8 @@ enum wasmtime_trap_code_enum {
+   WASMTIME_TRAP_CODE_WAITABLE_SYNC_AND_ASYNC = 48,
+   /// An exception propagated out of a component without being caught.
+   WASMTIME_TRAP_CODE_UNCAUGHT_EXCEPTION = 49,
+-  /// A deterministic-mode restriction was violated.
+-  WASMTIME_TRAP_CODE_DETERMINISTIC_MODE = 50,
++  /// A nondeterministic instruction was reached in deterministic mode.
++  WASMTIME_TRAP_CODE_NONDET_INSTRUCTION = 50,
+ };
+ 
+ /**
+diff --git a/crates/c-api/src/trap.rs b/crates/c-api/src/trap.rs
+index 80dcb86..342489f 100644
+--- a/crates/c-api/src/trap.rs
++++ b/crates/c-api/src/trap.rs
+@@ -56,7 +56,7 @@ const _: () = {
+     assert!(Trap::StreamOpTooBig as u8 == 47);
+     assert!(Trap::WaitableSyncAndAsync as u8 == 48);
+     assert!(Trap::UncaughtException as u8 == 49);
+-    assert!(Trap::DeterministicMode as u8 == 50);
++    assert!(Trap::NondetInstruction as u8 == 50);
+ };
+ 
+ #[repr(C)]
+diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
+index fe1b8d8..7dea98f 100644
+--- a/crates/cranelift/src/func_environ.rs
++++ b/crates/cranelift/src/func_environ.rs
+@@ -5218,9 +5218,9 @@ impl FuncEnvironment<'_> {
+         self.fuel_save_from_var(builder);
+     }
+ 
+-    pub fn trap_deterministic_mode(&mut self, builder: &mut FunctionBuilder) {
++    pub fn trap_nondet_instruction(&mut self, builder: &mut FunctionBuilder) {
+         self.fuel_before_unreachable(builder);
+-        self.trap(builder, crate::TRAP_DETERMINISTIC_MODE);
++        self.trap(builder, crate::TRAP_NONDET_INSTRUCTION);
+         self.stacks.reachable = false;
+     }
+ 
+diff --git a/crates/cranelift/src/lib.rs b/crates/cranelift/src/lib.rs
+index 1511a65..5669ddb 100644
+--- a/crates/cranelift/src/lib.rs
++++ b/crates/cranelift/src/lib.rs
+@@ -77,8 +77,8 @@ pub const TRAP_CAST_FAILURE: TrapCode =
+     TrapCode::unwrap_user(Trap::CastFailure as u8 + TRAP_OFFSET);
+ pub const TRAP_UNCAUGHT_EXCEPTION: TrapCode =
+     TrapCode::unwrap_user(Trap::UncaughtException as u8 + TRAP_OFFSET);
+-pub const TRAP_DETERMINISTIC_MODE: TrapCode =
+-    TrapCode::unwrap_user(Trap::DeterministicMode as u8 + TRAP_OFFSET);
++pub const TRAP_NONDET_INSTRUCTION: TrapCode =
++    TrapCode::unwrap_user(Trap::NondetInstruction as u8 + TRAP_OFFSET);
+ 
+ /// Creates a new cranelift `Signature` with no wasm params/results for the
+ /// given calling convention.
+diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
+index 0a02c4d..772f112 100644
+--- a/crates/cranelift/src/translate/code_translator.rs
++++ b/crates/cranelift/src/translate/code_translator.rs
+@@ -4764,6 +4764,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
+     if environ.are_floats_enabled() {
+         return false;
+     }
+-    environ.trap_deterministic_mode(builder);
++    environ.trap_nondet_instruction(builder);
+     return true;
+ }
+diff --git a/crates/environ/src/trap_encoding.rs b/crates/environ/src/trap_encoding.rs
+index 68ed1e4..b2fdf2c 100644
+--- a/crates/environ/src/trap_encoding.rs
++++ b/crates/environ/src/trap_encoding.rs
+@@ -279,8 +279,8 @@ generate_trap_type! {
+         /// An exception propagated out of a component without being caught.
+         UncaughtException = "uncaught exception propagated out of component",
+ 
+-        /// A floating-point instruction was reached while floats were disabled.
+-        DeterministicMode = "deterministic mode violation (CPU)",
++        /// A nondeterministic floating-point instruction was reached.
++        NondetInstruction = "nondeterministic instruction (CPU)",
+ 
+         // if adding a variant here be sure to update `trap.rs` and `trap.h` as
+         // mentioned above

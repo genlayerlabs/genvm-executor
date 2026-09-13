@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    num::NonZeroUsize,
     sync::{atomic::AtomicU32, Arc},
 };
 
@@ -120,10 +121,12 @@ pub fn create_engines(
     det_conf
         .wasm_floats_enabled(false)
         .cranelift_nan_canonicalization(true)
-        .wasm_backtrace(true);
+        .wasm_backtrace_max_frames(NonZeroUsize::new(20));
 
     let mut non_det_conf = base_conf.clone();
-    non_det_conf.wasm_floats_enabled(true).wasm_backtrace(false);
+    non_det_conf
+        .wasm_floats_enabled(true)
+        .wasm_backtrace_max_frames(None);
 
     let det_engine = wasmtime::Engine::new(&det_conf)
         .map_err(crate::wasmtime_to_anyhow)

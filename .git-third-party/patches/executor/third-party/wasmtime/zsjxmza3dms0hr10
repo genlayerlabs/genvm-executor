@@ -11,18 +11,27 @@ Move memory fingerprinting off the error path: instead of hashing all
 linear memories on trap and attaching the result to the error, expose it
 as Store::fingerprint so callers take it on demand from the still-live
 store after execution finishes.
-
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 ---
- crates/wasmtime/src/runtime/func.rs  | 95 +++++++++++++++-------------
- crates/wasmtime/src/runtime/store.rs |  2 -
- 2 files changed, 50 insertions(+), 47 deletions(-)
+ crates/wasmtime/src/runtime/func.rs  | 105 +++++++++++++++------------
+ crates/wasmtime/src/runtime/store.rs |   2 -
+ 2 files changed, 59 insertions(+), 48 deletions(-)
 
 diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
-index c19cf62f..c09f17b5 100644
+index b0a53c5..c657833 100644
 --- a/crates/wasmtime/src/runtime/func.rs
 +++ b/crates/wasmtime/src/runtime/func.rs
-@@ -1418,6 +1418,53 @@ impl std::fmt::Display for Fingerprint {
+@@ -1462,7 +1462,9 @@ use std::collections::BTreeMap;
+ #[derive(Debug, Clone)]
+ /// A fingerprint of the current state of the Wasm store, except backtrace
+ pub struct Fingerprint {
+-    /// all modules by name
++    /// All module instances by unique name
++    ///
++    /// Duplicate module names are suffixed with `#2`, `#3`, and so on.
+     pub module_instances: BTreeMap<String, ModuleFingerprint>,
+ }
+ 
+@@ -1472,6 +1474,59 @@ impl std::fmt::Display for Fingerprint {
      }
  }
  
@@ -53,7 +62,13 @@ index c19cf62f..c09f17b5 100644
 +                memories: Vec::new(),
 +            };
 +
-+            let inst_mod_name = inst.module(&mut store.0).name().unwrap_or("").to_owned();
++            let module_name = inst.module(&mut store.0).name().unwrap_or("").to_owned();
++            let mut inst_mod_name = module_name.clone();
++            let mut duplicate = 2;
++            while fp.module_instances.contains_key(&inst_mod_name) {
++                inst_mod_name = format!("{module_name}#{duplicate}");
++                duplicate += 1;
++            }
 +
 +            for mem in inst.all_memories(store.0.store_opaque_mut()).collect::<Vec<_>>() {
 +                let data = match &mem.1 {
@@ -76,7 +91,7 @@ index c19cf62f..c09f17b5 100644
  /// Prepares for entrance into WebAssembly.
  ///
  /// This function will set up context such that `closure` is allowed to call a
-@@ -1451,52 +1498,10 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
+@@ -1505,52 +1560,10 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
      }
      core::mem::drop(previous_runtime_state);
      store.0.call_hook(CallHook::ReturningFromWasm)?;
@@ -133,10 +148,10 @@ index c19cf62f..c09f17b5 100644
  
  /// This type helps managing the state of the runtime when entering and exiting
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index 16e617d2..3656a449 100644
+index 9911f9d..f7ab83b 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
-@@ -725,8 +725,6 @@ enum StoreInstanceKind {
+@@ -703,8 +703,6 @@ enum StoreInstanceKind {
  pub struct GenVMCtx {
      /// non-zero if should quit
      pub should_quit: Arc<std::sync::atomic::AtomicU32>,
