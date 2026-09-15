@@ -332,7 +332,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     }
 
     if perm_size != args.permissions.len() {
-        anyhow::bail!("Invalid permissions {}", &args.permissions)
+        anyhow::bail!("Invalid permissions {}", args.permissions)
     }
 
     log_info!(genvm_id = genvm_id; "genvm id");
