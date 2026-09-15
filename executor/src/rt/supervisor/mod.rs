@@ -307,7 +307,7 @@ pub async fn submit_nondet_vm_task(zelf: &Arc<Supervisor>, task: NonDetVMTask) {
         .send(sync::Lock::new(task, tok))
         .await
         .inspect_err(|e| {
-            log_error!(error:err = e; "failed to submit nondet vm task");
+            log_error!(@operator, error:err = e; "failed to submit nondet vm task");
         });
 
     log_debug!(call_no = call_no; "nondet vm task submitted");
@@ -739,7 +739,7 @@ async fn nondet_vm_processor(
                     Ok(rt::vm::RunOk::Return(v)) => {
                         match v.as_bool() {
                             None => {
-                                log_warn!("nondet block returned non-bool value, setting to disagree");
+                                log_warn!(@user; "nondet block returned non-bool value, setting to disagree");
                                 true
                             },
                             Some(b) => !b,
@@ -748,17 +748,17 @@ async fn nondet_vm_processor(
                     Ok(rt::vm::RunOk::FatalVMError(e, cause)) => {
                         let e: anyhow::Error = rt::errors::Error::fatal_vm_cause(e, cause).into();
                         if let Some(old_err) = zelf.queue.encountered_error.swap(Some(e)) {
-                            log_error!(error:ah = old_err; "encountered another error, overwriting");
+                            log_error!(@operator, error:ah = old_err; "encountered another error, overwriting");
                         }
                         continue;
                     },
                     Ok(other) => {
-                        log_warn!(result:? = other; "unexpected result in nondet block, setting to disagree");
+                        log_warn!(@user, result:? = other; "unexpected result in nondet block, setting to disagree");
                         true
                     }
                     Err(e) => {
                         if let Some(old_err) = zelf.queue.encountered_error.swap(Some(e)) {
-                            log_error!(error:ah = old_err; "encountered another error, overwriting");
+                            log_error!(@operator, error:ah = old_err; "encountered another error, overwriting");
                         }
                         continue;
                     }

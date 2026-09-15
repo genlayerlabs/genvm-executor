@@ -26,7 +26,7 @@ fn describe_wasm(code: &[u8]) -> rt::errors::Result<WasmSelfDescription> {
             // parse failure, so it cannot take the other section down with it
             "genvm.version" => match std::str::from_utf8(section.data()) {
                 Ok(version) => res.version = Some(version.to_owned()),
-                Err(e) => log_warn!(error:err = e; "invalid utf-8 in the version section"),
+                Err(e) => log_warn!(@user, error:err = e; "invalid utf-8 in the version section"),
             },
             "genvm.runner.json" => {
                 res.runner_json = Some(bytes::Bytes::copy_from_slice(section.data()));
@@ -47,7 +47,7 @@ pub fn parse(code: bytes::Bytes) -> rt::errors::Result<super::Archive> {
         let described = match describe_wasm(code.as_ref()) {
             Ok(v) => v,
             Err(e) => {
-                log_warn!(default = host_fns::CURRENT_MAJOR_STR, error = e; "could not read wasm custom sections");
+                log_warn!(@user, default = host_fns::CURRENT_MAJOR_STR, error = e; "could not read wasm custom sections");
                 WasmSelfDescription::default()
             }
         };

@@ -61,7 +61,7 @@ pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
         }
     }
 
-    log_info!(runners = checked; "all runners present with correct hashes");
+    log_info!(@operator, runners = checked; "all runners present with correct hashes");
 
     if args.precompile {
         super::precompile::run(&config)?;

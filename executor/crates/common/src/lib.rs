@@ -60,7 +60,7 @@ impl BaseConfig {
         //    .init();
 
         if logger::STATIC_MIN_LEVEL > self.log_level {
-            log_warn!(requested:? = self.log_level, allowed:? = logger::STATIC_MIN_LEVEL; "requested level is higher than allowed");
+            log_warn!(@operator, requested:? = self.log_level, allowed:? = logger::STATIC_MIN_LEVEL; "requested level is higher than allowed");
         }
 
         log_info!(version = VERSION; "logging initialized");

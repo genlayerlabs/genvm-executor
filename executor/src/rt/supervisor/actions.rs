@@ -153,7 +153,7 @@ pub(crate) async fn resolve_runner_id(
         runners::IdUnresolved::Builtin { name, hash } => {
             let hash: Bytes32Hash = if hash == "test" || hash == "latest" {
                 if !supervisor.shared_data.debug_mode.allows_latest_resolution() {
-                    log_warn!(":{hash} runner used in non-debug mode, this is not allowed");
+                    log_warn!(@user; ":{hash} runner used in non-debug mode, this is not allowed");
                     return Err(make_malformed_runner_error(
                         "runner id doesn't match expected format",
                     ));
@@ -875,7 +875,7 @@ impl Ctx<'_, '_> {
                     Ok(Some(loaded)) => return Ok(loaded),
                     Ok(None) => {}
                     Err(e) => {
-                        log_error!(path:? = path, error:ah = e; "failed to load precompiled wasm module, recompiling");
+                        log_error!(@operator, path:? = path, error:ah = e; "failed to load precompiled wasm module, recompiling");
                     }
                 }
 

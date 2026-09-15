@@ -99,7 +99,7 @@ fn rational_to_u256(
         "fee cost must be non-negative"
     );
     if bytes.len() > 32 {
-        log_error!(error:err = rt::errors::internal!("fee cost exceeds U256 range: {int}"); "fee cost exceeds U256 range");
+        log_error!(@operator, error:err = rt::errors::internal!("fee cost exceeds U256 range: {int}"); "fee cost exceeds U256 range");
         return Ok(primitive_types::U256::MAX);
     }
     let mut buf = [0u8; 32];
@@ -371,7 +371,7 @@ impl DataLimit {
                 Ok(CostVec(costs))
             }
             Err(e) => {
-                log_error!(error:err = e; "failed to evaluate fee expression");
+                log_error!(@operator, error:err = e; "failed to evaluate fee expression");
                 Err(e).ctx("failed to evaluate fee expression")
             }
         }
@@ -428,11 +428,12 @@ impl DataLimit {
                     "validated bucket disappeared: {}",
                     name.as_str()
                 );
-                log_warn!(bucket = name.as_str(); "consume_bucket: bucket missing");
+                log_warn!(@operator, bucket = name.as_str(); "consume_bucket: bucket missing");
                 return false;
             };
             if *remaining < cost {
                 log_warn!(
+                    @user,
                     bucket = name.as_str(),
                     cost:display = cost,
                     remaining:display = *remaining;
@@ -449,6 +450,7 @@ impl DataLimit {
                 if prev_name == name {
                     let Some(total) = cumulative.checked_add(prev_cost) else {
                         log_warn!(
+                            @operator,
                             bucket = name.as_str();
                             "consume_bucket: cumulative cost overflow"
                         );
@@ -459,6 +461,7 @@ impl DataLimit {
             }
             if *remaining < cumulative {
                 log_warn!(
+                    @user,
                     bucket = name.as_str(),
                     cumulative:display = cumulative,
                     remaining:display = *remaining;
@@ -633,7 +636,7 @@ impl DataLimit {
                 .find(|(existing, _)| *existing == name)
             {
                 let Some(sum) = total.checked_add(cost) else {
-                    log_warn!(bucket = name.as_str(); "consume_message_fee: cost overflow");
+                    log_warn!(@operator, bucket = name.as_str(); "consume_message_fee: cost overflow");
                     return false;
                 };
                 *total = sum;
@@ -652,7 +655,7 @@ impl DataLimit {
                 .find(|(existing, _)| *existing == name)
             {
                 let Some(sum) = total.checked_add(cost) else {
-                    log_warn!(bucket = name.as_str(); "consume_message_fee: cost overflow");
+                    log_warn!(@operator, bucket = name.as_str(); "consume_message_fee: cost overflow");
                     return false;
                 };
                 *total = sum;
@@ -669,11 +672,12 @@ impl DataLimit {
                     "validated bucket disappeared: {}",
                     name.as_str()
                 );
-                log_warn!(bucket = name.as_str(); "consume_message_fee: bucket missing");
+                log_warn!(@operator, bucket = name.as_str(); "consume_message_fee: bucket missing");
                 return false;
             };
             if *remaining < total {
                 log_warn!(
+                    @user,
                     bucket = name.as_str(),
                     cost:display = total,
                     remaining:display = *remaining;

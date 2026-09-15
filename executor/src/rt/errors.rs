@@ -46,7 +46,7 @@ fn trap_to_vm_error(trap: wasmtime::Trap) -> abi::consts::VmError {
         Trap::Interrupt => t.interrupt(),
         Trap::NondetInstruction => t.nondet_instruction(),
         other => {
-            log_warn!(trap:? = other; "unexpected wasm trap variant");
+            log_warn!(@operator, trap:? = other; "unexpected wasm trap variant");
             t.val()
         }
     }

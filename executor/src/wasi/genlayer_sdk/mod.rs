@@ -406,7 +406,7 @@ impl From<std::num::TryFromIntError> for generated::types::Error {
 
 impl From<serde_json::Error> for generated::types::Error {
     fn from(err: serde_json::Error) -> Self {
-        log_info!(error:err = err; "deserialization failed, returning inval");
+        log_info!(@user, error:err = err; "deserialization failed, returning inval");
 
         generated::types::Errno::Inval.into()
     }
@@ -549,7 +549,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
         let request: gl_call::Message = match calldata::decode_obj(&request) {
             Ok(v) => v,
             Err(e) => {
-                log_info!(error:err = e; "calldata deserialization failed");
+                log_info!(@user, error:err = e; "calldata deserialization failed");
 
                 return Err(generated::types::Errno::Inval.into());
             }
@@ -885,7 +885,7 @@ impl ContextVFS<'_> {
         let space_left = self.context.limiter.get_remaining_memory();
 
         if space_left < top_limits::WEB_RENDER_MIN_SPACE {
-            log_warn!(space_left = space_left; "not enough memory for web render");
+            log_warn!(@user, space_left = space_left; "not enough memory for web render");
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
             )));
@@ -921,7 +921,7 @@ impl ContextVFS<'_> {
         let space_left = self.context.limiter.get_remaining_memory();
 
         if space_left < top_limits::WEB_REQUEST_MIN_SPACE {
-            log_warn!(space_left = space_left; "not enough memory for web request");
+            log_warn!(@user, space_left = space_left; "not enough memory for web request");
             return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                 rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
             )));
@@ -1128,6 +1128,7 @@ impl ContextVFS<'_> {
                 self.context.prev_time = now;
 
                 log_info!(
+                    @user,
                     message = text,
                     elapsed:? = now.duration_since(self.context.start_time),
                     since_last_trace:? = since_prev;

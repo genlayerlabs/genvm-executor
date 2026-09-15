@@ -133,7 +133,7 @@ impl Module {
         let mut lock = self.imp.lock().await;
         if let Some(stream) = &mut lock.stream {
             if let Err(e) = stream.shutdown().await {
-                log_error!(error:err = e; "closing stream");
+                log_error!(@operator, error:err = e; "closing stream");
             }
         }
         lock.stream = None;
@@ -196,7 +196,7 @@ impl Module {
                     genvm_modules_interfaces::Result::Ok(v) => Ok(Ok(v)),
                     genvm_modules_interfaces::Result::UserError(value) => Ok(Err(value)),
                     genvm_modules_interfaces::Result::FatalError(value) => {
-                        log_error!(error = value; "module error");
+                        log_error!(@operator, error = value; "module error");
                         Err(anyhow::anyhow!("module error: {value}"))
                     }
                 }

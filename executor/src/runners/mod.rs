@@ -173,13 +173,13 @@ fn parse_safe_address(s: &str) -> Option<[u8; 20]> {
     let s = s.strip_prefix("0x").unwrap_or(s);
 
     if s.len() != 40 {
-        log_warn!("address must be exactly 40 hex characters, got {}", s.len());
+        log_warn!(@user; "address must be exactly 40 hex characters, got {}", s.len());
         return None;
     }
 
     let mut address = [0u8; 20];
     if hex::decode_to_slice(s, &mut address).is_err() {
-        log_warn!("address contains invalid hex characters");
+        log_warn!(@user; "address contains invalid hex characters");
         return None;
     }
 
@@ -196,7 +196,7 @@ fn parse_safe_address(s: &str) -> Option<[u8; 20]> {
         return Some(address);
     }
 
-    log_warn!("address must be all lowercase, all uppercase, or valid checksum");
+    log_warn!(@user; "address must be all lowercase, all uppercase, or valid checksum");
     None
 }
 
@@ -215,7 +215,7 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
         }
 
         if !address.starts_with("0x") {
-            log_warn!("chain address must be 0x-prefixed");
+            log_warn!(@user; "chain address must be 0x-prefixed");
             return None;
         }
 
@@ -253,12 +253,12 @@ pub fn parse_runner_id(id: &str) -> Option<IdUnresolved> {
     // are already handled above; a `contract:<hash>` id must not fall through to the
     // generic builtin arm (the bare `contract` literal is handled at the top).
     if matches!(name, "contract" | "chain" | "custom") {
-        log_warn!("`{name}` is a reserved runner name and cannot be used as a builtin");
+        log_warn!(@user; "`{name}` is a reserved runner name and cannot be used as a builtin");
         return None;
     }
     for c in name.chars() {
         if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
-            log_warn!("character `{c}` is not allowed in runner id");
+            log_warn!(@user; "character `{c}` is not allowed in runner id");
             return None;
         }
     }
@@ -344,7 +344,7 @@ impl ArchiveCache {
         let contents = match self.get_file("version") {
             Ok(contents) => contents,
             Err(e) => {
-                log_warn!(error:err = e, runner = self.id; "failed to read version file for runner, using default");
+                log_warn!(@user, error:err = e, runner = self.id; "failed to read version file for runner, using default");
                 bytes::Bytes::copy_from_slice(host_fns::CURRENT_MAJOR_STR.as_bytes())
             }
         };
@@ -394,7 +394,7 @@ impl ArchiveCache {
                 match as_init.validate() {
                     Ok(()) => {}
                     Err(e) => {
-                        log_warn!(error:err = e, runner = self.id; "runner.json failed validation");
+                        log_warn!(@user, error:err = e, runner = self.id; "runner.json failed validation");
 
                         return Err(rt::errors::Error::vm(
                             genlayer_sdk::abi::consts::VmError::invalid_contract()
@@ -426,7 +426,7 @@ pub fn verify_runner(runner_id: &str) -> Option<(&str, &str)> {
 
     for c in runner_id.chars() {
         if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
-            log_warn!("character `{c}` is not allowed in runner id");
+            log_warn!(@user; "character `{c}` is not allowed in runner id");
 
             return None;
         }
@@ -434,7 +434,7 @@ pub fn verify_runner(runner_id: &str) -> Option<(&str, &str)> {
 
     for c in runner_hash.chars() {
         if !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '=' {
-            log_warn!("character `{c}` is not allowed in runner hash");
+            log_warn!(@user; "character `{c}` is not allowed in runner hash");
 
             return None;
         }

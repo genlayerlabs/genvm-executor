@@ -765,7 +765,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             total = match total.checked_add(ciov_read.buf_len) {
                 Some(total) => total,
                 None => {
-                    log_warn!("ciovec lengths do not fit the written-bytes count");
+                    log_warn!(@user; "ciovec lengths do not fit the written-bytes count");
                     return Err(generated::types::Errno::Overflow.into());
                 }
             };
@@ -782,11 +782,11 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
             let add_size: u32 = cow.len().try_into()?;
             size += add_size;
             if let Err(e) = stream.write_all(&cow) {
-                log_error!(e: err = e; "Failed to write to stream");
+                log_error!(@operator, e: err = e; "Failed to write to stream");
             }
         }
         if let Err(e) = stream.flush() {
-            log_error!(e: err = e; "Failed to flush stream");
+            log_error!(@operator, e: err = e; "Failed to flush stream");
         }
         Ok(size)
     }
@@ -1340,7 +1340,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         } else {
             // Non-deterministic mode: cryptographically secure random number generator
             if let Err(e) = getrandom::fill(&mut mem) {
-                log_error!(error:err = e; "random failed");
+                log_error!(@operator, error:err = e; "random failed");
                 return Err(generated::types::Errno::Io.into());
             }
         }
