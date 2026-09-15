@@ -316,13 +316,13 @@ impl Context {
     }
 }
 
-pub fn join_dir_and_path<'a, T: ?Sized>(
+pub fn join_dir_and_path<'a, T>(
     preopen: &vfs::Trie<()>,
     dir: impl Iterator<Item = &'a T> + Clone,
     path: &'a str,
 ) -> Result<Vec<&'a str>, generated::types::Error>
 where
-    T: AsRef<str> + 'a,
+    T: AsRef<str> + ?Sized + 'a,
 {
     let all_comp =
         vfs::split_normalize_paths(dir.clone().map(|s| s.as_ref()).chain(path.split('/')), true);

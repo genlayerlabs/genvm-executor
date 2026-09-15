@@ -24,13 +24,13 @@ impl super::Supervisor {
         det_validator.validate_all(wasm).with_context(|| {
             format!(
                 "validating {}",
-                &String::from_utf8_lossy(&wasm[..10.min(wasm.len())])
+                String::from_utf8_lossy(&wasm[..10.min(wasm.len())])
             )
         })?;
         non_det_validator.validate_all(wasm).with_context(|| {
             format!(
                 "validating {}",
-                &String::from_utf8_lossy(&wasm[..10.min(wasm.len())])
+                String::from_utf8_lossy(&wasm[..10.min(wasm.len())])
             )
         })?;
 
