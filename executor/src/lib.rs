@@ -577,7 +577,7 @@ pub async fn run_with(
 
     let merged_result = match (res, nondet_disagree_res) {
         (Err(e_res), Err(e_nondet)) => {
-            log_error!(error:ah = e_nondet; "non-deterministic execution failed");
+            log_error!(@operator, error:ah = e_nondet; "non-deterministic execution failed");
 
             Err(e_res)
         }
@@ -592,7 +592,7 @@ pub async fn run_with(
     };
 
     let res = merged_result.inspect_err(|e| {
-        log_error!(error:ah = &e; "internal error");
+        log_error!(@operator, error:ah = &e; "internal error");
     });
 
     if let Ok((_, Some(disag))) = &res {

@@ -357,7 +357,7 @@ impl Reader {
         if !runners_path.exists() {
             return Err(errors::Error::internal(format!(
                 "path {:#?} doesn't exist",
-                &runners_path
+                runners_path
             )));
         }
 

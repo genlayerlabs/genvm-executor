@@ -62,6 +62,50 @@ impl<'d> serde::Deserialize<'d> for Level {
     }
 }
 
+/// Who a record is meant for. It is a tag only: it never takes part in filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Default)]
+#[repr(u32)]
+pub enum Audience {
+    #[default]
+    Introspector,
+    Operator,
+    User,
+}
+
+impl std::fmt::Display for Audience {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Introspector => f.write_str("introspector"),
+            Self::Operator => f.write_str("operator"),
+            Self::User => f.write_str("user"),
+        }
+    }
+}
+
+impl FromStr for Audience {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
+        match s.to_lowercase().as_str() {
+            "introspector" => Ok(Self::Introspector),
+            "operator" => Ok(Self::Operator),
+            "user" => Ok(Self::User),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'d> serde::Deserialize<'d> for Audience {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'d>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(&s)
+            .map_err(|_| serde::de::Error::custom(format!("Unknown log audience: {s}")))
+    }
+}
+
 pub struct Logger {
     filter: DefaultFilterer,
     conf: LogIntoBufferConfig,
@@ -130,6 +174,7 @@ pub static __LOGGER: std::sync::OnceLock<Logger> = std::sync::OnceLock::new();
 #[derive(Clone, Copy)]
 pub struct Callsite {
     pub level: Level,
+    pub audience: Audience,
     pub target: &'static str,
 }
 
@@ -198,6 +243,27 @@ pub const fn statically_enabled(callsite: Callsite) -> bool {
     STATIC_MIN_LEVEL.filter_enables(callsite.level)
 }
 
+/// A kv key the record format owns. `audience` classifies the record downstream, so
+/// a second one in the kv list would let a callsite spoof that classification.
+pub const fn is_reserved_kv_key(key: &str) -> bool {
+    const RESERVED: &[u8] = b"audience";
+
+    let key = key.as_bytes();
+    if key.len() != RESERVED.len() {
+        return false;
+    }
+
+    let mut i = 0;
+    while i < key.len() {
+        if key[i] != RESERVED[i] {
+            return false;
+        }
+        i += 1;
+    }
+
+    true
+}
+
 #[macro_export]
 macro_rules! __make_capture {
     (= $value:expr) => {
@@ -242,14 +308,74 @@ macro_rules! __make_capture {
     };
 }
 
+/// Captures allowed for [`Audience::User`]: the unbounded and serialising ones
+/// (`ah`, `bytes`, `serde`, `cd`) are absent on purpose - using one under `@user`
+/// fails to compile.
+#[macro_export]
+macro_rules! __make_capture_user {
+    (= $value:expr) => {
+        $crate::logger::Capture::Display(&$value)
+    };
+
+    (display = $value:expr) => {
+        $crate::logger::Capture::Display(&$value)
+    };
+
+    (err = $value:expr) => {
+        $crate::logger::Capture::Error(&$value)
+    };
+
+    (? = $value:expr) => {
+        $crate::logger::Capture::Debug(&$value)
+    };
+
+    (id = $value:expr) => {
+        $crate::logger::Capture::Id($value)
+    };
+}
+
+#[macro_export]
+macro_rules! __audience {
+    (user) => {
+        $crate::logger::Audience::User
+    };
+
+    (operator) => {
+        $crate::logger::Audience::Operator
+    };
+
+    (introspector) => {
+        $crate::logger::Audience::Introspector
+    };
+}
+
+/// Picks the audience value and the capture macro for an `@ident` form, then
+/// forwards to `$impl` with both prepended.
+#[macro_export]
+macro_rules! __log_with_audience {
+    ($imp:ident, user, $($rest:tt)+) => {
+        $crate::$imp!($crate::logger::Audience::User, __make_capture_user, $($rest)+)
+    };
+
+    ($imp:ident, $aud:ident, $($rest:tt)+) => {
+        $crate::$imp!($crate::__audience!($aud), __make_capture, $($rest)+)
+    };
+}
+
 #[macro_export]
 macro_rules! __do_log {
-    ($callsite:tt, $log:tt, $($key:tt $(:$capture:tt)? $(= $value:expr)?),+; $($arg:tt)+) => ({
+    ($cap:ident, $callsite:tt, $log:tt, $($key:tt $(:$capture:tt)? $(= $value:expr)?),+; $($arg:tt)+) => ({
+        $(const {
+            assert!(
+                !$crate::logger::is_reserved_kv_key(stringify!($key)),
+                "this key is owned by the record format",
+            )
+        };)+
         #[allow(unused_variables)]
         let res = <_ as $crate::logger::ILogger>::try_log($log, $crate::logger::Record {
             callsite: $callsite,
             args: format_args!($($arg)+),
-            kv: &[$((stringify!($key), $crate::__make_capture!($($capture)* = $($value)*))),+] as &[_],
+            kv: &[$((stringify!($key), $crate::$cap!($($capture)* = $($value)*))),+] as &[_],
             file: file!(),
             line: line!(),
         });
@@ -259,7 +385,7 @@ macro_rules! __do_log {
         }
     });
 
-    ($callsite:tt, $log:tt, $($arg:tt)+) => ({
+    ($cap:ident, $callsite:tt, $log:tt, $($arg:tt)+) => ({
         let res = <_ as $crate::logger::ILogger>::try_log($log, $crate::logger::Record {
             callsite: $callsite,
             args: format_args!($($arg)+),
@@ -275,16 +401,17 @@ macro_rules! __do_log {
 }
 
 #[macro_export]
-macro_rules! log_static {
-    ($level:expr, $($arg:tt)+) => {{
+macro_rules! __log_static_impl {
+    ($aud:expr, $cap:ident, $level:expr, $($arg:tt)+) => {{
         const CALLSITE: $crate::logger::Callsite = $crate::logger::Callsite {
             level: $level,
+            audience: $aud,
             target: module_path!(),
         };
         if const { $crate::logger::statically_enabled(CALLSITE) } {
             if let Some(cur_logger) = $crate::logger::__LOGGER.get() {
                 if <_ as $crate::logger::ILogger>::enabled(cur_logger, CALLSITE) {
-                    $crate::__do_log!(CALLSITE, cur_logger, $($arg)+)
+                    $crate::__do_log!($cap, CALLSITE, cur_logger, $($arg)+)
                 }
             }
         }
@@ -292,15 +419,66 @@ macro_rules! log_static {
 }
 
 #[macro_export]
-macro_rules! log_static_into {
-    ($level:expr, $logger:expr, $($arg:tt)+) => {{
+macro_rules! log_static {
+    ($level:expr, @$aud:ident, $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_static_impl, $aud, $level, $($arg)+)
+    };
+
+    ($level:expr, @$aud:ident; $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_static_impl, $aud, $level, $($arg)+)
+    };
+
+    ($level:expr, $($arg:tt)+) => {
+        $crate::__log_static_impl!(
+            $crate::logger::Audience::Introspector, __make_capture, $level, $($arg)+
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! __log_static_into_impl {
+    ($aud:expr, $cap:ident, $level:expr, $logger:expr, $($arg:tt)+) => {{
         const CALLSITE: $crate::logger::Callsite = $crate::logger::Callsite {
             level: $level,
+            audience: $aud,
             target: module_path!(),
         };
         if const { $crate::logger::statically_enabled(CALLSITE) } {
             if <_ as $crate::logger::ILogger>::enabled($logger, CALLSITE) {
-                $crate::__do_log!(CALLSITE, $logger, $($arg)+)
+                $crate::__do_log!($cap, CALLSITE, $logger, $($arg)+)
+            }
+        }
+    }}
+}
+
+#[macro_export]
+macro_rules! log_static_into {
+    ($level:expr, @$aud:ident, $logger:expr, $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_static_into_impl, $aud, $level, $logger, $($arg)+)
+    };
+
+    ($level:expr, @$aud:ident, $logger:expr; $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_static_into_impl, $aud, $level, $logger, $($arg)+)
+    };
+
+    ($level:expr, $logger:expr, $($arg:tt)+) => {
+        $crate::__log_static_into_impl!(
+            $crate::logger::Audience::Introspector, __make_capture, $level, $logger, $($arg)+
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! __log_with_level_impl {
+    ($aud:expr, $cap:ident, $level:expr, $($arg:tt)+) => {{
+        let callsite: $crate::logger::Callsite = $crate::logger::Callsite {
+            level: $level,
+            audience: $aud,
+            target: module_path!(),
+        };
+        if let Some(cur_logger) = $crate::logger::__LOGGER.get() {
+            if cur_logger.enabled(callsite) {
+                $crate::__do_log!($cap, callsite, cur_logger, $($arg)+)
             }
         }
     }}
@@ -308,30 +486,66 @@ macro_rules! log_static_into {
 
 #[macro_export]
 macro_rules! log_with_level {
-    ($level:expr, $($arg:tt)+) => {{
+    ($level:expr, @$aud:ident, $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_with_level_impl, $aud, $level, $($arg)+)
+    };
+
+    ($level:expr, @$aud:ident; $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_with_level_impl, $aud, $level, $($arg)+)
+    };
+
+    ($level:expr, @($aud:expr), $($arg:tt)+) => {
+        $crate::__log_with_level_impl!($aud, __make_capture, $level, $($arg)+)
+    };
+
+    ($level:expr, @($aud:expr); $($arg:tt)+) => {
+        $crate::__log_with_level_impl!($aud, __make_capture, $level, $($arg)+)
+    };
+
+    ($level:expr, $($arg:tt)+) => {
+        $crate::__log_with_level_impl!(
+            $crate::logger::Audience::Introspector, __make_capture, $level, $($arg)+
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! __log_with_level_into_impl {
+    ($aud:expr, $cap:ident, $level:expr, $logger:expr, $($arg:tt)+) => {{
         let callsite: $crate::logger::Callsite = $crate::logger::Callsite {
             level: $level,
+            audience: $aud,
             target: module_path!(),
         };
-        if let Some(cur_logger) = $crate::logger::__LOGGER.get() {
-            if cur_logger.enabled(callsite) {
-                $crate::__do_log!(callsite, cur_logger, $($arg)+)
-            }
+        if <_ as $crate::logger::ILogger>::enabled($logger, callsite) {
+            $crate::__do_log!($cap, callsite, $logger, $($arg)+)
         }
     }}
 }
 
 #[macro_export]
 macro_rules! log_with_level_into {
-    ($level:expr, $logger:expr, $($arg:tt)+) => {{
-        let callsite: $crate::logger::Callsite = $crate::logger::Callsite {
-            level: $level,
-            target: module_path!(),
-        };
-        if <_ as $crate::logger::ILogger>::enabled($logger, callsite) {
-            $crate::__do_log!(callsite, $logger, $($arg)+)
-        }
-    }}
+    ($level:expr, @$aud:ident, $logger:expr, $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_with_level_into_impl, $aud, $level, $logger, $($arg)+)
+    };
+
+    ($level:expr, @$aud:ident, $logger:expr; $($arg:tt)+) => {
+        $crate::__log_with_audience!(__log_with_level_into_impl, $aud, $level, $logger, $($arg)+)
+    };
+
+    ($level:expr, @($aud:expr), $logger:expr, $($arg:tt)+) => {
+        $crate::__log_with_level_into_impl!($aud, __make_capture, $level, $logger, $($arg)+)
+    };
+
+    ($level:expr, @($aud:expr), $logger:expr; $($arg:tt)+) => {
+        $crate::__log_with_level_into_impl!($aud, __make_capture, $level, $logger, $($arg)+)
+    };
+
+    ($level:expr, $logger:expr, $($arg:tt)+) => {
+        $crate::__log_with_level_into_impl!(
+            $crate::logger::Audience::Introspector, __make_capture, $level, $logger, $($arg)+
+        )
+    };
 }
 
 #[macro_export]
@@ -340,6 +554,7 @@ macro_rules! log_enabled {
         if let Some(cur_logger) = $crate::logger::__LOGGER.get() {
             cur_logger.enabled($crate::logger::Callsite {
                 level: $level,
+                audience: $crate::logger::Audience::Introspector,
                 target: module_path!(),
             })
         } else {
@@ -1165,22 +1380,39 @@ pub struct LogIntoBufferConfig {
     pub bytes_limit: usize,
 }
 
+pub const DEFAULT_BYTES_LIMIT: usize = 128;
+
+/// A user-visible record never dumps more than this, trace mode included
+pub const USER_BYTES_LIMIT: usize = 128;
+
 impl Default for LogIntoBufferConfig {
     fn default() -> Self {
-        Self { bytes_limit: 128 }
+        Self {
+            bytes_limit: DEFAULT_BYTES_LIMIT,
+        }
     }
 }
 
 pub fn log_into_buffer(
     buf: &mut Vec<u8>,
     record: Record<'_>,
-    conf: LogIntoBufferConfig,
+    mut conf: LogIntoBufferConfig,
 ) -> std::result::Result<(), Error> {
+    if record.callsite.audience == Audience::User {
+        conf.bytes_limit = conf.bytes_limit.min(USER_BYTES_LIMIT);
+    }
+
     buf.clear();
     let mut writer = std::io::Cursor::new(buf);
     writer.write_all(b"{")?;
 
-    writer.write_all(format!("\"level\":\"{}\",", record.callsite.level).as_bytes())?;
+    writer.write_all(
+        format!(
+            "\"level\":\"{}\",\"audience\":\"{}\",",
+            record.callsite.level, record.callsite.audience
+        )
+        .as_bytes(),
+    )?;
     write_k_v_str_fast(&mut writer, "target", record.callsite.target)?;
 
     write_comma(&mut writer)?;
@@ -1193,6 +1425,13 @@ pub fn log_into_buffer(
 
     let mut visitor = Visitor(&mut writer, 0, conf);
     for (k, v) in record.kv {
+        // the macros reject these at compile time, a hand-built record cannot be
+        // stopped that way
+        debug_assert!(!is_reserved_kv_key(k), "reserved kv key: {k}");
+        if is_reserved_kv_key(k) {
+            continue;
+        }
+
         write_comma(visitor.0)?;
         write_quoted_str_escaping(visitor.0, k)?;
         visitor.0.write_all(b":")?;
@@ -1327,7 +1566,7 @@ where
             bytes_limit: if filter == Level::Trace {
                 usize::MAX
             } else {
-                128
+                DEFAULT_BYTES_LIMIT
             },
         },
     };
@@ -1363,6 +1602,7 @@ fn log_panic(info: &std::panic::PanicHookInfo<'_>) {
         let _ = logger.try_log(Record {
             callsite: Callsite {
                 level: Level::Error,
+                audience: Audience::Operator,
                 target: "panic",
             },
             args: format_args!("thread '{thread_name}' panicked {info}"),
@@ -1375,6 +1615,7 @@ fn log_panic(info: &std::panic::PanicHookInfo<'_>) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[derive(serde::Serialize)]
     struct SerializableNoCopy(i32);
@@ -1392,5 +1633,20 @@ mod tests {
             ser
         };
         log_error!(x:serde = serde_json::json!({"foo": "bar"}); "just string");
+    }
+
+    /// The global-logger forms, which an integration test cannot reach without
+    /// initializing the process-wide logger. What they emit is covered by
+    /// `tests/logger_audience.rs` through the `_into` forms.
+    #[test]
+    fn compiles_with_audience() {
+        log_warn!(@operator, space_left = 11; "not enough memory");
+        log_info!(@user, error:err = std::fmt::Error; "calldata deserialization failed");
+        log_error!(@user; "no kv, just message");
+        log_error!(@introspector, x:serde = 11; "explicit default");
+
+        log_with_level!(Level::Info, @user, x = 1; "runtime level");
+        log_with_level!(Level::Info, @(Audience::User); "runtime audience");
+        log_with_level!(Level::Info, @(Audience::Operator), x:serde = 11; "runtime audience, kv");
     }
 }

@@ -28,7 +28,7 @@ impl Drop for Mmap {
             match rustix::mm::munmap(ptr, len) {
                 Ok(_) => {}
                 Err(e) => {
-                    log_error!(errno:? = e; "munmap failed")
+                    log_error!(@operator, errno:? = e; "munmap failed")
                 }
             }
         }

@@ -251,9 +251,10 @@ async fn consume_message_fee_internal(
             };
             if !checked_sum_le(total, messages_value_decremented, my_balance) {
                 log_warn!(
-                    fee_cost:cd = fee_total,
-                    value:cd = value,
-                    my_balance:cd = my_balance;
+                    @user,
+                    fee_cost:display = fee_total,
+                    value:display = value,
+                    my_balance:display = my_balance;
                     "insufficient balance to fund balance-funded message fee"
                 );
                 return Err(generated::types::Errno::InsufficientBalance.into());
@@ -265,7 +266,8 @@ async fn consume_message_fee_internal(
                 .await
             {
                 log_warn!(
-                    receipt_cost:cd = receipt_cost.reported_fee(),
+                    @user,
+                    receipt_cost:display = receipt_cost.reported_fee(),
                     buckets:? = shared_data.data_fees_limit;
                     "not enough remaining receipt limit to consume message receipt"
                 );
@@ -509,7 +511,7 @@ impl ContextVFS<'_> {
 
         let mut call_key = abi::CallKey([0u8; 32]);
         if calldata.len() < 4 {
-            log_warn!(len = calldata.len(); "calldata too short for method selector, using unnamed call key");
+            log_warn!(@user, len = calldata.len(); "calldata too short for method selector, using unnamed call key");
         } else {
             call_key.0[..4].copy_from_slice(&calldata[..4]);
         }
@@ -557,6 +559,7 @@ impl ContextVFS<'_> {
         }
         if has_candidates && matched.is_none() {
             log_warn!(
+                @user,
                 recipient = address,
                 call_key:? = call_key;
                 "matching external allocations are exhausted"
@@ -637,7 +640,7 @@ impl ContextVFS<'_> {
         blob: calldata::unparsed::Maybe<calldata::Map<calldata::Value>>,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         if !self.context.data.conf.permissions.deterministic {
-            log_warn!("EmitEvent requires deterministic mode");
+            log_warn!(@user; "EmitEvent requires deterministic mode");
 
             return Err(generated::types::Errno::Forbidden.into());
         }
@@ -646,13 +649,13 @@ impl ContextVFS<'_> {
         // `CallContract` child) must not emit events; otherwise the
         // emission is charged but later discarded with the child.
         if !self.context.data.conf.permissions.write_storage {
-            log_warn!("EmitEvent requires write_storage permission");
+            log_warn!(@user; "EmitEvent requires write_storage permission");
 
             return Err(generated::types::Errno::Forbidden.into());
         }
 
         if topics.len() > public_abi::EVENT_MAX_TOPICS.into_int_comptime() {
-            log_warn!(cnt = topics.len(), max = public_abi::EVENT_MAX_TOPICS; "too many topics");
+            log_warn!(@user, cnt = topics.len(), max = public_abi::EVENT_MAX_TOPICS; "too many topics");
             return Err(generated::types::Errno::Inval.into());
         }
 
@@ -661,7 +664,7 @@ impl ContextVFS<'_> {
 
         for t in topics.iter() {
             if t.len() != 32 {
-                log_warn!(len = t.len(); "invalid topic length");
+                log_warn!(@user, len = t.len(); "invalid topic length");
 
                 return Err(generated::types::Errno::Inval.into());
             }
@@ -846,6 +849,7 @@ impl ContextVFS<'_> {
             convert_call_key_to_modules(call_key),
         ) else {
             log_warn!(
+                @user,
                 recipient = address,
                 call_key:? = call_key,
                 on:? = on;
@@ -1053,6 +1057,7 @@ impl ContextVFS<'_> {
             convert_call_key_to_modules(abi::CallKey::DEPLOY),
         ) else {
             log_warn!(
+                @user,
                 recipient = calldata::Address::zero(),
                 call_key:? = abi::CallKey::DEPLOY,
                 on:? = on;

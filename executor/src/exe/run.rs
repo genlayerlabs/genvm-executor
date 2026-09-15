@@ -362,7 +362,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     }
 
     if perm_size != args.permissions.len() {
-        anyhow::bail!("Invalid permissions {}", &args.permissions)
+        anyhow::bail!("Invalid permissions {}", args.permissions)
     }
 
     log_info!(genvm_id = genvm_id; "genvm id");
@@ -396,7 +396,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         .with_context(|| "running genvm");
 
     if let Err(err) = &res {
-        log_error!(error:ah = err; "error running genvm");
+        log_error!(@operator, error:ah = err; "error running genvm");
     }
 
     runtime.block_on(async {
