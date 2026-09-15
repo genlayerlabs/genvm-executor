@@ -8,8 +8,8 @@ pub enum Capture {
     /// to the manager's own log.
     #[default]
     Disabled,
-    /// Captured, but bounded: the oldest log entries are dropped past a cap and
-    /// stdout/stderr are truncated to a tail.
+    /// Captured, but bounded: log entries are evicted past a cap, introspector
+    /// audience first, and stdout/stderr are truncated to a tail.
     Bounded,
     /// Captured in full.
     Unbounded,
