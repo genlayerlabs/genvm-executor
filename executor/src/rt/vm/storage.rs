@@ -618,8 +618,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         code_slot: SlotID,
         code_size: u32,
     ) -> rt::errors::Result<Box<[u8]>> {
-        let res = Box::new_uninit_slice(code_size.into_int_comptime());
-        let mut res = unsafe { res.assume_init() };
+        let mut res = vec![0u8; code_size.into_int_comptime()].into_boxed_slice();
 
         self.read(code_slot, 4, &mut res).await?;
 
