@@ -83,6 +83,8 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		:param idx: integer index or slice
 		:param val: value or sequence of values to assign
 		:raises IndexError: when integer index is out of range
+		:raises ValueError: when an extended slice (step other than 1) and the
+			sequence differ in length, as for :class:`list`
 
 		If assigning an element or one of several slice elements fails, earlier
 		writes made by this operation remain visible. A failed extending slice
@@ -100,7 +102,11 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 			left_in_new = len(new_val)
 			if isinstance(idx.step, int) and idx.step < 0:
 				new_val.reverse()
-			left_in_range = (stop - start) // step
+			left_in_range = len(range(start, stop, step))
+			if idx.step is not None and idx.step != 1 and left_in_new != left_in_range:
+				raise ValueError(
+					f'attempt to assign sequence of size {left_in_new} to extended slice of size {left_in_range}'
+				)
 			new_it = iter(new_val)
 
 			# just reassign existing values

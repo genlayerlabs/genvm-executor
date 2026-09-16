@@ -100,6 +100,40 @@ def test_setitem_slice(idx: slice):
 
 
 @pytest.mark.parametrize(
+	'idx, count',
+	[
+		(slice(0, 5, 2), 3),
+		(slice(None, None, 3), 4),
+		(slice(1, 10, 4), 3),
+		(slice(9, 2, -3), 3),
+		(slice(None, None, -1), 10),
+	],
+)
+def test_setitem_extended_slice(idx: slice, count: int):
+	lx = new_vec()
+	r: list[str] = [str(x) for x in range(10)]
+	lx[:] = r
+
+	x = [str(10 + i) for i in range(count)]
+	r[idx] = x
+	lx[idx] = x
+	same_iter(lx, r)
+
+
+@pytest.mark.parametrize(
+	'idx', [slice(0, 5, 2), slice(None, None, -1), slice(9, 2, -3)]
+)
+def test_setitem_extended_slice_size_mismatch(idx: slice):
+	lx = new_vec()
+	r: list[str] = [str(x) for x in range(10)]
+	lx[:] = r
+
+	with pytest.raises(ValueError):
+		lx[idx] = ['a', 'b']
+	same_iter(lx, r)
+
+
+@pytest.mark.parametrize(
 	'idx',
 	[
 		0,
