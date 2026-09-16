@@ -7,13 +7,13 @@
       "table_entry": 64,
       "file_mapping": 256,
       "fd_allocation": 96,
-      "runner_load_cost": 4096,
+      "runner_load_cost": 1048576,
       "vm_spawn_cost": 134217728,
       "new_storage_page": 256,
       "storage_page_inherited": 128,
-      "execution_emission_base_size": 256,
-      "message_fee_rotation_element_size": 32,
-      "nondet_output_base_size": 32
+      "execution_emission_base_size": 1024,
+      "message_fee_rotation_element_size": 128,
+      "nondet_output_base_size": 128
     }
   },
   {

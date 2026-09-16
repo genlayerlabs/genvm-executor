@@ -6,13 +6,13 @@ pub mod memory_limiter_consts {
     pub const TABLE_ENTRY: u32 = 64;
     pub const FILE_MAPPING: u32 = 256;
     pub const FD_ALLOCATION: u32 = 96;
-    pub const RUNNER_LOAD_COST: u32 = 4096;
+    pub const RUNNER_LOAD_COST: u32 = 1048576;
     pub const VM_SPAWN_COST: u32 = 134217728;
     pub const NEW_STORAGE_PAGE: u32 = 256;
     pub const STORAGE_PAGE_INHERITED: u32 = 128;
-    pub const EXECUTION_EMISSION_BASE_SIZE: u32 = 256;
-    pub const MESSAGE_FEE_ROTATION_ELEMENT_SIZE: u32 = 32;
-    pub const NONDET_OUTPUT_BASE_SIZE: u32 = 32;
+    pub const EXECUTION_EMISSION_BASE_SIZE: u32 = 1024;
+    pub const MESSAGE_FEE_ROTATION_ELEMENT_SIZE: u32 = 128;
+    pub const NONDET_OUTPUT_BASE_SIZE: u32 = 128;
 }
 
 pub mod top_limits {
