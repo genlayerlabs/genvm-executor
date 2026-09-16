@@ -524,3 +524,56 @@ async fn register_dead_content_reparses_and_recharges_identically() {
     assert_eq!(limiter.get_remaining_memory(), 0, "identical re-charge");
     assert!(fresh.contains(id));
 }
+
+/// A full loaded set is the whole bound: the load action refuses before it
+/// charges, so the rejected runner costs neither RAM nor a materialization.
+#[test]
+fn inherit_load_refuses_past_the_runner_count_limit() {
+    let full: Vec<u8> = (0..top_limits::MAX_RUNNERS as u8).collect();
+    let mut loaded = parent_of(&full[..full.len() - 1]);
+    let limiter = rt::memlimiter::Limiter::new();
+
+    let last = pin(custom_id(*full.last().unwrap()));
+    inherit_load(&limiter, &mut loaded, None, last).expect("the last slot is usable");
+    let before = limiter.get_remaining_memory();
+
+    let over = pin(custom_id(top_limits::MAX_RUNNERS as u8));
+    let err = inherit_load(&limiter, &mut loaded, None, over).unwrap_err();
+    assert!(
+        err.to_string().contains("out_of memory"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        limiter.get_remaining_memory(),
+        before,
+        "a refused load charges nothing"
+    );
+    assert!(!loaded.contains(custom_id(top_limits::MAX_RUNNERS as u8)));
+}
+
+#[tokio::test]
+async fn register_runner_refuses_past_the_runner_count_limit() {
+    let registry = runners::cache::WeakCache::new();
+    let code = valid_code();
+    let full: Vec<u8> = (0..top_limits::MAX_RUNNERS as u8).collect();
+    let mut loaded = parent_of(&full);
+    let limiter = rt::memlimiter::Limiter::new();
+    let before = limiter.get_remaining_memory();
+
+    let err = register_runner_load_into(&registry, &limiter, &mut loaded, None, code.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("out_of memory"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        limiter.get_remaining_memory(),
+        before,
+        "a refused registration charges nothing"
+    );
+    assert!(
+        !registry.cell(custom_id_of(&code)).initialized(),
+        "a refused registration never parses the code"
+    );
+}

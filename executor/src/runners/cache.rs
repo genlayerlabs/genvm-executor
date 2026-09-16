@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use super::*;
+use crate::int_traits::*;
 use crate::rt::errors::{self, ResultExt};
 use anyhow::Context;
+use genvm_common::internal_constants::top_limits;
 use symbol_table::GlobalSymbol;
 
 /// A shared, initialize-once cell holding an archive. A live [`ArchivePin`] keeps
@@ -66,6 +68,12 @@ impl LoadedSet {
 
     pub fn get(&self, id: GlobalSymbol) -> Option<&ArchivePin> {
         self.0.get(&id)
+    }
+
+    /// Whether another id would exceed the per-VM runner count. Only the load
+    /// action adds one, so this is the whole bound.
+    pub fn is_full(&self) -> bool {
+        self.0.len() >= top_limits::MAX_RUNNERS.into_int_comptime()
     }
 
     /// Records a freshly charged pin. The load action guarantees the id was not

@@ -5,7 +5,7 @@ use crate::{caching, public_abi, rt, runners, wasi};
 
 use anyhow::Context as _;
 use genlayer_sdk::abi;
-use genvm_common::internal_constants::memory_limiter_consts;
+use genvm_common::internal_constants::{memory_limiter_consts, top_limits};
 use genvm_common::*;
 use rt::errors::ResultExt as _;
 use wiggle::error::Context as _;
@@ -382,6 +382,23 @@ async fn record_runner_load(
         .await;
 }
 
+/// Refuses a load that would take the VM past `MAX_RUNNERS`. A count cap is the
+/// same kind of refusal as an exhausted budget -- the runner is well-formed, the
+/// VM just cannot hold it -- so it raises the same OOM the charge would.
+/// Checked before the charge, so a rejected load costs neither RAM nor a
+/// materialization.
+fn check_runner_slot(loaded: &runners::cache::LoadedSet) -> anyhow::Result<()> {
+    if loaded.is_full() {
+        log_warn!(
+            @user,
+            max = top_limits::MAX_RUNNERS;
+            "a sub-VM cannot load more runners"
+        );
+        return Err(out_of_memory());
+    }
+    Ok(())
+}
+
 fn out_of_memory() -> anyhow::Error {
     rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into()
 }
@@ -409,6 +426,10 @@ fn record_charged_load(
     det_fingerprint: Option<&mut sha3::Sha3_256>,
     pin: runners::cache::ArchivePin,
 ) {
+    debug_assert!(
+        !loaded.is_full(),
+        "a load action charged past the runner count limit",
+    );
     let id = pin.runner_id();
     let size = pin.total_size();
     fold_det_fingerprint(det_fingerprint, id);
@@ -434,7 +455,8 @@ fn attach_load(
 /// The **load action**: the single way any runner enters a VM.
 ///
 /// 1. already in the VM's loaded set -> free, done;
-/// 2. else charge `RUNNER_LOAD_COST + size` to `limiter` (OOM on failure),
+/// 2. else charge a slot (`MAX_RUNNERS`) and `RUNNER_LOAD_COST + size` to
+///    `limiter` -- either refusal is the same OOM -- then
 ///    materialize-or-attach the content, insert the pin, fold the det
 ///    fingerprint.
 ///
@@ -454,6 +476,7 @@ pub(crate) async fn load_action(
         record_runner_load(supervisor, resolved.id, pin.total_size(), "cached").await;
         return Ok(pin.clone());
     }
+    check_runner_slot(loaded)?;
 
     let Resolved { id, kind } = resolved;
     match kind {
@@ -593,6 +616,7 @@ pub(crate) fn inherit_load(
         log_runner_load(pin.runner_id(), pin.total_size(), "cached");
         return Ok(());
     }
+    check_runner_slot(loaded)?;
     attach_load(limiter, loaded, det_fingerprint, pin)?;
     Ok(())
 }
@@ -602,8 +626,8 @@ pub(crate) fn inherit_load(
 /// guarantees), in check order:
 ///
 /// 1. already in this VM's loaded set -> free no-op, same id;
-/// 2. charge `RUNNER_LOAD_COST + code.len()` -> OOM error, nothing charged or
-///    registered;
+/// 2. the VM is at `MAX_RUNNERS`, or `RUNNER_LOAD_COST + code.len()` does not
+///    fit its budget -> OOM error, nothing charged or registered;
 /// 3. parse (attach to a live registry entry, or parse and insert) -> a parse
 ///    failure is a deterministic invalid-contract error; the charge is retained
 ///    (released with the VM like any charge) and the runner is not in the loaded
@@ -659,6 +683,7 @@ async fn register_runner_load_into(
         log_runner_load(id, pin.total_size(), "cached");
         return Ok(id);
     }
+    check_runner_slot(loaded)?;
 
     // Charge before parsing (closes the previously-uncharged parse window).
     charge_load(limiter, code.len())?;

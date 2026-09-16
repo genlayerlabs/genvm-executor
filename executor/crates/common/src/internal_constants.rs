@@ -23,6 +23,7 @@ pub mod top_limits {
     pub const WEB_REQUEST_MIN_SPACE: u32 = 65536;
     pub const WEB_RENDER_MIN_SPACE: u32 = 134217728;
     pub const MAX_FDS: u32 = 1024;
+    pub const MAX_RUNNERS: u32 = 128;
     pub const WASM_CALL_DEPTH: u32 = 1024;
     pub const WASM_STACK_VALUE_SLOTS: u32 = 65535;
     pub const VFS_PATH_COMPONENTS: u32 = 128;
