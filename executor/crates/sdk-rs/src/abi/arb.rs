@@ -19,6 +19,16 @@ pub fn arb_vec_bytes(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Vec<b
     (0..len).map(|_| arb_bytes(u)).collect()
 }
 
+pub fn arb_limited_vec_bytes<const L: usize>(
+    u: &mut arbitrary::Unstructured,
+) -> arbitrary::Result<genlayer_calldata::LenLimitedVec<L, bytes::Bytes>> {
+    let len = u.int_in_range(0..=L)?;
+    let data = (0..len)
+        .map(|_| arb_bytes(u))
+        .collect::<arbitrary::Result<_>>()?;
+    Ok(genlayer_calldata::LenLimitedVec::new(data))
+}
+
 pub fn arb_vec_u256(
     u: &mut arbitrary::Unstructured,
 ) -> arbitrary::Result<Vec<primitive_types::U256>> {

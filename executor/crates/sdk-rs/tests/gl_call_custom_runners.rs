@@ -16,6 +16,56 @@ macro_rules! encode {
     }};
 }
 
+#[test]
+fn custom_runner_lists_accept_supported_counts_and_reject_decoder_overflow() {
+    use calldata::Value;
+
+    for kind in ["Sandbox", "RunNondet"] {
+        for count in [0, 33, 128, 512, 513] {
+            let runners = Value::Array(
+                (0..count)
+                    .map(|i| Value::Str(format!("custom:{i:064x}")))
+                    .collect(),
+            );
+            let mut fields = calldata::Map::from([("custom_runners".into(), runners)]);
+            if kind == "Sandbox" {
+                fields.extend([
+                    ("data".into(), Value::Bytes(Vec::new())),
+                    ("runner".into(), Value::Str("contract".into())),
+                    ("allow_write_storage".into(), Value::Bool(false)),
+                    ("allow_send_messages".into(), Value::Bool(false)),
+                    ("changes_on_error".into(), Value::Str("inherit".into())),
+                ]);
+            } else {
+                fields.extend([
+                    ("data_leader".into(), Value::Bytes(Vec::new())),
+                    ("data_validator".into(), Value::Bytes(Vec::new())),
+                ]);
+            }
+            let wire = calldata::encode(&Value::Map(calldata::Map::from([(
+                kind.into(),
+                Value::Map(fields),
+            )])));
+            let decoded = calldata::decode_obj::<Message>(&wire);
+            if count <= 512 {
+                let decoded = decoded.unwrap_or_else(|e| panic!("{kind} with {count} grants: {e}"));
+                let grants = match decoded {
+                    Message::Sandbox { custom_runners, .. }
+                    | Message::RunNondet { custom_runners, .. } => custom_runners.unwrap(),
+                    other => panic!("unexpected message: {other:?}"),
+                };
+                assert_eq!(grants.as_ref().len(), count);
+            } else {
+                let err = decoded.unwrap_err().to_string();
+                assert!(
+                    err.contains("expected 512 elements, got 513"),
+                    "{kind}: {err}"
+                );
+            }
+        }
+    }
+}
+
 /// `allow_register_runners` is gone from the wire, not merely ignored: an SDK
 /// still sending it is refused rather than silently running with a permission
 /// this line no longer models.
@@ -71,13 +121,15 @@ fn call_contract_catch_vm_error_round_trips() {
 /// A `Sandbox` carrying an explicit visibility list round-trips.
 #[test]
 fn sandbox_custom_runners_round_trip() {
-    let list = vec!["custom:aaaa".to_owned(), "custom:bbbb".to_owned()];
+    let list = (0..128)
+        .map(|i| format!("custom:{i:064x}"))
+        .collect::<Vec<_>>();
     let msg = Message::Sandbox {
         data: Bytes::from_static(b"x"),
         runner: "contract".to_owned(),
         allow_write_storage: false,
         allow_send_messages: false,
-        custom_runners: Some(list.clone()),
+        custom_runners: Some(calldata::LenLimitedVec::new(list.clone())),
         changes_on_error: ChangesOnError::Inherit,
     };
 
@@ -89,7 +141,7 @@ fn sandbox_custom_runners_round_trip() {
             changes_on_error,
             ..
         } => {
-            assert_eq!(custom_runners, Some(list));
+            assert_eq!(custom_runners.map(|r| r.into_inner()), Some(list));
             assert_eq!(changes_on_error, ChangesOnError::Inherit);
         }
         other => panic!("expected Sandbox, got {other:?}"),
@@ -135,7 +187,7 @@ fn run_nondet_runner_fields_round_trip() {
         data_leader: Bytes::from_static(b"l"),
         data_validator: Bytes::from_static(b"v"),
         runner: Some("custom:cccc".to_owned()),
-        custom_runners: Some(list.clone()),
+        custom_runners: Some(calldata::LenLimitedVec::new(list.clone())),
         catch_vm_error: false,
     };
 
@@ -148,7 +200,7 @@ fn run_nondet_runner_fields_round_trip() {
             ..
         } => {
             assert_eq!(runner, Some("custom:cccc".to_owned()));
-            assert_eq!(custom_runners, Some(list));
+            assert_eq!(custom_runners.map(|r| r.into_inner()), Some(list));
         }
         other => panic!("expected RunNondet, got {other:?}"),
     }

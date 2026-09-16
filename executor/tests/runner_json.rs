@@ -7,6 +7,7 @@ fn archive_with_runner_json(contents: &str) -> ArchiveCache {
     let files = Archive {
         total_size: contents.len() as u32,
         data: BTreeMap::from([("runner.json".to_owned(), contents)]),
+        meta_size: 0,
     };
     ArchiveCache::new(symbol_table::GlobalSymbol::from("runner:test"), files)
 }

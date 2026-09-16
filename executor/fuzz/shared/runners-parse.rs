@@ -144,9 +144,9 @@ fn archive_snapshot(archive: &runners::Archive) -> Vec<(String, bytes::Bytes)> {
 pub fn assert_parse_properties(runtime: &tokio::runtime::Runtime, code: Vec<u8>) {
     let code = bytes::Bytes::from(code);
 
-    let Ok(archive) = runners::parse(code.clone()) else {
+    let Ok(archive) = runners::parse(code.clone(), u32::MAX) else {
         assert!(
-            runners::parse(code).is_err(),
+            runners::parse(code, u32::MAX).is_err(),
             "parse rejected and then accepted the same code"
         );
         return;
@@ -154,8 +154,8 @@ pub fn assert_parse_properties(runtime: &tokio::runtime::Runtime, code: Vec<u8>)
 
     // Runner ids are content hashes, so two runs of one blob that disagree on the
     // archive are a consensus fork rather than a local inconsistency.
-    let again =
-        runners::parse(code.clone()).expect("parse accepted and then rejected the same code");
+    let again = runners::parse(code.clone(), u32::MAX)
+        .expect("parse accepted and then rejected the same code");
     assert_eq!(
         archive_snapshot(&archive),
         archive_snapshot(&again),

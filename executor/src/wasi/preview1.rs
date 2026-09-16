@@ -220,9 +220,7 @@ impl Context {
         let locs_arr_sum: usize = locs_arr
             .iter()
             .map(|x| x.len())
-            .fold(0usize, |acc, x| acc.saturating_add(x))
-            .try_into()
-            .with_context(|| "mapping destination path length overflow")?;
+            .fold(0usize, |acc, x| acc.saturating_add(x));
 
         let locs_arr_sum = locs_arr_sum.saturating_add(locs_arr.len());
         if locs_arr_sum > top_limits::VFS_PATH_LEN.into_int_comptime() {

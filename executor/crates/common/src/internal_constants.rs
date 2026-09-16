@@ -13,6 +13,7 @@ pub mod memory_limiter_consts {
     pub const EXECUTION_EMISSION_BASE_SIZE: u32 = 1024;
     pub const MESSAGE_FEE_ROTATION_ELEMENT_SIZE: u32 = 128;
     pub const NONDET_OUTPUT_BASE_SIZE: u32 = 128;
+    pub const ZIP_FILE_COST: u32 = 128;
 }
 
 pub mod top_limits {

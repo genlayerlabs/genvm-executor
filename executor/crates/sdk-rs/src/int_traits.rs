@@ -28,7 +28,7 @@ declare_caster!(usize, u64);
 declare_caster!(usize, u128);
 
 pub const fn u32_into_usize_comptime(x: u32) -> usize {
-    assert!(u32::BITS <= usize::BITS, "u32 cannot fit into usize");
+    const { assert!(u32::BITS <= usize::BITS, "u32 cannot fit into usize") };
 
     x as usize
 }

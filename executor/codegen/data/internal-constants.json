@@ -13,7 +13,8 @@
       "storage_page_inherited": 128,
       "execution_emission_base_size": 1024,
       "message_fee_rotation_element_size": 128,
-      "nondet_output_base_size": 128
+      "nondet_output_base_size": 128,
+      "zip_file_cost": 128
     }
   },
   {

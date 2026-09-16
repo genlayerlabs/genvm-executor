@@ -417,6 +417,17 @@ fn charge_load(limiter: &rt::memlimiter::Limiter, size: usize) -> anyhow::Result
     Ok(())
 }
 
+fn charge_load_post(
+    limiter: &rt::memlimiter::Limiter,
+    pin: &runners::cache::ArchivePin,
+) -> anyhow::Result<()> {
+    if !limiter.consume(pin.meta_size()) {
+        return Err(out_of_memory());
+    }
+
+    Ok(())
+}
+
 /// Records an already-charged load: folds the det fingerprint, inserts the pin
 /// into the loaded set, logs the line. Split from [`charge_load`] because a
 /// cache miss charges *before* materializing (so the charge precedes the peak),
@@ -437,8 +448,8 @@ fn record_charged_load(
     log_runner_load(id, size, "charged");
 }
 
-/// Attaches to an already-materialized shared cell: charges `RUNNER_LOAD_COST + size`
-/// then records the load. Its charge equals a miss's by content-determinism, so
+/// Attaches to an already-materialized shared cell: charges the base, content and
+/// metadata, then records the load. Its charge equals a miss's by content-determinism, so
 /// a VM cannot observe whether it materialized or attached.
 fn attach_load(
     limiter: &rt::memlimiter::Limiter,
@@ -448,14 +459,60 @@ fn attach_load(
 ) -> anyhow::Result<runners::cache::ArchivePin> {
     charge_load(limiter, pin.total_size().into_int_comptime())?;
     let out = pin.clone();
+    charge_load_post(limiter, &pin)?;
     record_charged_load(loaded, det_fingerprint, pin);
     Ok(out)
+}
+
+async fn materialize_load<Fut>(
+    limiter: &rt::memlimiter::Limiter,
+    loaded: &mut runners::cache::LoadedSet,
+    det_fingerprint: Option<&mut sha3::Sha3_256>,
+    cell: runners::cache::Cell,
+    id: symbol_table::GlobalSymbol,
+    size: usize,
+    materialize: impl FnOnce(u32) -> Fut,
+) -> anyhow::Result<runners::cache::ArchivePin>
+where
+    Fut: std::future::Future<Output = rt::errors::Result<runners::Archive>>,
+{
+    charge_load(limiter, size)?;
+    let mut initialized_here = false;
+    cell.get_or_try_init(|| async {
+        let max_meta_size = limiter.get_remaining_memory();
+        let archive = materialize(max_meta_size).await?;
+        assert_eq!(
+            u32_into_usize(archive.total_size),
+            size,
+            "materialized archive size differs from the charged size"
+        );
+        assert!(
+            archive.meta_size <= max_meta_size,
+            "materialized archive metadata exceeds the preflight budget"
+        );
+        initialized_here = true;
+        Ok::<_, rt::errors::Error>(runners::ArchiveCache::new(id, archive))
+    })
+    .await?;
+    let pin = runners::cache::pin_of(cell);
+    assert_eq!(
+        u32_into_usize(pin.total_size()),
+        size,
+        "materialized archive size differs from the charged size"
+    );
+    if initialized_here {
+        charge_load_post(limiter, &pin).expect("preflighted runner metadata charge must succeed");
+    } else {
+        charge_load_post(limiter, &pin)?;
+    }
+    record_charged_load(loaded, det_fingerprint, pin.clone());
+    Ok(pin)
 }
 
 /// The **load action**: the single way any runner enters a VM.
 ///
 /// 1. already in the VM's loaded set -> free, done;
-/// 2. else charge a slot (`MAX_RUNNERS`) and `RUNNER_LOAD_COST + size` to
+/// 2. else charge a slot (`MAX_RUNNERS`) and `RUNNER_LOAD_COST + size + metadata` to
 ///    `limiter` -- either refusal is the same OOM -- then
 ///    materialize-or-attach the content, insert the pin, fold the det
 ///    fingerprint.
@@ -479,22 +536,25 @@ pub(crate) async fn load_action(
     check_runner_slot(loaded)?;
 
     let Resolved { id, kind } = resolved;
-    match kind {
-        ResolvedKind::Custom => Err(make_malformed_runner_error(&format!(
+    if matches!(kind, ResolvedKind::Custom) {
+        return Err(make_malformed_runner_error(&format!(
             "custom runner {id} is not registered in this execution scope"
-        ))),
+        )));
+    }
+    let cell = supervisor.runner_cache.cell(id);
+    if cell.initialized() {
+        let pin = attach_load(
+            limiter,
+            loaded,
+            det_fingerprint,
+            runners::cache::pin_of(cell),
+        )?;
+        record_runner_load(supervisor, id, pin.total_size(), "charged").await;
+        return Ok(pin);
+    }
+    let pin = match kind {
+        ResolvedKind::Custom => unreachable!(),
         ResolvedKind::Disk { name, hash } => {
-            let cell = supervisor.runner_cache.cell(id);
-            if cell.initialized() {
-                let pin = attach_load(
-                    limiter,
-                    loaded,
-                    det_fingerprint,
-                    runners::cache::pin_of(cell),
-                )?;
-                record_runner_load(supervisor, id, pin.total_size(), "charged").await;
-                return Ok(pin);
-            }
             // Miss: learn the size from the file, charge, then materialize (so the
             // charge precedes the resident copy).
             let mut path = supervisor.runner_cache.runners_path().to_owned();
@@ -507,39 +567,25 @@ pub(crate) async fn load_action(
                 .with_ctx(|| format!("reading size of runner archive for {id}"))?
                 .len()
                 .into_int_downcast_panicking();
-            charge_load(limiter, charged_size)?;
-            cell.get_or_try_init(|| async {
-                let data = bytes::Bytes::from(
-                    std::fs::read(&path).with_ctx(|| format!("reading runner archive for {id}"))?,
-                );
-                let arch = runners::Archive::from_zip_bytes(data)
-                    .with_ctx(|| format!("parsing zip archive for {id}"))?;
-                Ok::<_, rt::errors::Error>(runners::ArchiveCache::new(id, arch))
-            })
-            .await?;
-            let pin = runners::cache::pin_of(cell);
-            // Content-determinism: attach and miss charge the same size.
-            debug_assert_eq!(
-                u32_into_usize(pin.total_size()),
+            materialize_load(
+                limiter,
+                loaded,
+                det_fingerprint,
+                cell,
+                id,
                 charged_size,
-                "materialized disk archive size differs from the charged size"
-            );
-            record_charged_load(loaded, det_fingerprint, pin.clone());
-            record_runner_load(supervisor, id, pin.total_size(), "charged").await;
-            Ok(pin)
+                |max_meta_size| async move {
+                    let data = bytes::Bytes::from(
+                        std::fs::read(&path)
+                            .with_ctx(|| format!("reading runner archive for {id}"))?,
+                    );
+                    runners::Archive::from_zip_bytes(data, max_meta_size)
+                        .with_ctx(|| format!("parsing zip archive for {id}"))
+                },
+            )
+            .await?
         }
         ResolvedKind::Chain { address, on, slot } => {
-            let cell = supervisor.runner_cache.cell(id);
-            if cell.initialized() {
-                let pin = attach_load(
-                    limiter,
-                    loaded,
-                    det_fingerprint,
-                    runners::cache::pin_of(cell),
-                )?;
-                record_runner_load(supervisor, id, pin.total_size(), "charged").await;
-                return Ok(pin);
-            }
             let mode = on.host_storage_type().ok_or_else(|| {
                 make_malformed_runner_error("deploy-state chain runner is not available on chain")
             })?;
@@ -569,37 +615,32 @@ pub(crate) async fn load_action(
                 )
                 .into());
             }
-            // Read the 4-byte length prefix, charge, then fetch the blob inside
-            // the creator: a single `RUNNER_LOAD_COST + code_size` charge covers the peak
-            // -- the old chain double-charge is gone.
+            // Charge the content before fetching it; parsing determines the metadata charge.
             let code_size = storage
                 .read_code_len(slot)
                 .await
                 .with_ctx(|| format!("reading chain runner code length for {id}"))?;
-            charge_load(limiter, code_size.into_int_comptime())?;
-            cell.get_or_try_init(|| async move {
-                let code = storage
-                    .read_code_blob(slot, code_size)
-                    .await
-                    .with_ctx(|| format!("reading chain runner code for {id}"))?;
-                let arch = runners::parse(bytes::Bytes::from(code))
-                    .with_ctx(|| format!("parsing chain runner for {id}"))?;
-                Ok::<_, rt::errors::Error>(runners::ArchiveCache::new(id, arch))
-            })
-            .await?;
-            let pin = runners::cache::pin_of(cell);
-            // Content-determinism: the charged prefix length must equal the
-            // parsed archive's `total_size` (what a later attach will charge).
-            debug_assert_eq!(
-                pin.total_size(),
-                code_size,
-                "chain archive total_size differs from the charged code size"
-            );
-            record_charged_load(loaded, det_fingerprint, pin.clone());
-            record_runner_load(supervisor, id, pin.total_size(), "charged").await;
-            Ok(pin)
+            materialize_load(
+                limiter,
+                loaded,
+                det_fingerprint,
+                cell,
+                id,
+                code_size.into_int_comptime(),
+                |max_meta_size| async move {
+                    let code = storage
+                        .read_code_blob(slot, code_size)
+                        .await
+                        .with_ctx(|| format!("reading chain runner code for {id}"))?;
+                    runners::parse(bytes::Bytes::from(code), max_meta_size)
+                        .with_ctx(|| format!("parsing chain runner for {id}"))
+                },
+            )
+            .await?
         }
-    }
+    };
+    record_runner_load(supervisor, id, pin.total_size(), "charged").await;
+    Ok(pin)
 }
 
 /// Inherit-at-spawn load action for a granted custom runner: the child already
@@ -631,8 +672,8 @@ pub(crate) fn inherit_load(
 /// 3. parse (attach to a live registry entry, or parse and insert) -> a parse
 ///    failure is a deterministic invalid-contract error; the charge is retained
 ///    (released with the VM like any charge) and the runner is not in the loaded
-///    set, hence not resolvable;
-/// 4. success -> pin inserted into the loaded set, canonical id returned.
+///    set, hence not resolvable; insufficient metadata budget raises OOM;
+/// 4. success -> metadata charged, pin inserted into the loaded set, canonical id returned.
 ///
 /// The registered code length equals the archive `total_size`, so the charge
 /// equals a later re-register's or an inherit's. A malformed `code` never enters
@@ -685,19 +726,21 @@ async fn register_runner_load_into(
     }
     check_runner_slot(loaded)?;
 
-    // Charge before parsing (closes the previously-uncharged parse window).
-    charge_load(limiter, code.len())?;
-
     let cell = registry.cell(id);
-    cell.get_or_try_init(|| async {
-        let archive = runners::parse(code).map_err(|e| {
-            rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
-        })?;
-        Ok::<_, rt::errors::Error>(runners::ArchiveCache::new(id, archive))
-    })
+    materialize_load(
+        limiter,
+        loaded,
+        det_fingerprint,
+        cell,
+        id,
+        code.len(),
+        |max_meta_size| async move {
+            runners::parse(code, max_meta_size).map_err(|e| {
+                rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
+            })
+        },
+    )
     .await?;
-
-    record_charged_load(loaded, det_fingerprint, runners::cache::pin_of(cell));
     Ok(id)
 }
 

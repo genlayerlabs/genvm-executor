@@ -75,7 +75,7 @@ fn local_data_start(archive: &[u8]) -> usize {
 }
 
 fn error_of(archive: Vec<u8>) -> genvm::rt::errors::Error {
-    match genvm::runners::parse(archive.into()) {
+    match genvm::runners::parse(archive.into(), u32::MAX) {
         Ok(parsed) => panic!("archive was accepted with entries {:?}", parsed.data.keys()),
         Err(err) => err,
     }
@@ -96,7 +96,7 @@ fn assert_malformed_runner(actual: &genvm::rt::errors::Error) {
 /// crate happens to do after an upgrade.
 #[test]
 fn duplicate_zip_entry_names_resolve_to_the_last_entry() {
-    let actual = genvm::runners::parse(zip_with_duplicate_names().into()).unwrap();
+    let actual = genvm::runners::parse(zip_with_duplicate_names().into(), u32::MAX).unwrap();
     assert!(
         actual.data.len() == 1 && actual.data.get("payload1").is_some_and(|v| v == "second"),
         "unexpected entries: {:?}",
@@ -129,7 +129,7 @@ fn stored_entry_with_wrong_crc_is_rejected() {
 #[test]
 fn zip_directory_entry_is_skipped() {
     let archive = stored_zip_with_entries(&[("dir/", b""), ("dir/payload", b"contents")]);
-    let actual = genvm::runners::parse(archive.into()).unwrap();
+    let actual = genvm::runners::parse(archive.into(), u32::MAX).unwrap();
     assert!(
         actual.data.len() == 1 && actual.data.contains_key("dir/payload"),
         "unexpected entries: {:?}",

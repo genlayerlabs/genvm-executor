@@ -8,7 +8,7 @@ local util = import 'templates/util.jsonnet';
 		runner_load_asserts: [
 			{match: {}, count: 1},
 			{match: {status: 'charged'}, count: 1, size_is_code_len: true},
-			{match: {runner_load_cost: 4096}, count: 1},
+			{match: {runner_load_cost: 1048576}, count: 1},
 			{match: {status: 'cached'}, count: 0},
 		],
 	}])}

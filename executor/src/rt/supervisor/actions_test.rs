@@ -17,6 +17,7 @@ fn pin(id: symbol_table::GlobalSymbol) -> runners::cache::ArchivePin {
     let arch = runners::Archive {
         data: BTreeMap::new(),
         total_size: 1,
+        meta_size: 0,
     };
     let cell = std::sync::Arc::new(tokio::sync::OnceCell::new_with(Some(
         runners::ArchiveCache::new(id, arch),
@@ -264,6 +265,176 @@ fn charge_load_size_overflow_is_oom() {
         "unexpected error: {err}"
     );
     assert_eq!(limiter.get_remaining_memory(), u32::MAX);
+}
+
+#[tokio::test]
+async fn materialize_load_charges_when_initializer_is_skipped() {
+    let id = custom_id(1);
+    let registry = runners::cache::WeakCache::new();
+    let cell = registry.cell(id);
+    let mut expected_fp = sha3::Sha3_256::default();
+    fold_det_fingerprint(Some(&mut expected_fp), id);
+
+    for initialize in [true, false] {
+        let limiter = limiter_with_budget(memory_limiter_consts::RUNNER_LOAD_COST + 8);
+        let mut loaded = runners::cache::LoadedSet::default();
+        let mut fp = sha3::Sha3_256::default();
+        let result = materialize_load(
+            &limiter,
+            &mut loaded,
+            Some(&mut fp),
+            cell.clone(),
+            id,
+            1,
+            |max_meta_size| async move {
+                assert!(initialize, "an initialized cell must skip materialization");
+                assert_eq!(max_meta_size, 7);
+                Ok(runners::Archive {
+                    data: BTreeMap::new(),
+                    total_size: 1,
+                    meta_size: 7,
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.runner_id(), id);
+        assert_eq!(limiter.get_remaining_memory(), 0);
+        assert!(loaded.contains(id), "a successful load must retain the pin");
+        assert_eq!(fingerprint_of(&fp), fingerprint_of(&expected_fp));
+    }
+}
+
+#[tokio::test]
+async fn materialize_load_rejects_inconsistent_archive_before_publication() {
+    let id = custom_id(1);
+    for (total_size, meta_size) in [(2, 0), (1, 2)] {
+        let registry = runners::cache::WeakCache::new();
+        let cell = registry.cell(id);
+        let initializing_cell = cell.clone();
+        let result = tokio::spawn(async move {
+            let limiter = limiter_with_budget(memory_limiter_consts::RUNNER_LOAD_COST + 2);
+            let mut loaded = runners::cache::LoadedSet::default();
+            materialize_load(
+                &limiter,
+                &mut loaded,
+                None,
+                initializing_cell,
+                id,
+                1,
+                |_| async move {
+                    Ok(runners::Archive {
+                        data: BTreeMap::new(),
+                        total_size,
+                        meta_size,
+                    })
+                },
+            )
+            .await
+        })
+        .await;
+
+        assert!(
+            result.unwrap_err().is_panic(),
+            "inconsistent sizes must panic"
+        );
+        assert!(
+            !cell.initialized(),
+            "inconsistent content must not be published"
+        );
+    }
+}
+
+#[tokio::test]
+#[should_panic(expected = "preflighted runner metadata charge must succeed")]
+async fn materialize_load_panics_if_preflighted_budget_is_consumed() {
+    let id = custom_id(1);
+    let registry = runners::cache::WeakCache::new();
+    let limiter = limiter_with_budget(memory_limiter_consts::RUNNER_LOAD_COST + 2);
+    let mut loaded = runners::cache::LoadedSet::default();
+    materialize_load(
+        &limiter,
+        &mut loaded,
+        None,
+        registry.cell(id),
+        id,
+        1,
+        |_| async {
+            assert!(limiter.consume(1));
+            Ok(runners::Archive {
+                data: BTreeMap::new(),
+                total_size: 1,
+                meta_size: 1,
+            })
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn materialize_load_skipped_initializer_can_exhaust_metadata_budget() {
+    let id = custom_id(1);
+    let cell = std::sync::Arc::new(tokio::sync::OnceCell::new_with(Some(
+        runners::ArchiveCache::new(
+            id,
+            runners::Archive {
+                data: BTreeMap::new(),
+                total_size: 1,
+                meta_size: 1,
+            },
+        ),
+    )));
+    let limiter = limiter_with_budget(memory_limiter_consts::RUNNER_LOAD_COST + 1);
+    let mut loaded = runners::cache::LoadedSet::default();
+    let mut fp = sha3::Sha3_256::default();
+    let before = fingerprint_of(&fp);
+    let err = materialize_load(
+        &limiter,
+        &mut loaded,
+        Some(&mut fp),
+        cell,
+        id,
+        1,
+        |_| async { panic!("an initialized cell must skip materialization") },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("out_of memory"), "{err}");
+    assert!(!loaded.contains(id), "metadata OOM must not record a load");
+    assert_eq!(fingerprint_of(&fp), before);
+}
+
+#[tokio::test]
+async fn materialize_load_oom_does_not_initialize_or_record() {
+    let id = custom_id(1);
+    let registry = runners::cache::WeakCache::new();
+    let cell = registry.cell(id);
+    let budget = memory_limiter_consts::RUNNER_LOAD_COST;
+    let limiter = limiter_with_budget(budget);
+    let mut loaded = runners::cache::LoadedSet::default();
+    let mut fp = sha3::Sha3_256::default();
+    let before = fingerprint_of(&fp);
+
+    let err = materialize_load(
+        &limiter,
+        &mut loaded,
+        Some(&mut fp),
+        cell.clone(),
+        id,
+        1,
+        |_| async { panic!("OOM must precede materialization") },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("out_of memory"), "{err}");
+    assert_eq!(limiter.get_remaining_memory(), budget);
+    assert!(!cell.initialized(), "OOM must leave the cell empty");
+    assert!(!loaded.contains(id), "OOM must not record a load");
+    assert_eq!(fingerprint_of(&fp), before);
 }
 
 // -- inherit load (grant transport) ----------------------------------

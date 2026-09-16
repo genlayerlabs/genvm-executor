@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use genlayer_calldata as calldata;
 
 use crate::abi;
-use crate::int_traits::IntoIntComptime;
 use crate::int_traits::u32_into_usize_comptime;
 
 use super::consts as public_abi;
@@ -600,7 +599,7 @@ pub enum Message {
         fee_params: Option<fees::InternalMessageParams>,
     },
     EmitEvent {
-        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_vec_bytes))]
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_limited_vec_bytes))]
         topics: calldata::LenLimitedVec<
             { u32_into_usize_comptime(abi::consts::EVENT_MAX_TOPICS) },
             Bytes,
@@ -642,7 +641,7 @@ pub enum Message {
         /// id. `None` inherits the parent's entire set; `Some(list)` grants exactly
         /// that subset (every element must be in the parent's set).
         #[calldata(default = default_none)]
-        custom_runners: Option<calldata::LenLimitedVec<32, String>>,
+        custom_runners: Option<calldata::LenLimitedVec<512, String>>,
         /// Fate of the changes the child made when it ends in an error.
         changes_on_error: ChangesOnError,
     },

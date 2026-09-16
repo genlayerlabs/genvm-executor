@@ -11,7 +11,7 @@ pub fn handle(_args: Args, _config: config::Config) -> Result<()> {
     std::io::stdin().read_to_end(&mut code)?;
 
     let code = bytes::Bytes::from(code);
-    let arch = genvm::runners::parse(code)?;
+    let arch = genvm::runners::parse(code, u32::MAX)?;
     let version = arch.data.get("version");
 
     if let Some(v) = version {

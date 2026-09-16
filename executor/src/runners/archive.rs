@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+use genlayer_sdk::abi;
+use genvm_common::internal_constants;
+
 use crate::int_traits::*;
 use crate::rt::errors;
 
@@ -7,6 +10,7 @@ use crate::rt::errors;
 pub struct Archive {
     pub data: BTreeMap<String, bytes::Bytes>,
     pub total_size: u32,
+    pub meta_size: u32,
 }
 
 use super::malformed_runner_error as malformed_runner;
@@ -155,10 +159,10 @@ impl Archive {
     /// Open `bytes` as a zip and read it. Entry offsets are resolved against the
     /// very buffer the central directory was read from, which is why the caller
     /// never gets to supply the two separately.
-    pub fn from_zip_bytes(bytes: bytes::Bytes) -> errors::Result<Self> {
+    pub fn from_zip_bytes(bytes: bytes::Bytes, max_meta_size: u32) -> errors::Result<Self> {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone()))
             .map_err(|e| malformed_runner(format!("cannot open ZIP archive: {e}")))?;
-        Self::from_zip(&mut zip, bytes)
+        Self::from_zip(&mut zip, bytes, max_meta_size)
     }
 
     /// Only for callers that already opened the zip to decide *whether* it is
@@ -167,8 +171,10 @@ impl Archive {
     pub(super) fn from_zip<R: std::io::Read + std::io::Seek>(
         zip: &mut zip::ZipArchive<R>,
         bytes: bytes::Bytes,
+        max_meta_size: u32,
     ) -> errors::Result<Self> {
         let mut res = BTreeMap::new();
+        let mut meta_size = 0u32;
 
         for i in 0..zip.len() {
             let file = zip
@@ -246,6 +252,16 @@ impl Archive {
                 )));
             }
 
+            meta_size = meta_size
+                .saturating_add(file.name().len().try_into().unwrap_or(u32::MAX))
+                .saturating_add(internal_constants::memory_limiter_consts::ZIP_FILE_COST);
+
+            if meta_size > max_meta_size {
+                return Err(errors::Error::vm(
+                    abi::consts::VmError::out_of().memory().val(),
+                ));
+            }
+
             // Last entry of a repeated name wins. The zip crate already collapses
             // duplicates by decoded name, so this only matters if that changes.
             res.insert(String::from(file.name()), buf);
@@ -254,6 +270,7 @@ impl Archive {
         let res = Self {
             data: res,
             total_size: bytes.len().into_int_downcast_panicking(),
+            meta_size,
         };
         // The sum of entry lengths may exceed `total_size`: a crafted zip can point
         // several entries at overlapping data ranges. That is attacker input, not a bug.
@@ -274,6 +291,7 @@ impl Archive {
                 ("file".into(), file),
             ]),
             total_size,
+            meta_size: 0,
         }
     }
 }

@@ -117,7 +117,7 @@ fn compile_single_file(
         std::fs::read(zip_path).with_context(|| format!("reading {zip_path:?}"))?,
     );
 
-    let arch = genvm::runners::Archive::from_zip_bytes(data)
+    let arch = genvm::runners::Archive::from_zip_bytes(data, u32::MAX)
         .with_context(|| format!("parsing zip archive {zip_path:?}"))?;
 
     for (entry_name, contents) in arch

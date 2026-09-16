@@ -33,6 +33,10 @@ impl ArchivePin {
     pub fn total_size(&self) -> u32 {
         self.entry().files.total_size
     }
+
+    pub fn meta_size(&self) -> u32 {
+        self.entry().files.meta_size
+    }
 }
 
 impl std::ops::Deref for ArchivePin {
@@ -465,6 +469,7 @@ mod tests {
         Archive {
             data: BTreeMap::new(),
             total_size: size,
+            meta_size: 0,
         }
     }
 

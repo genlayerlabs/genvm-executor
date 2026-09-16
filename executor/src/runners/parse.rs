@@ -1,5 +1,5 @@
 use crate::rt;
-use crate::rt::errors::Error;
+use crate::rt::errors::{Error, ResultExt};
 use genlayer_sdk::abi;
 use genvm_common::*;
 
@@ -38,9 +38,10 @@ fn describe_wasm(code: &[u8]) -> rt::errors::Result<WasmSelfDescription> {
     Ok(res)
 }
 
-pub fn parse(code: bytes::Bytes) -> rt::errors::Result<super::Archive> {
+pub fn parse(code: bytes::Bytes, max_meta_size: u32) -> rt::errors::Result<super::Archive> {
     if let Ok(mut as_zip) = zip::ZipArchive::new(std::io::Cursor::new(code.clone())) {
-        return super::Archive::from_zip(&mut as_zip, code);
+        return super::Archive::from_zip(&mut as_zip, code, max_meta_size)
+            .ctx("parsing zip archive");
     }
 
     if wasmparser::Parser::is_core_wasm(code.as_ref()) {
