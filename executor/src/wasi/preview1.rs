@@ -1,5 +1,6 @@
 use anyhow::Context as _;
 use genlayer_sdk::abi;
+use std::borrow::Cow;
 use std::{borrow::BorrowMut, collections::BTreeMap, io::Write};
 use tracing::instrument;
 use wiggle::{GuestError, GuestMemory, GuestPtr};
@@ -73,6 +74,25 @@ pub(crate) mod generated {
             },
         },
     });
+}
+
+pub fn read_path<'a>(
+    memory: &'a GuestMemory<'a>,
+    ptr: GuestPtr<str>,
+) -> Result<Cow<'a, str>, generated::types::Error> {
+    if ptr.len() > internal_constants::top_limits::VFS_PATH_LEN {
+        return Err(generated::types::Errno::Inval.into());
+    }
+
+    let ret = memory.as_cow_str(ptr)?;
+
+    let slashes_count = ret.chars().filter(|x| *x == '/').count();
+
+    if slashes_count > internal_constants::top_limits::VFS_PATH_COMPONENTS as usize {
+        return Err(generated::types::Errno::Inval.into());
+    }
+
+    Ok(ret)
 }
 
 impl From<wasi::vfs::Fd> for generated::types::Fd {
@@ -194,6 +214,22 @@ impl Context {
                 "mapping destination has {} components, at most {} are allowed",
                 locs_arr.len(),
                 top_limits::VFS_PATH_COMPONENTS,
+            )));
+        }
+
+        let locs_arr_sum: usize = locs_arr
+            .iter()
+            .map(|x| x.len())
+            .fold(0usize, |acc, x| acc.saturating_add(x))
+            .try_into()
+            .with_context(|| "mapping destination path length overflow")?;
+
+        let locs_arr_sum = locs_arr_sum.saturating_add(locs_arr.len());
+        if locs_arr_sum > top_limits::VFS_PATH_LEN.into_int_comptime() {
+            return Err(malformed().context(format!(
+                "mapping destination has {} bytes, at most {} are allowed",
+                locs_arr_sum,
+                top_limits::VFS_PATH_LEN,
             )));
         }
 
@@ -1080,7 +1116,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
     ) -> Result<generated::types::Filestat, generated::types::Error> {
         self.require_right(dirfd, generated::types::Rights::PATH_FILESTAT_GET)?;
         let fdi = dirfd.into();
-        let path = super::common::read_string(memory, path)?;
+        let path = read_path(memory, path)?;
         let Some(vfs::FileDescriptor::Dir { path: dir_path }) = self.vfs.fds.get(&fdi) else {
             return Err(generated::types::Errno::Badf.into());
         };
@@ -1144,7 +1180,7 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         fs_rights_inheriting: generated::types::Rights,
         fdflags: generated::types::Fdflags,
     ) -> Result<generated::types::Fd, generated::types::Error> {
-        let file_path = super::common::read_string(memory, path)?;
+        let file_path = read_path(memory, path)?;
         let fdi = dirfd.into();
         let (descriptor, rights) = {
             let Some(vfs::FileDescriptor::Dir { path: dir_path }) = self.vfs.fds.get(&fdi) else {

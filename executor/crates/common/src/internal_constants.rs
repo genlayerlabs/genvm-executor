@@ -26,6 +26,7 @@ pub mod top_limits {
     pub const WASM_CALL_DEPTH: u32 = 1024;
     pub const WASM_STACK_VALUE_SLOTS: u32 = 65535;
     pub const VFS_PATH_COMPONENTS: u32 = 128;
+    pub const VFS_PATH_LEN: u32 = 16384;
 }
 
 pub mod runner_limits {
