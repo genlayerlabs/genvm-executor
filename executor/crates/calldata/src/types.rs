@@ -588,3 +588,44 @@ impl<'de> serde::Deserialize<'de> for Value {
         deserializer.deserialize_any(ValueVisitor)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct LenLimitedVec<const L: usize, T>(pub(crate) Vec<T>);
+
+impl<const L: usize, T> LenLimitedVec<L, T> {
+    pub fn new(vec: Vec<T>) -> Self {
+        assert!(
+            vec.len() <= L,
+            "LenLimitedVec: length {} exceeds limit {}",
+            vec.len(),
+            L
+        );
+
+        Self(vec)
+    }
+
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+}
+
+impl<const L: usize, T> AsRef<[T]> for LenLimitedVec<L, T> {
+    fn as_ref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+#[cfg(feature = "fuzzing")]
+impl<'a, const L: usize, T: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
+    for LenLimitedVec<L, T>
+{
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let len = L.min(u8::MAX.into());
+        let mut data = Vec::with_capacity(len);
+        for _ in 0..len {
+            let elem = u.arbitrary::<T>()?;
+            data.push(elem);
+        }
+        Ok(LenLimitedVec::new(data))
+    }
+}

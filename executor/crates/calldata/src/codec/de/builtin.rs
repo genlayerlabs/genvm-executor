@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::Address;
+use crate::{Address, LenLimitedVec, int_traits::IntoIntComptime};
 
 use super::{Decode, DecodeError, Deserializer, MapAccess, SeqAccess, Visitor};
 
@@ -335,6 +335,52 @@ impl<T: Decode> Decode for Vec<T> {
             }
         }
         let v: V<T> = V(std::marker::PhantomData);
+        deserializer.deserialize(v)
+    }
+}
+
+impl<const L: usize, T: Decode> Decode for LenLimitedVec<L, T> {
+    fn decode<D: Deserializer>(deserializer: D) -> Result<Self, DecodeError> {
+        struct V<const L: usize, T>(std::marker::PhantomData<T>);
+        impl<const L: usize, T: Decode> Visitor for V<L, T> {
+            type Value = Vec<T>;
+            fn visit_seq<A: SeqAccess>(self, len: u64, mut seq: A) -> Result<Vec<T>, DecodeError> {
+                if len > L.into_int_comptime() {
+                    return Err(DecodeError::LengthMismatch {
+                        expected: L,
+                        got: len.try_into().unwrap_or(usize::MAX),
+                    });
+                }
+
+                let mut result = Vec::with_capacity(len as usize);
+                while let Some(elem) = seq.next_element::<T>()? {
+                    result.push(elem);
+                }
+                Ok(result)
+            }
+        }
+        deserializer
+            .deserialize(V::<L, T>(std::marker::PhantomData))
+            .map(LenLimitedVec::new)
+    }
+
+    fn validate<D: Deserializer>(deserializer: D) -> Result<(), DecodeError> {
+        struct V<const L: usize, T>(std::marker::PhantomData<T>);
+        impl<const L: usize, T: Decode> Visitor for V<L, T> {
+            type Value = ();
+            fn visit_seq<A: SeqAccess>(self, len: u64, mut seq: A) -> Result<(), DecodeError> {
+                if len > L.into_int_comptime() {
+                    return Err(DecodeError::LengthMismatch {
+                        expected: L,
+                        got: len.try_into().unwrap_or(usize::MAX),
+                    });
+                }
+
+                while let Some(()) = seq.next_element_validate::<T>()? {}
+                Ok(())
+            }
+        }
+        let v: V<L, T> = V(std::marker::PhantomData);
         deserializer.deserialize(v)
     }
 }

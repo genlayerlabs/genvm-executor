@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::int_traits::IntoIntComptime;
-use crate::{Address, Encoder, Value, Writer};
+use crate::{Address, Encoder, LenLimitedVec, Value, Writer};
 
 pub trait Encode<W>
 where
@@ -216,6 +216,14 @@ impl<W: Writer> Encode<W> for Address {
 
     fn encode(&self, enc: &mut Encoder<W>) -> Result<(), Self::Error> {
         enc.push_address(self)
+    }
+}
+
+impl<W: Writer, T: Encode<W, Error = W::Error>, const L: usize> Encode<W> for LenLimitedVec<L, T> {
+    type Error = W::Error;
+
+    fn encode(&self, enc: &mut Encoder<W>) -> Result<(), Self::Error> {
+        self.0.encode(enc)
     }
 }
 

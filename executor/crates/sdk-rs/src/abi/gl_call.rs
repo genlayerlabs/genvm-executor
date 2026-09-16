@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use genlayer_calldata as calldata;
 
 use crate::abi;
+use crate::int_traits::IntoIntComptime;
+use crate::int_traits::u32_into_usize_comptime;
 
 use super::consts as public_abi;
 use super::fees;
@@ -599,7 +601,10 @@ pub enum Message {
     },
     EmitEvent {
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_vec_bytes))]
-        topics: Vec<Bytes>,
+        topics: calldata::LenLimitedVec<
+            { u32_into_usize_comptime(abi::consts::EVENT_MAX_TOPICS) },
+            Bytes,
+        >,
         blob: calldata::unparsed::Maybe<calldata::Map<calldata::Value>>,
     },
 
@@ -617,7 +622,7 @@ pub enum Message {
         /// id. `None` inherits the parent's entire set (a behavior change: nondet
         /// blocks used to start empty); `Some(list)` grants exactly that subset.
         #[calldata(default = default_none)]
-        custom_runners: Option<Vec<String>>,
+        custom_runners: Option<calldata::LenLimitedVec<512, String>>,
         /// Take a VM error from the callee as a result instead of re-raising
         /// it. Never applies to a fatal one: that is precisely an outcome the
         /// callee marked as not catchable.
@@ -637,7 +642,7 @@ pub enum Message {
         /// id. `None` inherits the parent's entire set; `Some(list)` grants exactly
         /// that subset (every element must be in the parent's set).
         #[calldata(default = default_none)]
-        custom_runners: Option<Vec<String>>,
+        custom_runners: Option<calldata::LenLimitedVec<32, String>>,
         /// Fate of the changes the child made when it ends in an error.
         changes_on_error: ChangesOnError,
     },

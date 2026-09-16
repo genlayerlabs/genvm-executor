@@ -1158,7 +1158,7 @@ async fn gl_call_event_retains_the_blob_as_validated_wire_bytes() {
     let mut test = EmissionTestContext::new(u32::MAX, 1_000_000);
     let blob = nested_blob();
     let request = calldata::encode_obj(&gl_call::Message::EmitEvent {
-        topics: vec![bytes::Bytes::from_static(&[7u8; 32])],
+        topics: calldata::LenLimitedVec::new(vec![bytes::Bytes::from_static(&[7u8; 32])]),
         blob: blob.clone().into(),
     });
 
@@ -1231,7 +1231,7 @@ async fn gl_call_internal_message_retains_calldata_args_as_validated_wire_bytes(
 async fn gl_call_rejects_a_truncated_request_without_emitting() {
     let mut test = EmissionTestContext::new(u32::MAX, 1_000_000);
     let request = calldata::encode_obj(&gl_call::Message::EmitEvent {
-        topics: Vec::new(),
+        topics: Default::default(),
         blob: nested_blob().into(),
     });
 

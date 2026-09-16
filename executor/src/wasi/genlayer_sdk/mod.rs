@@ -296,13 +296,6 @@ impl SlotID {
     }
 }
 
-fn read_owned_vec(
-    mem: &mut wiggle::GuestMemory<'_>,
-    ptr: wiggle::GuestPtr<[u8]>,
-) -> Result<Vec<u8>, generated::types::Error> {
-    Ok(mem.as_cow(ptr)?.into_owned())
-}
-
 impl Context {
     pub fn new(data: Box<SingleVMData>, limiter: rt::memlimiter::Limiter) -> Self {
         let now = std::time::Instant::now();
@@ -542,11 +535,11 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
         request_len: u32,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         let request = request.as_array(request_len);
-        let request = read_owned_vec(mem, request)?;
+        let cow = mem.as_cow(request)?;
 
         // Decode straight from the wire so `Maybe` payloads stay as validated
         // bytes; a `Value` detour would materialize every emission as a tree.
-        let request: gl_call::Message = match calldata::decode_obj(&request) {
+        let request: gl_call::Message = match calldata::decode_obj(&cow) {
             Ok(v) => v,
             Err(e) => {
                 log_info!(@user, error:err = e; "calldata deserialization failed");
@@ -554,6 +547,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 return Err(generated::types::Errno::Inval.into());
             }
         };
+        std::mem::drop(cow);
 
         log_trace!(request:cd = request; "gl_call");
 
@@ -579,7 +573,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     .await
             }
             gl_call::Message::EmitEvent { topics, blob } => {
-                self.gl_call_emit_event(topics, blob).await
+                self.gl_call_emit_event(topics.into_inner(), blob).await
             }
             gl_call::Message::EmitInternalMessage {
                 address,
@@ -651,7 +645,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     data_leader,
                     data_validator,
                     runner,
-                    custom_runners,
+                    custom_runners.map(|x| x.into_inner()),
                     catch_vm_error,
                 )
                 .await
@@ -669,7 +663,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     runner,
                     allow_write_storage,
                     allow_send_messages,
-                    custom_runners,
+                    custom_runners.map(|x| x.into_inner()),
                 )
                 .await
             }
