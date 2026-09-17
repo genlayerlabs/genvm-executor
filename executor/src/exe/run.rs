@@ -231,11 +231,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         };
 
     let shared_data = sync::DArc::new(genvm::rt::SharedData {
-        allow_two_workers: std::env::var("GENVM_ALLOW_TWO_WORKERS")
-            .ok()
-            .map(|value| value.parse())
-            .transpose()?
-            .unwrap_or(true),
+        allow_two_workers: execution_data.allow_two_workers,
         run_mode: genvm::rt::infer_run_mode(args.sync, &leader_nondet_results),
         genvm_id: genvm_modules_interfaces::GenVMId(genvm_id),
         debug_mode: args.debug_mode,
