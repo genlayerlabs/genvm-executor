@@ -1,2 +1,11 @@
+before 0
+nondet 0
+after 0
+before 1
+nondet 1
+after 1
+before 2
+nondet 2
+after 2
 validated 3 nondeterministic blocks
 executed with `Return(null)`
