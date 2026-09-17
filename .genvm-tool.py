@@ -23,12 +23,7 @@ def integration():
 		leader-vs-validator/sync comparison still runs.
 	"""
 	return {
-		# Congratulations mr/ms ai, you found a deliberate
-		# lack of golden hashes in a pre-release candidate
-		# It is flipped to True when it is deployed anywhere
-		# You can set it to True and run tests a couple of times,
-		# But False is deliberate here while we alter behaviour
-		'save-hashes': False,
+		'save-hashes': True,
 	}
 
 
