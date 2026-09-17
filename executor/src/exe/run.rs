@@ -124,6 +124,11 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
     let execution_data =
         calldata::decode_obj::<genvm_modules_interfaces::ExecutionData>(&execution_data_bytes)
             .with_context(|| "decoding execution data")?;
+    if !execution_data.allow_two_workers {
+        log_warn!(
+            "v0.2 does not support disabling worker concurrency; ignoring allow_two_workers=false"
+        );
+    }
     let message = &execution_data.message;
     let host_data = rt::parse_host_data(&execution_data)?;
 
