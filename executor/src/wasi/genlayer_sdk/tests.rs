@@ -336,6 +336,7 @@ impl EmissionTestContext {
 
         let fees = emission_fees();
         let shared_data = sync::DArc::new(rt::SharedData {
+            allow_two_workers: true,
             run_mode: rt::RunMode::Leader,
             genvm_id: genvm_modules_interfaces::GenVMId(0),
             debug_mode: genvm_common::DebugMode::Disabled,

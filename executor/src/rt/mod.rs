@@ -87,6 +87,7 @@ impl DetFuelBudget {
 
 /// basic data that is shared across all VMs
 pub struct SharedData {
+    pub allow_two_workers: bool,
     pub run_mode: RunMode,
     pub genvm_id: genvm_modules_interfaces::GenVMId,
     pub debug_mode: genvm_common::DebugMode,

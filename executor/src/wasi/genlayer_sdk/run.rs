@@ -927,7 +927,11 @@ impl ContextVFS<'_> {
                 Some(leaders_res),
             );
             let task = self.run_nondet_get_vm_task(vm_ext_msg, task_args);
+            let task_done = task.tasks_done.clone();
             rt::supervisor::submit_nondet_vm_task(&self.context.data.supervisor, task).await;
+            if !self.context.data.supervisor.shared_data.allow_two_workers {
+                task_done.notified().await;
+            }
         }
 
         if is_leader {
