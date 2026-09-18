@@ -354,8 +354,14 @@ pub async fn run_with_impl(
         }
 
         // Contract-owned permissions live in the root slot, not the node-granted
-        // `permissions` string; pre-read them before running the wasm.
-        let root_permissions = topmost_storage.read_permissions().await?;
+        // `permissions` string; pre-read them before running the wasm. A deploy
+        // has nothing to read: the bitfield is written by the very constructor
+        // that is about to run, so a deployment gets every contract-owned
+        // permission granted instead.
+        let root_permissions = match entry_data.code {
+            Some(_) => None,
+            None => Some(topmost_storage.read_permissions().await?),
+        };
 
         let id = if let Some(code) = &entry_data.code {
             log_debug!("using provided code for execution");
@@ -435,12 +441,13 @@ pub async fn run_with_impl(
         }
     };
 
-    let can_use_balance_for_message_fees =
-        primitive_types::U256::from_little_endian(&root_permissions).bit(
+    let can_use_balance_for_message_fees = root_permissions.is_none_or(|raw| {
+        primitive_types::U256::from_little_endian(&raw).bit(
             public_abi::Permissions::CanUseBalanceForMessageFees
                 .value()
                 .into_int_comptime(),
-        );
+        )
+    });
     let vm_permissions = match imported_permissions {
         Some(imported) => convert_nested_permissions(imported),
         None => wasi::base::Permissions {

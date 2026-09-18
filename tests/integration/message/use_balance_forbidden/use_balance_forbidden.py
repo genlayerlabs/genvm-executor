@@ -14,9 +14,15 @@ _PARAMS = gl.chain.InternalMessageParams(
 
 class Contract(gl.contract.Contract):
 	def __init__(self):
-		# The CAN_USE_BALANCE_FOR_MESSAGE_FEES bit is unset (no earlier step
-		# granted it), so a balance-funded emission is rejected pre-execution
-		# with Forbidden (errno 6). Caught here so the result stays `Return`.
+		# Left unset on purpose: a deploy grants every contract-owned permission,
+		# so the rejection has to be observed from a later transaction.
+		pass
+
+	@gl.public.write
+	def do_emit(self):
+		# The CAN_USE_BALANCE_FOR_MESSAGE_FEES bit is unset, so a balance-funded
+		# emission is rejected pre-execution with Forbidden (errno 6). Caught here
+		# so the result stays `Return`.
 		try:
 			gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
 				use_balance=True, fee_params=_PARAMS
