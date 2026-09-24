@@ -571,6 +571,11 @@ impl DataLimit {
         .context("calculating message fee internal")
     }
 
+    pub async fn consume_message_receipt_only(&self, cost_receipt: &CostVec) -> bool {
+        self.consume_bucket_raw(&self.message_receipt, &cost_receipt.0)
+            .await
+    }
+
     pub async fn consume_message_fee(&self, cost_fee: &CostVec, cost_receipt: &CostVec) -> bool {
         let mut buckets = self.buckets.lock().await;
 
