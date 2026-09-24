@@ -274,11 +274,8 @@ fn convert_message_allocation_node(
         budget: node.budget,
         on: convert_on(node.on),
         fee_params: convert_message_allocation_node_params(node.fee_params),
-        children: node
-            .children
-            .into_iter()
-            .map(convert_message_allocation_node)
-            .collect(),
+        children_budget: node.children_budget,
+        subtree: node.subtree,
     }
 }
 

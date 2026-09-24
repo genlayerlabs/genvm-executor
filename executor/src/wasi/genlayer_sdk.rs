@@ -17,6 +17,80 @@ use genlayer_sdk::abi::{self, gl_call};
 
 use super::{base, vfs};
 
+#[cfg(test)]
+#[path = "genlayer_sdk_test.rs"]
+mod tests;
+
+fn allocation_match_priority(
+    node: &domain::fees::MessageAllocationNode,
+    recipient: calldata::Address,
+    call_key: abi::CallKey,
+) -> Option<u8> {
+    let recipient_priority = match node.recipient {
+        Some(candidate) if candidate == recipient => 0,
+        Some(_) => return None,
+        None => 2,
+    };
+    let call_key_priority = match node.call_key {
+        Some(candidate) if candidate == call_key => 0,
+        Some(_) => return None,
+        None => 1,
+    };
+    Some(recipient_priority + call_key_priority)
+}
+
+fn resolve_internal_allocation(
+    nodes: &[domain::fees::MessageAllocationNode],
+    on: gl_call::On,
+    recipient: calldata::Address,
+    call_key: abi::CallKey,
+) -> Option<(usize, Arc<domain::fees::InternalMessageParams>)> {
+    let priority = nodes
+        .iter()
+        .filter(|node| {
+            matches!(
+                &node.fee_params,
+                domain::fees::MessageAllocationNodeParams::Internal(_)
+            )
+        })
+        .filter_map(|node| allocation_match_priority(node, recipient, call_key))
+        .min()?;
+    let index = nodes.iter().position(|node| {
+        allocation_match_priority(node, recipient, call_key) == Some(priority)
+            && (node.recipient.is_some() || node.on == on)
+            && matches!(
+                &node.fee_params,
+                domain::fees::MessageAllocationNodeParams::Internal(_)
+            )
+    })?;
+    Some((
+        index,
+        nodes[index].matches_internal(on, recipient, call_key)?,
+    ))
+}
+
+fn external_allocation_candidates(
+    nodes: &[domain::fees::MessageAllocationNode],
+    recipient: calldata::Address,
+    call_key: abi::CallKey,
+) -> Vec<usize> {
+    let mut candidates = nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| {
+            matches!(
+                &node.fee_params,
+                domain::fees::MessageAllocationNodeParams::External(_)
+            )
+        })
+        .filter_map(|(index, node)| {
+            allocation_match_priority(node, recipient, call_key).map(|priority| (priority, index))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(priority, _)| *priority);
+    candidates.into_iter().map(|(_, index)| index).collect()
+}
+
 fn default_entry_stage_data() -> calldata::Value {
     calldata::Value::Null
 }
@@ -106,17 +180,28 @@ async fn consume_message_fee_internal(
     on: gl_call::On,
     args: ConsumeInternalArgs,
 ) -> Result<rt::fees::MessageFeeConsumption, generated::types::Error> {
-    let fee_cost = shared_data
+    let mut fee_cost = shared_data
         .data_fees_limit
         .calculate_message_fee_internal(on, &fee_params)
         .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
+    fee_cost.0[0] = fee_cost.0[0]
+        .checked_add(node.children_budget)
+        .ok_or_else(|| {
+            generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
+                "message declared budget overflow"
+            )))
+        })?;
 
     let fee_total = fee_cost.sum();
-    let remaining_budget = node.budget.checked_sub(*consumed).ok_or_else(|| {
-        generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
-            "message allocation consumed budget exceeds its total"
-        )))
-    })?;
+    let remaining_budget = node
+        .budget
+        .unwrap_or(primitive_types::U256::MAX)
+        .checked_sub(*consumed)
+        .ok_or_else(|| {
+            generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
+                "message allocation consumed budget exceeds its total"
+            )))
+        })?;
     if fee_total > remaining_budget {
         log_warn!(
             node:cd = *node,
@@ -172,7 +257,7 @@ struct ConsumeExternalArgs {
 
 async fn consume_message_fee_external(
     shared_data: &rt::SharedData,
-    node: &domain::fees::MessageAllocationNode,
+    node: Option<&domain::fees::MessageAllocationNode>,
     consumed: &mut primitive_types::U256,
     params: domain::fees::ExternalMessageParams,
     // External messages are always emitted on finalization; carried for signature
@@ -180,17 +265,25 @@ async fn consume_message_fee_external(
     _on: gl_call::On,
     args: ConsumeExternalArgs,
 ) -> Result<rt::fees::MessageFeeConsumption, generated::types::Error> {
-    let fee_cost = shared_data
-        .data_fees_limit
-        .calculate_message_fee_external(&params)
-        .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
+    let fee_cost = if node.is_some() {
+        shared_data
+            .data_fees_limit
+            .calculate_message_fee_external(&params)
+            .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?
+    } else {
+        rt::fees::CostVec(Vec::new())
+    };
 
     let fee_total = fee_cost.sum();
-    let remaining_budget = node.budget.checked_sub(*consumed).ok_or_else(|| {
-        generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
-            "message allocation consumed budget exceeds its total"
-        )))
-    })?;
+    let remaining_budget = node
+        .and_then(|node| node.budget)
+        .unwrap_or(primitive_types::U256::MAX)
+        .checked_sub(*consumed)
+        .ok_or_else(|| {
+            generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
+                "message allocation consumed budget exceeds its total"
+            )))
+        })?;
     if fee_total > remaining_budget {
         return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
     }
@@ -206,11 +299,18 @@ async fn consume_message_fee_external(
         })
         .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
 
-    if !shared_data
-        .data_fees_limit
-        .consume_message_fee(&fee_cost, &receipt_cost)
-        .await
-    {
+    let funded = if node.is_some() {
+        shared_data
+            .data_fees_limit
+            .consume_message_fee(&fee_cost, &receipt_cost)
+            .await
+    } else {
+        shared_data
+            .data_fees_limit
+            .consume_message_receipt_only(&receipt_cost)
+            .await
+    };
+    if !funded {
         return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
     }
 
@@ -590,7 +690,7 @@ impl ContextVFS<'_> {
             rt::vm::RunOk::VMError(e, cause) => {
                 return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                     rt::errors::Error::vm_cause(e, cause).into(),
-                )))
+                )));
             }
             data => data,
         };
@@ -717,36 +817,64 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     call_key.0[..4].copy_from_slice(&calldata[..4]);
                 }
 
-                let Some((matched_index, matched_params)) = self
-                    .context
-                    .data
-                    .accumulator
-                    .message_fee_allocation
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, node)| {
-                        node.matches_external(address, call_key)
-                            .map(|params| (index, params))
-                    })
-                else {
-                    log_warn!(
-                        recipient = address,
-                        call_key:? = call_key;
-                        "no matching node for message fee allocation"
-                    );
-
-                    return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
-                };
-
-                let calldata_length = calldata.len() as u64;
                 let shared_data = self.context.data.supervisor.shared_data.clone();
                 let accumulator = &mut self.context.data.accumulator;
-                let matched_node = &accumulator.message_fee_allocation[matched_index];
+                let candidates = external_allocation_candidates(
+                    &accumulator.message_fee_allocation,
+                    address,
+                    call_key,
+                );
+                let has_candidates = !candidates.is_empty();
+                let mut matched = None;
+                for index in candidates {
+                    let node = &accumulator.message_fee_allocation[index];
+                    let params = node
+                        .matches_external(address, call_key)
+                        .expect("matching external allocation");
+                    let fee = shared_data
+                        .data_fees_limit
+                        .calculate_message_fee_external(&params)
+                        .map_err(|x| generated::types::Error::trap(anyhow_to_wasmtime(x)))?;
+                    let remaining = node
+                        .budget
+                        .unwrap_or(primitive_types::U256::MAX)
+                        .checked_sub(accumulator.message_fee_allocation_consumed[index])
+                        .ok_or_else(|| {
+                            generated::types::Error::trap(anyhow_to_wasmtime(anyhow::anyhow!(
+                                "message allocation consumed budget exceeds its total"
+                            )))
+                        })?;
+                    if fee.sum() <= remaining {
+                        matched = Some((index, params));
+                        break;
+                    }
+                }
+                if has_candidates && matched.is_none() {
+                    return Err(oom_trap(abi::consts::VmError::oom().fees().external()));
+                }
+
+                let calldata_length = calldata.len() as u64;
+                let mut unallocated_consumed = primitive_types::U256::zero();
+                let (matched_node, consumed, matched_params) = match matched {
+                    Some((index, params)) => (
+                        Some(&accumulator.message_fee_allocation[index]),
+                        &mut accumulator.message_fee_allocation_consumed[index],
+                        params,
+                    ),
+                    None => (
+                        None,
+                        &mut unallocated_consumed,
+                        domain::fees::ExternalMessageParams {
+                            gas_limit: primitive_types::U256::zero(),
+                            max_gas_price: primitive_types::U256::zero(),
+                        },
+                    ),
+                };
 
                 let fees = consume_message_fee_external(
                     &shared_data,
                     matched_node,
-                    &mut accumulator.message_fee_allocation_consumed[matched_index],
+                    consumed,
                     matched_params,
                     gl_call::On::Finalized,
                     ConsumeExternalArgs {
@@ -1165,18 +1293,12 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     }
                 }
 
-                let Some((matched_index, matched_params)) = self
-                    .context
-                    .data
-                    .accumulator
-                    .message_fee_allocation
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, node)| {
-                        node.matches_internal(on, address, call_key)
-                            .map(|params| (index, params))
-                    })
-                else {
+                let Some((matched_index, matched_params)) = resolve_internal_allocation(
+                    &self.context.data.accumulator.message_fee_allocation,
+                    on,
+                    address,
+                    call_key,
+                ) else {
                     log_warn!(
                         recipient = address,
                         call_key:? = call_key,
@@ -1201,7 +1323,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let fee_params = (*matched_params).clone();
                 let accumulator = &mut self.context.data.accumulator;
                 let matched_node = &accumulator.message_fee_allocation[matched_index];
-                let subtree = bytes::Bytes::from(matched_node.abi_encode());
+                let subtree = matched_node.subtree.clone();
 
                 let fees = consume_message_fee_internal(
                     &sd,
@@ -1278,18 +1400,12 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                     }
                 }
 
-                let Some((matched_index, matched_params)) = self
-                    .context
-                    .data
-                    .accumulator
-                    .message_fee_allocation
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, node)| {
-                        node.matches_internal(on, calldata::Address::zero(), abi::CallKey::DEPLOY)
-                            .map(|params| (index, params))
-                    })
-                else {
+                let Some((matched_index, matched_params)) = resolve_internal_allocation(
+                    &self.context.data.accumulator.message_fee_allocation,
+                    on,
+                    calldata::Address::zero(),
+                    abi::CallKey::DEPLOY,
+                ) else {
                     log_warn!(
                         recipient = calldata::Address::zero(),
                         call_key:? = abi::CallKey::DEPLOY,
@@ -1308,7 +1424,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 let fee_params = (*matched_params).clone();
                 let accumulator = &mut self.context.data.accumulator;
                 let matched_node = &accumulator.message_fee_allocation[matched_index];
-                let subtree = bytes::Bytes::from(matched_node.abi_encode());
+                let subtree = matched_node.subtree.clone();
 
                 let fees = consume_message_fee_internal(
                     &sd,
@@ -2053,7 +2169,7 @@ impl ContextVFS<'_> {
                 None => {
                     return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
                         anyhow::anyhow!("absent leader result in sync mode, call_no: {}", call_no),
-                    )))
+                    )));
                 }
                 Some(v) => v,
             }

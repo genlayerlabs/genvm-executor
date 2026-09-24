@@ -8,7 +8,7 @@ modules:
 
 log_level: info
 
-# This legacy executor line intentionally charges every fee category at zero
+# Execution fees are zero; descendant funding still consumes the message pool
 fees:
   expr_prelude: ""
   storage:
@@ -30,7 +30,7 @@ fees:
     delta_expr: |
       \a = 0
   message_fee:
-    buckets: execution_data_gas
+    buckets: message_fee
     subtract_on_start_expr: |
       0
     delta_expr: |

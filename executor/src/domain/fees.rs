@@ -1,13 +1,6 @@
 use genlayer_sdk::abi::gl_call::On;
 use primitive_types::U256;
 
-mod abi;
-
-pub const CALL_KEY_WILDCARD: genlayer_sdk::abi::CallKey = genlayer_sdk::abi::CallKey([
-    0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7, 0x03, 0xc0,
-    0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04, 0x5d, 0x85, 0xa4, 0x70,
-]);
-
 #[derive(
     Debug,
     Clone,
@@ -25,12 +18,7 @@ pub struct InternalMessageParams {
     /// Per-round rotation allocations; `rotations[0]` is the initial round, the
     /// rest are appeal rounds. Must be non-empty.
     ///
-    /// The chain's `InternalMessageFeeParams` carries an explicit `appealRounds`
-    /// field, but it is not stored here: the chain enforces
-    /// `appealRounds == rotations.length - 1` (`FeesVerifier.InvalidAppealRounds`),
-    /// so we derive `appeal_rounds = rotations.len() - 1` instead. The ABI
-    /// encoder re-inserts it so the encoded bytes (and their `keccak256` fee-param
-    /// pin) match the chain's field layout.
+    /// The fee evaluator derives `appeal_rounds = rotations.len() - 1`.
     pub rotations: Vec<U256>,
     /// Per-time-unit GEN price cap locked at activation (consensus CON-549,
     /// v0.6-dev). The chain charges at this cap as the funding multiplier and
@@ -74,7 +62,7 @@ pub enum MessageAllocationNodeParams {
     External(ExternalMessageParams),
 }
 
-/// One node of the message-fee allocation tree.
+/// One allocation available to messages emitted by this execution.
 #[derive(
     Debug,
     Clone,
@@ -86,24 +74,18 @@ pub enum MessageAllocationNodeParams {
 pub struct MessageAllocationNode {
     /// Target contract address; `None` means wildcard (any recipient).
     pub recipient: Option<genlayer_sdk::calldata::Address>,
-    /// `None` = wildcard: all call keys for this recipient
-    /// (chain sentinel: `CALL_KEY_WILDCARD` = `keccak256("")`).
+    /// `None` means any call key; the node converts the chain's wildcard sentinel.
     pub call_key: Option<genlayer_sdk::abi::CallKey>,
-    /// Max budget for matching messages.
-    pub budget: U256,
+    /// Available allowance; zero is exhausted, `None` is uncapped.
+    pub budget: Option<U256>,
     pub on: On,
     /// Same structure as TX-level params.
     pub fee_params: MessageAllocationNodeParams,
-    pub children: Vec<MessageAllocationNode>,
+    pub children_budget: U256,
+    pub subtree: bytes::Bytes,
 }
 
 impl MessageAllocationNode {
-    /// ABI-encodes this matched node and its descendants for transport to the chain.
-    /// The matched node is element 0 and descendants are in BFS order.
-    pub fn abi_encode(&self) -> Vec<u8> {
-        abi::encode(self)
-    }
-
     #[allow(clippy::if_same_then_else)]
     pub fn matches_internal(
         &self,
