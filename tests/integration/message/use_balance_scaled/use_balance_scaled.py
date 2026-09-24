@@ -4,11 +4,9 @@ from genlayer.vm.public_abi import Permissions
 
 # Proves the balance-funded floor scales with the GUEST cap and grosses up only
 # the time-unit pool. With timeUnitPool=3*5140, overlay=floor(15420*1500/8500),
-# and executionTerm=1024*29:
-#   primary = 15420 + 2721 + 29696 = 47837
-# The per-message fee is 47837 for both decided and finalized emissions
-# The jsonnet sets node.genPerTimeUnit=7; had the balance path used it the fee
-# would be 7*5140 + floor(35980*1500/8500) + 29696 = 72025
+# executionTerm=1024*29 and appealProfitReserve=20250:
+#   primary = 15420 + 2721 + 29696 + 20250 = 68087
+# The jsonnet sets node.genPerTimeUnit=7; funding uses the guest cap of 3
 _PARAMS = gl.chain.InternalMessageParams(
 	leader_time_units_allocation=5,
 	validator_time_units_allocation=5,

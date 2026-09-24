@@ -112,5 +112,35 @@ fn primary_fee_is_not_multiplied_by_appeal_lifecycle() {
 
     let fee = fees.calculate_message_fee_internal(&params).unwrap();
 
-    assert_eq!(fee.reported_fee(), U256::from(47_837));
+    assert_eq!(fee.reported_fee(), U256::from(68_087));
+}
+
+#[test]
+fn appeal_profit_prices_each_bond_before_rounding_and_is_not_taxed() {
+    let mut gas_data = gas_data(1, u64::MAX, 1, u64::MAX);
+    gas_data.insert("overlaySplitBps".to_owned(), "1500".to_owned());
+    let fees = DataLimit::new(bucket_totals(), default_fees(), gas_data).unwrap();
+    let mut params = fee_params(2, 1);
+    params.rotations = vec![U256::zero(); 3];
+    params.max_price_gen_per_time_unit = U256::from(3);
+
+    // Work = (7 + 9 + 13 + 15 + 25) * 3 = 207; overlay = floor(207 * 1500 / 8500).
+    // Bonds 39 and 75 reserve profits 58 and 112; execution backing is 5.
+    assert_eq!(
+        fees.calculate_message_fee_internal(&params)
+            .unwrap()
+            .reported_fee(),
+        U256::from(418)
+    );
+}
+
+#[test]
+fn no_appeals_reserve_no_appeal_profit() {
+    let fees = DataLimit::new(bucket_totals(), default_fees(), gas_data(1, 100, 1, 100)).unwrap();
+    assert_eq!(
+        fees.calculate_message_fee_internal(&fee_params(2, 1))
+            .unwrap()
+            .reported_fee(),
+        U256::from(8)
+    );
 }

@@ -75,7 +75,7 @@ fn external_message_allocation() -> genvm_modules_interfaces::fees::MessageAlloc
     genvm_modules_interfaces::fees::MessageAllocationNode {
         recipient: None,
         call_key: None,
-        budget: U256::from(100),
+        budget: Some(U256::from(100)),
         on: genvm_modules_interfaces::On::Finalized,
         fee_params: genvm_modules_interfaces::fees::MessageAllocationNodeParams::External(
             genvm_modules_interfaces::fees::ExternalMessageParams {
@@ -83,7 +83,8 @@ fn external_message_allocation() -> genvm_modules_interfaces::fees::MessageAlloc
                 max_gas_price: U256::zero(),
             },
         ),
-        children: Vec::new(),
+        children_budget: U256::zero(),
+        subtree: bytes::Bytes::new(),
     }
 }
 
@@ -91,7 +92,7 @@ fn internal_message_allocation() -> genvm_modules_interfaces::fees::MessageAlloc
     genvm_modules_interfaces::fees::MessageAllocationNode {
         recipient: None,
         call_key: None,
-        budget: U256::from(100),
+        budget: Some(U256::from(100)),
         on: genvm_modules_interfaces::On::Finalized,
         fee_params: genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(
             Arc::new(genvm_modules_interfaces::fees::InternalMessageParams {
@@ -104,18 +105,9 @@ fn internal_message_allocation() -> genvm_modules_interfaces::fees::MessageAlloc
                 receipt_fee_max_gas_price: U256::one(),
             }),
         ),
-        children: Vec::new(),
+        children_budget: U256::zero(),
+        subtree: bytes::Bytes::new(),
     }
-}
-
-fn allocation_child(
-    budget: U256,
-    children: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
-) -> genvm_modules_interfaces::fees::MessageAllocationNode {
-    let mut node = internal_message_allocation();
-    node.budget = budget;
-    node.children = children;
-    node
 }
 
 #[test]
@@ -124,10 +116,10 @@ fn internal_allocation_prefers_exact_key_over_earlier_wildcard() {
     let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
     let mut wildcard = internal_message_allocation();
     wildcard.recipient = Some(recipient);
-    wildcard.budget = U256::one();
+    wildcard.budget = Some(U256::one());
     let mut exact = wildcard.clone();
     exact.call_key = Some(call_key);
-    exact.budget = U256::from(2);
+    exact.budget = Some(U256::from(2));
     let nodes = vec![wildcard, exact];
 
     let (matched, _) = resolve_internal_allocation(
@@ -138,19 +130,19 @@ fn internal_allocation_prefers_exact_key_over_earlier_wildcard() {
     )
     .expect("exact allocation should match");
 
-    assert_eq!(nodes[matched].budget, U256::from(2));
+    assert_eq!(nodes[matched].budget, Some(U256::from(2)));
 }
 
 #[test]
-fn internal_allocation_skips_zero_budget_exact_key() {
+fn internal_allocation_keeps_exhausted_exact_key() {
     let recipient = calldata::Address::from([7; 20]);
     let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
     let mut wildcard = internal_message_allocation();
     wildcard.recipient = Some(recipient);
-    wildcard.budget = U256::one();
+    wildcard.budget = Some(U256::one());
     let mut exact = wildcard.clone();
     exact.call_key = Some(call_key);
-    exact.budget = U256::zero();
+    exact.budget = Some(U256::zero());
     let nodes = vec![wildcard, exact];
 
     let (matched, _) = resolve_internal_allocation(
@@ -159,9 +151,51 @@ fn internal_allocation_skips_zero_budget_exact_key() {
         recipient,
         call_key,
     )
-    .expect("wildcard allocation should match");
+    .expect("exhausted exact allocation should still match");
 
-    assert_eq!(nodes[matched].budget, U256::one());
+    assert_eq!(matched, 1);
+    assert_eq!(nodes[matched].budget, Some(U256::zero()));
+}
+
+#[test]
+fn internal_allocation_keeps_uncapped_exact_key() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let wildcard = internal_message_allocation();
+    let mut exact = wildcard.clone();
+    exact.recipient = Some(recipient);
+    exact.call_key = Some(call_key);
+    exact.budget = None;
+    let nodes = vec![wildcard, exact];
+    assert_eq!(
+        resolve_internal_allocation(
+            &nodes,
+            genvm_modules_interfaces::On::Finalized,
+            recipient,
+            call_key
+        )
+        .unwrap()
+        .0,
+        1
+    );
+}
+
+#[test]
+fn internal_allocation_does_not_search_duplicate_chain_keys_by_phase() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let mut first = internal_message_allocation();
+    first.recipient = Some(recipient);
+    first.call_key = Some(call_key);
+    let mut duplicate = first.clone();
+    duplicate.on = genvm_modules_interfaces::On::Decided;
+    assert!(resolve_internal_allocation(
+        &[first, duplicate],
+        genvm_modules_interfaces::On::Decided,
+        recipient,
+        call_key
+    )
+    .is_none());
 }
 
 #[test]
@@ -189,10 +223,10 @@ fn internal_allocation_selects_phase_within_equal_keys() {
     let recipient = calldata::Address::from([7; 20]);
     let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
     let mut finalized = internal_message_allocation();
-    finalized.budget = U256::one();
+    finalized.budget = Some(U256::one());
     let mut decided = finalized.clone();
     decided.on = genvm_modules_interfaces::On::Decided;
-    decided.budget = U256::from(2);
+    decided.budget = Some(U256::from(2));
     let nodes = vec![finalized, decided];
 
     let (matched, _) = resolve_internal_allocation(
@@ -203,7 +237,7 @@ fn internal_allocation_selects_phase_within_equal_keys() {
     )
     .expect("decided allocation should match");
 
-    assert_eq!(nodes[matched].budget, U256::from(2));
+    assert_eq!(nodes[matched].budget, Some(U256::from(2)));
 }
 
 #[test]
@@ -211,13 +245,13 @@ fn external_allocation_candidates_follow_consensus_precedence() {
     let recipient = calldata::Address::from([7; 20]);
     let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
     let mut global_wildcard = external_message_allocation();
-    global_wildcard.budget = U256::one();
+    global_wildcard.budget = Some(U256::one());
     let mut recipient_wildcard = global_wildcard.clone();
     recipient_wildcard.recipient = Some(recipient);
-    recipient_wildcard.budget = U256::from(2);
+    recipient_wildcard.budget = Some(U256::from(2));
     let mut exact = recipient_wildcard.clone();
     exact.call_key = Some(call_key);
-    exact.budget = U256::from(3);
+    exact.budget = Some(U256::from(3));
     let nodes = vec![global_wildcard, recipient_wildcard, exact];
 
     let candidates = external_allocation_candidates(&nodes, recipient, call_key);
@@ -226,7 +260,10 @@ fn external_allocation_candidates_follow_consensus_precedence() {
         .map(|index| nodes[index].budget)
         .collect::<Vec<_>>();
 
-    assert_eq!(budgets, vec![U256::from(3), U256::from(2), U256::one()]);
+    assert_eq!(
+        budgets,
+        vec![Some(U256::from(3)), Some(U256::from(2)), Some(U256::one())]
+    );
 }
 
 #[test]
@@ -236,7 +273,7 @@ fn external_allocation_candidates_include_zero_budget_nodes() {
     let mut node = external_message_allocation();
     node.recipient = Some(recipient);
     node.call_key = Some(call_key);
-    node.budget = U256::zero();
+    node.budget = Some(U256::zero());
     let nodes = vec![node];
 
     assert_eq!(
@@ -327,6 +364,10 @@ struct EmissionTestContext {
 
 impl EmissionTestContext {
     fn new(memory_limit: u32, fee_total: u64) -> Self {
+        Self::with_fees(memory_limit, fee_total, emission_fees())
+    }
+
+    fn with_fees(memory_limit: u32, fee_total: u64, fees: crate::config::FeesConfig) -> Self {
         let root = TestDir::new();
         let runners_dir = root.join("runners");
         let registry_dir = root.join("registry");
@@ -334,7 +375,6 @@ impl EmissionTestContext {
         std::fs::create_dir_all(&registry_dir).unwrap();
         std::fs::write(registry_dir.join("all.json"), "{}").unwrap();
 
-        let fees = emission_fees();
         let shared_data = sync::DArc::new(rt::SharedData {
             allow_two_workers: true,
             run_mode: rt::RunMode::Leader,
@@ -580,6 +620,126 @@ fn trap_message(error: generated::types::Error) -> String {
     trap.to_string()
 }
 
+#[tokio::test]
+async fn internal_exhaustion_never_spills_to_wildcard() {
+    for emission in [
+        MessageEmission::InternalAllocation,
+        MessageEmission::DeployAllocation,
+    ] {
+        for budget in [U256::zero(), U256::one()] {
+            let mut test = EmissionTestContext::new(u32::MAX, 100);
+            let mut exact = internal_message_allocation();
+            exact.recipient = Some(calldata::Address::zero());
+            exact.call_key = Some(genvm_modules_interfaces::CallKey(match emission {
+                MessageEmission::InternalAllocation => abi::CallKey::UNNAMED.0,
+                _ => abi::CallKey::DEPLOY.0,
+            }));
+            exact.budget = Some(budget);
+            test.context
+                .data
+                .accumulator
+                .message_fee_allocation
+                .push(exact);
+            test.context
+                .data
+                .accumulator
+                .message_fee_allocation_consumed
+                .push(U256::zero());
+            if !budget.is_zero() {
+                test.emit_message(emission).await.unwrap();
+            }
+            let count = test.context.data.accumulator.emissions.len();
+            let error = trap_message(test.emit_message(emission).await.unwrap_err());
+            assert!(
+                error.contains("out_of message_fee allocation_budget # internal"),
+                "{error}"
+            );
+            assert_eq!(test.context.data.accumulator.emissions.len(), count);
+            assert_eq!(
+                test.context
+                    .data
+                    .accumulator
+                    .message_fee_allocation_consumed[1],
+                U256::zero()
+            );
+            test.shutdown().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn uncapped_allocation_still_obeys_pool_budget() {
+    let mut test = EmissionTestContext::new(u32::MAX, 2);
+    test.context.data.accumulator.message_fee_allocation[1].budget = None;
+    test.emit_message(MessageEmission::InternalAllocation)
+        .await
+        .unwrap();
+    let error = trap_message(
+        test.emit_message(MessageEmission::InternalAllocation)
+            .await
+            .unwrap_err(),
+    );
+    assert!(
+        error.contains("out_of message_fee total # internal"),
+        "{error}"
+    );
+    assert_eq!(test.context.data.accumulator.emissions.len(), 1);
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn external_exhaustion_spills_but_absence_is_unallocated() {
+    let mut test = EmissionTestContext::new(u32::MAX, 100);
+    let mut exact = external_message_allocation();
+    exact.recipient = Some(calldata::Address::zero());
+    exact.call_key = Some(genvm_modules_interfaces::CallKey([0; 32]));
+    exact.budget = Some(U256::zero());
+    test.context
+        .data
+        .accumulator
+        .message_fee_allocation
+        .push(exact);
+    test.context
+        .data
+        .accumulator
+        .message_fee_allocation_consumed
+        .push(U256::zero());
+    test.emit_message(MessageEmission::External).await.unwrap();
+    assert_eq!(
+        test.context
+            .data
+            .accumulator
+            .message_fee_allocation_consumed[0],
+        U256::one()
+    );
+    assert_eq!(
+        test.context
+            .data
+            .accumulator
+            .message_fee_allocation_consumed[2],
+        U256::zero()
+    );
+    test.context.data.accumulator.message_fee_allocation[0].budget = Some(U256::one());
+    let error = trap_message(
+        test.emit_message(MessageEmission::External)
+            .await
+            .unwrap_err(),
+    );
+    assert!(
+        error.contains("out_of message_fee allocation_budget # external"),
+        "{error}"
+    );
+    test.context.data.accumulator.message_fee_allocation.clear();
+    test.context
+        .data
+        .accumulator
+        .message_fee_allocation_consumed
+        .clear();
+    test.emit_message(MessageEmission::External).await.unwrap();
+    assert_eq!(test.context.data.accumulator.emissions.len(), 2);
+    test.shutdown().await;
+}
+
 #[test]
 fn emission_allocation_includes_fixed_and_payload_costs() {
     assert_eq!(
@@ -652,7 +812,7 @@ async fn messages_rejected_by_memory_are_not_appended_or_charged() {
                 .accumulator
                 .message_fee_allocation
                 .iter()
-                .all(|node| node.budget == U256::from(100)),
+                .all(|node| node.budget == Some(U256::from(100))),
             "{} consumed its allocation budget",
             emission.name()
         );
@@ -698,7 +858,7 @@ async fn messages_rejected_by_fee_are_not_appended_and_release_memory() {
                 .accumulator
                 .message_fee_allocation
                 .iter()
-                .all(|node| node.budget == U256::from(100)),
+                .all(|node| node.budget == Some(U256::from(100))),
             "{} consumed its allocation budget",
             emission.name()
         );
@@ -757,17 +917,15 @@ async fn unallocated_external_receipt_exhaustion_is_classified_as_receipt() {
 }
 
 #[tokio::test]
-async fn repeated_internal_messages_preserve_canonical_subtree_and_charge_budgets() {
+async fn repeated_internal_messages_preserve_opaque_subtree_and_charge_budgets() {
     for emission in [
         MessageEmission::InternalAllocation,
         MessageEmission::DeployAllocation,
     ] {
         let mut test = EmissionTestContext::new(u32::MAX, 14);
-        let grandchild = allocation_child(U256::one(), Vec::new());
-        let first_child = allocation_child(U256::from(2), vec![grandchild]);
-        let second_child = allocation_child(U256::from(3), Vec::new());
-        test.context.data.accumulator.message_fee_allocation[1].children =
-            vec![first_child, second_child];
+        let subtree = bytes::Bytes::from_static(b"opaque subtree and proof");
+        test.context.data.accumulator.message_fee_allocation[1].children_budget = U256::from(5);
+        test.context.data.accumulator.message_fee_allocation[1].subtree = subtree.clone();
 
         test.emit_message(emission).await.unwrap();
         test.emit_message(emission).await.unwrap();
@@ -790,9 +948,10 @@ async fn repeated_internal_messages_preserve_canonical_subtree_and_charge_budget
         assert_eq!(first.0, U256::from(6), "{}", emission.name());
         assert_eq!(second.0, U256::from(6), "{}", emission.name());
         assert_eq!(first.1, second.1, "{} subtree changed", emission.name());
+        assert_eq!(first.1, subtree, "{} subtree rewritten", emission.name());
         assert_eq!(
             test.context.data.accumulator.message_fee_allocation[1].budget,
-            U256::from(100),
+            Some(U256::from(100)),
             "{}",
             emission.name()
         );
@@ -826,12 +985,155 @@ async fn repeated_internal_messages_preserve_canonical_subtree_and_charge_budget
 }
 
 #[tokio::test]
+async fn allocation_zero_price_caps_reject_calls_and_deploys_without_charging() {
+    for emission in [
+        MessageEmission::InternalAllocation,
+        MessageEmission::DeployAllocation,
+    ] {
+        for cap in 0..3 {
+            let mut test = EmissionTestContext::new(u32::MAX, 100);
+            let mut exact = internal_message_allocation();
+            exact.recipient = Some(calldata::Address::zero());
+            let genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(params) =
+                &mut exact.fee_params
+            else {
+                unreachable!()
+            };
+            let params = Arc::make_mut(params);
+            match cap {
+                0 => params.max_price_gen_per_time_unit = U256::zero(),
+                1 => params.storage_fee_max_gas_price = U256::zero(),
+                _ => params.receipt_fee_max_gas_price = U256::zero(),
+            }
+            test.context
+                .data
+                .accumulator
+                .message_fee_allocation
+                .push(exact);
+            test.context
+                .data
+                .accumulator
+                .message_fee_allocation_consumed
+                .push(U256::zero());
+            let memory_before = test.context.limiter.get_remaining_memory();
+
+            let error = test.emit_message(emission).await.unwrap_err();
+
+            assert_eq!(
+                errno(error),
+                generated::types::Errno::Inval,
+                "{} cap {cap}",
+                emission.name()
+            );
+            assert!(
+                test.context.data.accumulator.emissions.is_empty(),
+                "{} emitted",
+                emission.name()
+            );
+            assert_eq!(test.context.limiter.get_remaining_memory(), memory_before);
+            assert_eq!(
+                test.context
+                    .data
+                    .accumulator
+                    .message_fee_allocation_consumed,
+                vec![U256::zero(); 3]
+            );
+            let consumed = test
+                .context
+                .data
+                .supervisor
+                .shared_data
+                .data_fees_limit
+                .consumed()
+                .await;
+            assert_eq!(consumed.message_fee, U256::zero());
+            assert_eq!(consumed.message_receipt, U256::zero());
+            test.shutdown().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn opaque_subtree_length_is_charged_before_emission() {
+    for emission in [
+        MessageEmission::InternalAllocation,
+        MessageEmission::DeployAllocation,
+    ] {
+        for length in [0, 1, 31, 32, 33, 512] {
+            for remaining in [length, length + 1] {
+                let mut fees = emission_fees();
+                fees.message_receipt.delta_expr = "\\attrs = attrs.subtreeLength".to_owned();
+                let mut test = EmissionTestContext::with_fees(u32::MAX, remaining, fees);
+                let subtree = bytes::Bytes::from(vec![0xab; length as usize]);
+                test.context.data.accumulator.message_fee_allocation[1].subtree = subtree.clone();
+                let result = test.emit_message(emission).await;
+                if remaining == length {
+                    let error = trap_message(result.unwrap_err());
+                    assert!(
+                        error.contains("out_of message_fee total # internal"),
+                        "{error}"
+                    );
+                    assert!(test.context.data.accumulator.emissions.is_empty());
+                    assert_eq!(
+                        test.context
+                            .data
+                            .accumulator
+                            .message_fee_allocation_consumed[1],
+                        U256::zero()
+                    );
+                } else {
+                    result.unwrap();
+                    let emitted = match &test.context.data.accumulator.emissions[0] {
+                        domain::ExecutionEmission::InternalMessage {
+                            subtree,
+                            receipt_fee,
+                            ..
+                        }
+                        | domain::ExecutionEmission::InternalDeployMessage {
+                            subtree,
+                            receipt_fee,
+                            ..
+                        } => (subtree, receipt_fee),
+                        other => panic!("unexpected emission: {other:?}"),
+                    };
+                    assert_eq!(emitted.0, &subtree);
+                    assert_eq!(*emitted.1, U256::from(length));
+                }
+                test.shutdown().await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn children_budget_must_fit_the_matched_allocation() {
+    for emission in [
+        MessageEmission::InternalAllocation,
+        MessageEmission::DeployAllocation,
+    ] {
+        let mut test = EmissionTestContext::new(u32::MAX, 1000);
+        test.context.data.accumulator.message_fee_allocation[1].children_budget = U256::from(100);
+        let error = trap_message(test.emit_message(emission).await.unwrap_err());
+        assert!(
+            error.contains("out_of message_fee allocation_budget # internal"),
+            "{error}"
+        );
+        assert!(test.context.data.accumulator.emissions.is_empty());
+        assert_eq!(
+            test.context
+                .data
+                .accumulator
+                .message_fee_allocation_consumed[1],
+            U256::zero()
+        );
+        test.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn child_budget_fee_failure_is_atomic() {
     let mut test = EmissionTestContext::new(u32::MAX, 6);
-    test.context.data.accumulator.message_fee_allocation[1].children = vec![
-        allocation_child(U256::from(2), Vec::new()),
-        allocation_child(U256::from(3), Vec::new()),
-    ];
+    test.context.data.accumulator.message_fee_allocation[1].children_budget = U256::from(5);
     let memory_before = test.context.limiter.get_remaining_memory();
 
     let error = test
@@ -846,7 +1148,7 @@ async fn child_budget_fee_failure_is_atomic() {
     assert!(test.context.data.accumulator.emissions.is_empty());
     assert_eq!(
         test.context.data.accumulator.message_fee_allocation[1].budget,
-        U256::from(100)
+        Some(U256::from(100))
     );
     assert_eq!(
         test.context
@@ -873,8 +1175,7 @@ async fn child_budget_fee_failure_is_atomic() {
 #[tokio::test]
 async fn child_budget_overflow_is_internal_and_has_no_effect() {
     let mut test = EmissionTestContext::new(u32::MAX, 1);
-    test.context.data.accumulator.message_fee_allocation[1].children =
-        vec![allocation_child(U256::MAX, Vec::new())];
+    test.context.data.accumulator.message_fee_allocation[1].children_budget = U256::MAX;
     let memory_before = test.context.limiter.get_remaining_memory();
 
     let error = test
@@ -889,7 +1190,7 @@ async fn child_budget_overflow_is_internal_and_has_no_effect() {
     assert!(test.context.data.accumulator.emissions.is_empty());
     assert_eq!(
         test.context.data.accumulator.message_fee_allocation[1].budget,
-        U256::from(100)
+        Some(U256::from(100))
     );
     assert_eq!(
         test.context

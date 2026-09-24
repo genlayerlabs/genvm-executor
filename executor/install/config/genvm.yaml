@@ -127,8 +127,14 @@ fees:
       else
       let overlaySplit =
         idiv (timeUnitPool * node.overlaySplitBps) (10000 - node.overlaySplitBps) in
-      # 7. minimum primary fees
-      let minPrimaryFees = timeUnitPool + overlaySplit + executionTerm in
+      # 7. Successful appeals return the bond plus floor(1.5 * bond) profit
+      let appealProfitReserve = foldRange 1 (appealRounds + 1) 0 (\acc i =
+        let bond = (arrayGetElem rotations i + 1)
+          * (leaderTU + arrayGetElem validatorsPerRound (2 * i) * validatorTU) in
+        let pricedBond = if multiplier > 0 then multiplier * bond else bond in
+        acc + pricedBond + idiv pricedBond 2) in
+      # The appeal-profit reserve is not subject to the developer/DAO overlay
+      let minPrimaryFees = timeUnitPool + overlaySplit + executionTerm + appealProfitReserve in
       minPrimaryFees
     in
   storage:

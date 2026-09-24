@@ -41,7 +41,8 @@ local alloc = {
 			receipt_fee_max_gas_price: 20,
 		},
 	},
-	children: [],
+	children_budget: 0,
+	subtree: [],
 };
 
 {tags: util.features([['message', 'send'], ['fees']], 'stable') + ['python'],

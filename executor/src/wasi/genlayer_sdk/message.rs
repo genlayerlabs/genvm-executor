@@ -19,18 +19,6 @@ fn allocation_match_priority(
     Some(recipient_priority + call_key_priority)
 }
 
-fn internal_allocation_match_priority(
-    node: &genvm_modules_interfaces::fees::MessageAllocationNode,
-    recipient: calldata::Address,
-    call_key: genvm_modules_interfaces::abi_stub::CallKey,
-) -> Option<u8> {
-    if node.budget.is_zero() {
-        return None;
-    }
-
-    allocation_match_priority(node, recipient, call_key)
-}
-
 pub(super) fn resolve_internal_allocation(
     nodes: &[genvm_modules_interfaces::fees::MessageAllocationNode],
     on: genvm_modules_interfaces::On,
@@ -48,11 +36,11 @@ pub(super) fn resolve_internal_allocation(
                 genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(_)
             )
         })
-        .filter_map(|node| internal_allocation_match_priority(node, recipient, call_key))
+        .filter_map(|node| allocation_match_priority(node, recipient, call_key))
         .min()?;
     let index = nodes.iter().position(|node| {
-        internal_allocation_match_priority(node, recipient, call_key) == Some(priority)
-            && node.on == on
+        allocation_match_priority(node, recipient, call_key) == Some(priority)
+            && (node.recipient.is_some() || node.on == on)
             && matches!(
                 &node.fee_params,
                 genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(_)
@@ -163,18 +151,16 @@ async fn consume_message_fee_internal(
     fee_params: Arc<abi::fees::InternalMessageParams>,
     args: ConsumeInternalArgs,
 ) -> Result<rt::fees::MessageFeeConsumption, generated::types::Error> {
+    validate_internal_price_caps(&fee_params)?;
     let mut fee_cost = shared_data
         .data_fees_limit
         .calculate_message_fee_internal(&fee_params)
         .map_err(internal_trap)?;
 
     if let FeeFunding::Allocation { node, .. } = &funding {
-        let declared_budget = node
-            .children
-            .iter()
-            .try_fold(fee_cost.reported_fee(), |total, child| {
-                total.checked_add(child.budget)
-            })
+        let declared_budget = fee_cost
+            .reported_fee()
+            .checked_add(node.children_budget)
             .ok_or_else(|| {
                 internal_trap(rt::errors::internal!("message declared budget overflow"))
             })?;
@@ -199,11 +185,15 @@ async fn consume_message_fee_internal(
 
     match funding {
         FeeFunding::Allocation { node, consumed } => {
-            let remaining_budget = node.budget.checked_sub(*consumed).ok_or_else(|| {
-                internal_trap(rt::errors::internal!(
-                    "message allocation consumed budget exceeds its total"
-                ))
-            })?;
+            let remaining_budget = node
+                .budget
+                .unwrap_or(primitive_types::U256::MAX)
+                .checked_sub(*consumed)
+                .ok_or_else(|| {
+                    internal_trap(rt::errors::internal!(
+                        "message allocation consumed budget exceeds its total"
+                    ))
+                })?;
             if fee_total > remaining_budget {
                 log_warn!(
                     node:cd = *node,
@@ -310,11 +300,15 @@ async fn consume_message_fee_external(
         .map_err(internal_trap)?;
 
     let fee_total = fee_cost.reported_fee();
-    let remaining_budget = node.budget.checked_sub(*consumed).ok_or_else(|| {
-        internal_trap(rt::errors::internal!(
-            "message allocation consumed budget exceeds its total"
-        ))
-    })?;
+    let remaining_budget = node
+        .budget
+        .unwrap_or(primitive_types::U256::MAX)
+        .checked_sub(*consumed)
+        .ok_or_else(|| {
+            internal_trap(rt::errors::internal!(
+                "message allocation consumed budget exceeds its total"
+            ))
+        })?;
     if fee_total > remaining_budget {
         return Err(internal_trap(rt::errors::Error::vm(
             abi::consts::VmError::out_of()
@@ -407,6 +401,19 @@ async fn consume_external_receipt_only(
 pub(super) const FEE_PARAM_PRICE_BITS: usize = 96;
 pub(super) const FEE_PARAM_COUNT_BITS: usize = 32;
 
+fn validate_internal_price_caps(
+    params: &abi::fees::InternalMessageParams,
+) -> Result<(), generated::types::Error> {
+    if params.max_price_gen_per_time_unit.is_zero()
+        || params.storage_fee_max_gas_price.is_zero()
+        || params.receipt_fee_max_gas_price.is_zero()
+    {
+        log_debug!("internal message rejected: zero price cap (Inval)");
+        return Err(generated::types::Errno::Inval.into());
+    }
+    Ok(())
+}
+
 /// Validates the balance-funded fee fields (`use_balance` / `fee_params`) shared
 /// by `EmitInternalMessage` and `EmitInternalDeployMessage`. Returns the fee params
 /// to meter against the contract balance when `use_balance` is set, or `None`
@@ -442,13 +449,7 @@ pub(super) fn validate_balance_fee(
                 log_debug!("balance-funded message rejected: rotations empty (Inval)");
                 return Err(generated::types::Errno::Inval.into());
             }
-            if params.max_price_gen_per_time_unit.is_zero()
-                || params.storage_fee_max_gas_price.is_zero()
-                || params.receipt_fee_max_gas_price.is_zero()
-            {
-                log_debug!("balance-funded message rejected: zero price cap (Inval)");
-                return Err(generated::types::Errno::Inval.into());
-            }
+            validate_internal_price_caps(&params)?;
             let too_large = params.max_price_gen_per_time_unit.bits() > FEE_PARAM_PRICE_BITS
                 || params.storage_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
                 || params.receipt_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
@@ -541,6 +542,7 @@ impl ContextVFS<'_> {
                 .map_err(internal_trap)?;
             let remaining_budget = node
                 .budget
+                .unwrap_or(primitive_types::U256::MAX)
                 .checked_sub(
                     self.context
                         .data
@@ -877,7 +879,7 @@ impl ContextVFS<'_> {
         let fee_params = convert_internal_message_params_to_sdk(matched_params.as_ref());
         let accumulator = &mut self.context.data.accumulator;
         let matched_node = &accumulator.message_fee_allocation[matched_index];
-        let subtree = bytes::Bytes::from(matched_node.abi_encode());
+        let subtree = matched_node.subtree.clone();
         let rotations_size = usize_into_u64(fee_params.rotations.len())
             .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
         let allocation = reserve_permanent(
@@ -1079,7 +1081,7 @@ impl ContextVFS<'_> {
         let fee_params = convert_internal_message_params_to_sdk(matched_params.as_ref());
         let accumulator = &mut self.context.data.accumulator;
         let matched_node = &accumulator.message_fee_allocation[matched_index];
-        let subtree = bytes::Bytes::from(matched_node.abi_encode());
+        let subtree = matched_node.subtree.clone();
         let rotations_size = usize_into_u64(fee_params.rotations.len())
             .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
         let allocation = reserve_permanent(
