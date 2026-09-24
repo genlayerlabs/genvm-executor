@@ -6,11 +6,11 @@ local base = simpleDeploy.run('${jsonnetDir}/../send_message/send_message.py');
 	entry: util.addPaths([
 		base {bucket_totals: {submitted_messages_count: 1}},
 		base {bucket_totals: {submitted_messages_count: 0}},
-		// 64-byte array frame + one 1888-byte conservatively encoded message
-		base {bucket_totals: {submitted_messages: 1952}},
-		base {bucket_totals: {submitted_messages: 1951}},
-		// 1095 startup + 12 storage + 1953 message receipt gas
-		base {bucket_totals: {execution_data_gas: 3060}},
-		base {bucket_totals: {execution_data_gas: 3059}},
+		// 64-byte array frame + one 1056-byte conservatively encoded message
+		base {bucket_totals: {submitted_messages: 1120}},
+		base {bucket_totals: {submitted_messages: 1119}},
+		// 1095 startup + 12 storage + 1121 message receipt gas
+		base {bucket_totals: {execution_data_gas: 2228}},
+		base {bucket_totals: {execution_data_gas: 2227}},
 	]),
 }

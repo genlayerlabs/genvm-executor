@@ -24,7 +24,7 @@ local gasData = {
 
 local params = {
 	execution_budget_per_round: 1,
-	rotations: [0],
+	rotations: [0, 0],
 	leader_timeunits_allocation: 1,
 	validator_timeunits_allocation: 1,
 	max_price_gen_per_time_unit: 2,
@@ -32,25 +32,21 @@ local params = {
 	receipt_fee_max_gas_price: 1,
 };
 
-local child(budget, children=[], recipient=null) = {
-	budget: budget,
-	recipient: recipient,
+local alloc = {
+	budget: 200,
+	recipient: null,
 	call_key: null,
 	on: 'finalized',
 	fee_params: {Internal: params},
-	children: children,
+	children_budget: 60,
+	subtree: [0, 255, 1, 2, 3],
 };
-
-local alloc = child(100, [
-	child(30, [child(13)]),
-	child(30, [], 'AwAAAAAAAAAAAAAAAAAAAAAAAAA='),
-]);
 
 {
 	tags: util.features([['message', 'send'], ['fees']], 'stable') + ['python'],
 	entry: util.addPaths([
 		simple_deploy.run('${jsonnetDir}/${fileBaseName}.py') {
-			bucket_totals: {message_fee: 100},
+			bucket_totals: {message_fee: 200},
 			gas_data: gasData,
 			message_fee_allocation: [alloc],
 		},
