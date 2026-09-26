@@ -71,6 +71,67 @@ fn emission_fees() -> crate::config::FeesConfig {
     }
 }
 
+fn production_emission_fee_model(
+    message_fee_limit: U256,
+) -> (
+    std::collections::HashMap<String, U256>,
+    crate::config::FeesConfig,
+    std::collections::BTreeMap<String, String>,
+) {
+    let config: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../../install/config/genvm.yaml")).unwrap();
+    let fees = serde_yaml::from_value(config["fees"].clone()).unwrap();
+    let mut buckets = [
+        "execution_data_gas",
+        "message_fee",
+        "nondet_outputs",
+        "submitted_messages",
+        "submitted_messages_count",
+    ]
+    .into_iter()
+    .map(|name| (name.to_owned(), U256::MAX))
+    .collect::<std::collections::HashMap<_, _>>();
+    buckets.insert("message_fee".to_owned(), message_fee_limit);
+    let gas_data = [
+        ("storageUnitPrice", "1"),
+        ("lockedReceiptGasPrice", "1"),
+        ("receiptGasPerByte", "1"),
+        ("gasPerChangedSlot", "1"),
+        ("intrinsicGas", "0"),
+        ("bootloaderOverhead", "0"),
+        ("fixedProposeReceiptGas", "0"),
+        ("fixedMessageRevealGas", "0"),
+        ("overlaySplitBps", "1500"),
+        ("receiptWrapperBytes", "1024"),
+        ("minProposeTimeout", "1"),
+        (
+            "maxProposeTimeout",
+            "340282366920938463463374607431768211455",
+        ),
+        ("minCommitTimeout", "1"),
+        (
+            "maxCommitTimeout",
+            "340282366920938463463374607431768211455",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .collect();
+    (buckets, fees, gas_data)
+}
+
+fn appealed_child_params() -> abi::fees::InternalMessageParams {
+    abi::fees::InternalMessageParams {
+        leader_time_units_allocation: U256::from(5),
+        validator_time_units_allocation: U256::from(5),
+        execution_budget_per_round: U256::zero(),
+        rotations: vec![U256::from(4); 4],
+        max_price_gen_per_time_unit: U256::from(3),
+        storage_fee_max_gas_price: U256::from(20),
+        receipt_fee_max_gas_price: U256::from(20),
+    }
+}
+
 fn external_message_allocation() -> genvm_modules_interfaces::fees::MessageAllocationNode {
     genvm_modules_interfaces::fees::MessageAllocationNode {
         recipient: None,
@@ -368,6 +429,30 @@ impl EmissionTestContext {
     }
 
     fn with_fees(memory_limit: u32, fee_total: u64, fees: crate::config::FeesConfig) -> Self {
+        Self::with_fee_model(
+            memory_limit,
+            std::collections::HashMap::from([("test".to_owned(), U256::from(fee_total))]),
+            fees,
+            Default::default(),
+        )
+    }
+
+    fn with_fee_model(
+        memory_limit: u32,
+        buckets: std::collections::HashMap<String, U256>,
+        fees: crate::config::FeesConfig,
+        gas_data: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        Self::with_fee_model_and_balance(memory_limit, buckets, fees, gas_data, U256::MAX)
+    }
+
+    fn with_fee_model_and_balance(
+        memory_limit: u32,
+        buckets: std::collections::HashMap<String, U256>,
+        fees: crate::config::FeesConfig,
+        gas_data: std::collections::BTreeMap<String, String>,
+        initial_balance: U256,
+    ) -> Self {
         let root = TestDir::new();
         let runners_dir = root.join("runners");
         let registry_dir = root.join("registry");
@@ -384,12 +469,7 @@ impl EmissionTestContext {
                 hosts: vec![Default::default()].into_boxed_slice(),
                 ..Default::default()
             },
-            data_fees_limit: rt::fees::DataLimit::new(
-                std::collections::HashMap::from([("test".to_owned(), U256::from(fee_total))]),
-                fees.clone(),
-                Default::default(),
-            )
-            .unwrap(),
+            data_fees_limit: rt::fees::DataLimit::new(buckets, fees.clone(), gas_data).unwrap(),
             det_fuel_budget: rt::DetFuelBudget::new(None),
             llm_consumption: tokio::sync::Mutex::new(U256::zero()),
         });
@@ -458,7 +538,7 @@ impl EmissionTestContext {
         .unwrap();
         supervisor
             .balances
-            .insert(calldata::Address::zero(), U256::MAX);
+            .insert(calldata::Address::zero(), initial_balance);
 
         let limiter = rt::memlimiter::Limiter::with_limit(memory_limit);
         let permissions = base::Permissions {
@@ -606,6 +686,26 @@ impl EmissionTestContext {
                 .await
             }
         }
+    }
+
+    async fn emit_internal_allocation_on(
+        &mut self,
+        on: gl_call::On,
+    ) -> Result<generated::types::Fd, generated::types::Error> {
+        self.wasi()
+            .gl_call_emit_internal_message(
+                calldata::Address::zero(),
+                abi::entry::MainCallData {
+                    name: None,
+                    args: None,
+                    kwargs: None,
+                },
+                U256::zero(),
+                on,
+                false,
+                None,
+            )
+            .await
     }
 
     async fn shutdown(self) {
@@ -982,6 +1082,171 @@ async fn repeated_internal_messages_preserve_opaque_subtree_and_charge_budgets()
 
         test.shutdown().await;
     }
+}
+
+#[tokio::test]
+async fn appealed_child_use_balance_charges_one_primary_quote_per_new_emission() {
+    const QUOTE: u64 = 18_238;
+    const VALUE: u64 = 7;
+    let (buckets, fees, gas_data) = production_emission_fee_model(U256::zero());
+    let balance = U256::from(2 * (QUOTE + VALUE));
+    let mut test =
+        EmissionTestContext::with_fee_model_and_balance(u32::MAX, buckets, fees, gas_data, balance);
+
+    // These are fresh occurrences in one execution, not an appealed replay.
+    // Child appeal rounds are already included in QUOTE. The parent's appeal
+    // horizon determines capacity on-chain; it is not a per-emission VM input.
+    for occurrence in 1..=2 {
+        test.wasi()
+            .gl_call_emit_internal_message(
+                calldata::Address::zero(),
+                abi::entry::MainCallData {
+                    name: None,
+                    args: None,
+                    kwargs: None,
+                },
+                U256::from(VALUE),
+                gl_call::On::Decided,
+                true,
+                Some(appealed_child_params()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            test.context.data.accumulator.messages_value_decremented,
+            U256::from(occurrence * (QUOTE + VALUE))
+        );
+        match &test.context.data.accumulator.emissions[occurrence as usize - 1] {
+            domain::ExecutionEmission::InternalMessage {
+                message_fee,
+                subtree,
+                use_balance,
+                on,
+                ..
+            } => {
+                assert_eq!(*message_fee, U256::from(QUOTE));
+                assert!(subtree.is_empty());
+                assert!(*use_balance);
+                assert_eq!(*on, gl_call::On::Decided);
+            }
+            other => panic!("unexpected emission: {other:?}"),
+        }
+    }
+
+    let error = test
+        .wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            U256::from(VALUE),
+            gl_call::On::Decided,
+            true,
+            Some(appealed_child_params()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(errno(error), generated::types::Errno::InsufficientBalance);
+    assert_eq!(test.context.data.accumulator.emissions.len(), 2);
+    assert_eq!(
+        test.context.data.accumulator.messages_value_decremented,
+        balance
+    );
+    let consumed = test
+        .context
+        .data
+        .supervisor
+        .shared_data
+        .data_fees_limit
+        .consumed()
+        .await;
+    assert_eq!(consumed.message_fee, U256::zero());
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn appealed_child_open_bucket_charges_primary_and_subtree_budget_per_emission() {
+    const QUOTE: u64 = 18_238;
+    const CHILDREN_BUDGET: u64 = 50;
+    let per_emission = U256::from(QUOTE + CHILDREN_BUDGET);
+    let (buckets, fees, gas_data) = production_emission_fee_model(per_emission * 2);
+    let mut test = EmissionTestContext::with_fee_model(u32::MAX, buckets, fees, gas_data);
+    let node = &mut test.context.data.accumulator.message_fee_allocation[1];
+    let params = appealed_child_params();
+    node.fee_params = genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(
+        Arc::new(genvm_modules_interfaces::fees::InternalMessageParams {
+            leader_timeunits_allocation: params.leader_time_units_allocation,
+            validator_timeunits_allocation: params.validator_time_units_allocation,
+            execution_budget_per_round: params.execution_budget_per_round,
+            rotations: params.rotations,
+            max_price_gen_per_time_unit: params.max_price_gen_per_time_unit,
+            storage_fee_max_gas_price: params.storage_fee_max_gas_price,
+            receipt_fee_max_gas_price: params.receipt_fee_max_gas_price,
+        }),
+    );
+    node.budget = None; // Dynamic/open allocation: bounded by the sender pool.
+    node.on = genvm_modules_interfaces::On::Decided;
+    node.children_budget = U256::from(CHILDREN_BUDGET);
+    node.subtree = bytes::Bytes::from_static(b"opaque descendant allocation");
+
+    for occurrence in 1..=2 {
+        test.emit_internal_allocation_on(gl_call::On::Decided)
+            .await
+            .unwrap();
+        match &test.context.data.accumulator.emissions[occurrence - 1] {
+            domain::ExecutionEmission::InternalMessage {
+                message_fee,
+                subtree,
+                use_balance,
+                on,
+                ..
+            } => {
+                assert_eq!(*message_fee, per_emission);
+                assert_eq!(subtree, b"opaque descendant allocation".as_slice());
+                assert!(!*use_balance);
+                assert_eq!(*on, gl_call::On::Decided);
+            }
+            other => panic!("unexpected emission: {other:?}"),
+        }
+        assert_eq!(
+            test.context
+                .data
+                .accumulator
+                .message_fee_allocation_consumed[1],
+            per_emission * U256::from(occurrence)
+        );
+    }
+
+    let error = trap_message(
+        test.emit_internal_allocation_on(gl_call::On::Decided)
+            .await
+            .unwrap_err(),
+    );
+    assert!(
+        error.contains("out_of message_fee total # internal"),
+        "{error}"
+    );
+    assert_eq!(test.context.data.accumulator.emissions.len(), 2);
+    assert_eq!(
+        test.context
+            .data
+            .accumulator
+            .message_fee_allocation_consumed[1],
+        per_emission * 2
+    );
+    let consumed = test
+        .context
+        .data
+        .supervisor
+        .shared_data
+        .data_fees_limit
+        .consumed()
+        .await;
+    assert_eq!(consumed.message_fee, per_emission * 2);
+    test.shutdown().await;
 }
 
 #[tokio::test]
