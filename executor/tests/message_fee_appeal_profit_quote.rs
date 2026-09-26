@@ -8,8 +8,8 @@
 use genvm::config::FeesConfig;
 use genvm::rt::fees::DataLimit;
 use genvm_modules_interfaces::{
-    On,
     fees::{InternalMessageParams, MessageAllocationNode, MessageAllocationNodeParams},
+    On,
 };
 use primitive_types::U256;
 use std::{collections::HashMap, sync::Arc};
