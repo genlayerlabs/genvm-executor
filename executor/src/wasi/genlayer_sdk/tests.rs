@@ -1975,6 +1975,23 @@ fn fatal_leader_outcome_cannot_be_published() {
 }
 
 #[test]
+fn leader_timeout_is_a_fatal_leader_fault() {
+    let data = leader_bytes(public_abi::ResultCode::VmError, b"timeout");
+    let proposal = leader_proposal_for_validation(&data);
+
+    assert!(matches!(proposal, LeaderProposal::Rejected(..)));
+    let (result, encoded) = proposal.into_result_and_encoding();
+    let rt::vm::RunOk::FatalVMError(error, _) = result else {
+        panic!("expected a fatal leader fault, got {result:?}");
+    };
+    assert_eq!(error, malformed());
+    assert_eq!(
+        encoded,
+        rt::vm::ContractOutcome::VMError(malformed(), None).encode()
+    );
+}
+
+#[test]
 fn malformed_leader_outcome_is_rejected_and_charged_as_a_vm_error() {
     let proposal =
         leader_proposal_for_validation(&[crate::host::host_fns::ResultCode::FatalVmError as u8]);
@@ -2082,7 +2099,6 @@ fn leader_vm_error_off_trie_code_is_malformed() {
 #[test]
 fn leader_vm_error_on_trie_code_passes() {
     for code in [
-        "timeout",
         "forbidden",
         "out_of storage",
         "out_of memory",
@@ -2261,16 +2277,13 @@ fn leader_vm_error_derived_entry_code_is_malformed() {
 }
 
 #[test]
-fn every_generated_trie_code_is_accepted() {
+fn proposable_generated_trie_codes_are_accepted() {
     // Guards against codegen drift: adding a `vm_error` trie entry without
     // regenerating `is_valid` would silently make a legitimate leader code
     // unproposable. Mirrors the constructors the generator emits.
     //
-    // The leader-fault nondet-output subtree is deliberately absent: it lives
-    // in the derived-outcome namespace and so is never proposable (see
-    // `leader_vm_error_in_derived_namespace_is_remapped`).
+    // Derived outcomes and fatal timeouts are never proposable.
     let codes = [
-        public_abi::VmError::timeout(),
         public_abi::VmError::forbidden(),
         public_abi::VmError::wasm_trap().val(),
         public_abi::VmError::wasm_trap().unreachable(),
@@ -2338,13 +2351,11 @@ fn leader_own_error_is_not_self_filtered() {
 }
 
 #[test]
-fn every_stripped_leader_error_round_trips_through_acceptance() {
+fn stripped_proposable_leader_errors_round_trip_through_acceptance() {
     // The invariant the publish path relies on: an honest leader's published
-    // bytes are exactly what an honest validator accepts. Only the derived
-    // namespace is exempt, and the leader cannot reach it (the nondet child
-    // cannot spawn a nondet child of its own).
+    // bytes are exactly what an honest validator accepts. Derived errors and
+    // fatal timeouts cannot be published by an honest leader.
     for code in [
-        "timeout",
         "forbidden",
         "wasm_trap unreachable",
         "out_of memory wasm_memory",

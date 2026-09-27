@@ -20,11 +20,12 @@ local malformed_payloads = [
 	[2, 255, 254], // vm_error: code is not valid UTF-8, so it needs raw bytes
 ];
 
-// Well-formed UTF-8 that the `vm_error` trie must still reject.
+// Well-formed UTF-8 that leader-result validation must still reject.
 local rejected_vm_error_codes = [
 	'i_made_this_up', // not in the trie at all
 	'exit_code +7',   // parameter is not spelled canonically
 	'out_of',         // non-terminal trie node
+	'timeout',        // fatal timeouts cannot be published as nondet output
 ];
 
 local leader_nondets =

@@ -178,7 +178,9 @@ fn validate_leader_vm_error(code: &str) -> Result<(), public_abi::VmError> {
         return Err(malformed_leader_result());
     }
 
-    if code == public_abi::VmError::malformed_entry().0.as_ref() {
+    if code == public_abi::VmError::malformed_entry().0.as_ref()
+        || code == public_abi::VmError::timeout().0.as_ref()
+    {
         return Err(malformed_leader_result());
     }
 
