@@ -74,3 +74,27 @@ fn external_fee_uses_the_guest_cap_when_it_is_lower() {
 fn external_fee_is_price_agnostic_when_both_agree() {
     assert_eq!(fee(5, 1000, 5), U256::from(5000));
 }
+
+#[test]
+fn external_reservations_reject_a_zero_locked_receipt_gas_price() {
+    let fees = DataLimit::new(bucket_totals(), default_fees(), gas_data(0)).unwrap();
+
+    for gas_limit in [0, 1000] {
+        let error = fees
+            .calculate_message_fee_external(&genlayer_sdk::abi::fees::ExternalMessageParams {
+                gas_limit: gas_limit.into(),
+                max_gas_price: U256::from(7),
+            })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("fee below_minimum"),
+            "unexpected error for gas limit {gas_limit}: {error}"
+        );
+    }
+}
+
+#[test]
+fn external_reservations_accept_the_smallest_positive_locked_price() {
+    assert_eq!(fee(1, 1000, 7), U256::from(1000));
+    assert_eq!(fee(1, 1000, 0), U256::zero());
+}

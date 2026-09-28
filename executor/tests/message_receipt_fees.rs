@@ -15,6 +15,7 @@ fn gas_data() -> std::collections::BTreeMap<String, String> {
         ("fixedProposeReceiptGas", 210_000),
         ("gasPerChangedSlot", 1_000),
         ("intrinsicGas", 21_000),
+        ("lockedReceiptGasPrice", 1),
         ("receiptGasPerByte", 16),
         ("receiptWrapperBytes", 1_024),
     ]
@@ -88,4 +89,40 @@ async fn reveal_cost_is_charged_with_only_the_first_message() {
     assert_eq!(remaining["execution_data_gas"], U256::zero());
     assert_eq!(remaining["submitted_messages"], U256::zero());
     assert_eq!(remaining["submitted_messages_count"], U256::zero());
+}
+
+#[tokio::test]
+async fn external_receipts_reject_nonpositive_locked_gas_prices_without_charging() {
+    for price in ["0", "-1"] {
+        let mut gas_data = gas_data();
+        gas_data.insert("lockedReceiptGasPrice".to_owned(), price.to_owned());
+        let fees = DataLimit::new(
+            std::collections::HashMap::from([
+                ("execution_data_gas".to_owned(), U256::MAX),
+                ("message_fee".to_owned(), U256::MAX),
+                ("nondet_outputs".to_owned(), U256::MAX),
+                ("submitted_messages".to_owned(), U256::MAX),
+                ("submitted_messages_count".to_owned(), U256::MAX),
+            ]),
+            default_fees(),
+            gas_data,
+        )
+        .unwrap();
+        let remaining = fees.remaining().await;
+
+        for is_first_message in [true, false] {
+            let error = fees
+                .calculate_message_receipt(empty_external_message(is_first_message))
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("fee below_minimum"),
+                "unexpected error for price {price}: {error}"
+            );
+        }
+        let mut internal = empty_external_message(true);
+        internal.is_internal = true;
+        assert!(fees.calculate_message_receipt(internal).is_ok());
+        assert_eq!(fees.remaining().await, remaining);
+        assert_eq!(fees.consumed().await.message_receipt, U256::zero());
+    }
 }

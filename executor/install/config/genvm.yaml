@@ -181,12 +181,13 @@ fees:
       # is conservative and avoids depending on RLP prefix lengths
       let codeBytes = if a.isDeploy then 32 + 32 + ceilDiv a.codeLength 32 * 32 else 0 in
       let abiBytes = fixedBytes + calldataBytes + feeParamsBytes + subtreeBytes + codeBytes in
-      [ # execution_data_gas
+      let validReceiptPrice = if a.isInternal then true else node.lockedReceiptGasPrice > 0 in
+      if validReceiptPrice then [ # execution_data_gas
         revealGas + abiBytes * node.receiptGasPerByte + node.gasPerChangedSlot
       # submitted_messages
       , revealBytes + abiBytes
       # submitted_messages_count
-      , 1]
+      , 1] else vmError "fee below_minimum"
   nondet_output:
     # Gas cost and conservative compact LeaderPublicData size
     buckets: [execution_data_gas, nondet_outputs]
@@ -246,6 +247,7 @@ fees:
         else if budgetTooLow then vmError "fee below_minimum"
         else messageFeeFloor a.matchedFeeParams
       # external messages reserve gasLimit at the effective chain price
+      else if node.lockedReceiptGasPrice <= 0 then vmError "fee below_minimum"
       else a.matchedFeeParams.gasLimit
         * (if node.lockedReceiptGasPrice < a.matchedFeeParams.maxGasPrice
            then node.lockedReceiptGasPrice

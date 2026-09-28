@@ -271,19 +271,28 @@ fn extra_leader_nondet_output_error(
     supervisor: &rt::supervisor::Supervisor,
     run_ok: &rt::vm::RunOk,
 ) -> Option<public_abi::VmError> {
-    if matches!(run_ok, rt::vm::RunOk::FatalVMError(..)) {
-        return None;
-    }
-
     let executed = supervisor
         .nondet_call_no
         .load(std::sync::atomic::Ordering::SeqCst);
     let published = supervisor
         .leader_nondet_results
         .as_ref()
-        .map_or(0, |v| v.len().into_int_downcast_panicking());
+        .map_or(0, Vec::len);
 
-    if !has_extra_leader_output(supervisor.shared_data.run_mode, executed, published) {
+    validate_leader_output_count(supervisor.shared_data.run_mode, executed, published, run_ok)
+}
+
+pub fn validate_leader_output_count(
+    run_mode: rt::RunMode,
+    executed: u32,
+    published: usize,
+    run_ok: &rt::vm::RunOk,
+) -> Option<public_abi::VmError> {
+    if matches!(run_ok, rt::vm::RunOk::FatalVMError(..)) {
+        return None;
+    }
+
+    if !has_extra_leader_output(run_mode, executed, published) {
         return None;
     }
 
@@ -293,8 +302,8 @@ fn extra_leader_nondet_output_error(
     Some(rt::errors::vm_error_for_leader_extra(encoded.as_slice()))
 }
 
-fn has_extra_leader_output(run_mode: rt::RunMode, executed: u32, published: u32) -> bool {
-    run_mode != rt::RunMode::Leader && published > executed
+fn has_extra_leader_output(run_mode: rt::RunMode, executed: u32, published: usize) -> bool {
+    run_mode != rt::RunMode::Leader && published > executed as usize
 }
 
 pub async fn run_with_impl(

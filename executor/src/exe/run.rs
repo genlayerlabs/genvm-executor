@@ -304,6 +304,15 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
         })
     };
     if let Some(setup_run_ok) = setup_run_ok {
+        let setup_run_ok = match genvm::validate_leader_output_count(
+            shared_data.run_mode,
+            0,
+            leader_nondet_results.as_ref().map_or(0, Vec::len),
+            &setup_run_ok,
+        ) {
+            Some(error) => genvm::rt::vm::RunOk::FatalVMError(error, None),
+            None => setup_run_ok,
+        };
         let host_for = |method: genvm::host::host_fns::Methods| -> usize {
             let m = method as usize;
             if m < method_hosts.len() {
