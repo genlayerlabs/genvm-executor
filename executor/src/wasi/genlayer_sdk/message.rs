@@ -5,6 +5,11 @@ fn allocation_match_priority(
     recipient: calldata::Address,
     call_key: genvm_modules_interfaces::abi_stub::CallKey,
 ) -> Option<u8> {
+    // Consensus resolves only keys with a nonzero budget
+    if node.recipient.is_some() && node.budget.is_some_and(|budget| budget.is_zero()) {
+        return None;
+    }
+
     let recipient_priority = match node.recipient {
         Some(candidate) if candidate == recipient => 0,
         Some(_) => return None,
