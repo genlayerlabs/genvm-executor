@@ -134,7 +134,7 @@ fn internal_allocation_prefers_exact_key_over_earlier_wildcard() {
 }
 
 #[test]
-fn internal_allocation_skips_zero_budget_chain_keys() {
+fn internal_zero_remaining_exact_shadows_funded_wildcard() {
     let recipient = calldata::Address::from([7; 20]);
     let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
     let mut wildcard = internal_message_allocation();
@@ -151,21 +151,25 @@ fn internal_allocation_skips_zero_budget_chain_keys() {
         recipient,
         call_key,
     )
-    .expect("wildcard allocation should match after skipping zero-budget exact");
-    assert_eq!(matched, 0);
+    .expect("the stored exact key must shadow the funded wildcard");
+    assert_eq!(matched, 1);
 
     nodes[0].budget = Some(U256::zero());
-    assert!(resolve_internal_allocation(
-        &nodes,
-        genvm_modules_interfaces::On::Finalized,
-        recipient,
-        call_key,
-    )
-    .is_none());
+    assert_eq!(
+        resolve_internal_allocation(
+            &nodes,
+            genvm_modules_interfaces::On::Finalized,
+            recipient,
+            call_key,
+        )
+        .expect("exact key still exists at zero remaining budget")
+        .0,
+        1
+    );
 }
 
 #[test]
-fn internal_allocation_zero_budget_exact_ignores_its_phase() {
+fn internal_zero_remaining_exact_phase_blocks_wildcard() {
     let recipient = calldata::Address::from([7; 20]);
     let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
     let mut wildcard = internal_message_allocation();
@@ -176,14 +180,13 @@ fn internal_allocation_zero_budget_exact_ignores_its_phase() {
     exact.budget = Some(U256::zero());
     let nodes = vec![wildcard, exact];
 
-    let (matched, _) = resolve_internal_allocation(
+    assert!(resolve_internal_allocation(
         &nodes,
         genvm_modules_interfaces::On::Finalized,
         recipient,
         call_key,
     )
-    .expect("zero-budget exact allocation should not block the wildcard");
-    assert_eq!(matched, 0);
+    .is_none());
 }
 
 #[test]
@@ -676,7 +679,7 @@ fn trap_message(error: generated::types::Error) -> String {
 }
 
 #[tokio::test]
-async fn internal_zero_budget_chain_keys_are_absent() {
+async fn internal_zero_remaining_exact_fails_before_using_wildcard() {
     for emission in [
         MessageEmission::InternalAllocation,
         MessageEmission::DeployAllocation,
@@ -696,10 +699,23 @@ async fn internal_zero_budget_chain_keys_are_absent() {
         accumulator.message_fee_allocation = vec![exact, wildcard];
         accumulator.message_fee_allocation_consumed = vec![U256::zero(); 2];
 
-        test.emit_message(emission).await.unwrap();
+        let error = trap_message(test.emit_message(emission).await.unwrap_err());
+        assert!(
+            error.contains("out_of message_fee allocation_budget # internal"),
+            "{error}"
+        );
         let accumulator = &test.context.data.accumulator;
         assert_eq!(accumulator.message_fee_allocation_consumed[0], U256::zero());
-        assert!(!accumulator.message_fee_allocation_consumed[1].is_zero());
+        assert_eq!(accumulator.message_fee_allocation_consumed[1], U256::zero());
+        assert!(accumulator.emissions.is_empty());
+
+        // The wildcard can fund this emission only when no exact key exists.
+        let accumulator = &mut test.context.data.accumulator;
+        accumulator.message_fee_allocation.remove(0);
+        accumulator.message_fee_allocation_consumed.remove(0);
+        test.emit_message(emission).await.unwrap();
+        let accumulator = &test.context.data.accumulator;
+        assert!(!accumulator.message_fee_allocation_consumed[0].is_zero());
         match &accumulator.emissions[0] {
             domain::ExecutionEmission::InternalMessage { subtree, .. }
             | domain::ExecutionEmission::InternalDeployMessage { subtree, .. } => {
@@ -708,13 +724,6 @@ async fn internal_zero_budget_chain_keys_are_absent() {
             other => panic!("unexpected emission: {other:?}"),
         }
 
-        test.context.data.accumulator.message_fee_allocation[1].budget = Some(U256::zero());
-        let error = trap_message(test.emit_message(emission).await.unwrap_err());
-        assert!(
-            error.contains("fee no_matching_allocation # internal"),
-            "{error}"
-        );
-        assert_eq!(test.context.data.accumulator.emissions.len(), 1);
         test.shutdown().await;
     }
 }
