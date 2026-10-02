@@ -2,13 +2,13 @@
 	"repos": {
 		"executor/third-party/wasmtime": {
 			"url": "https://github.com/bytecodealliance/wasmtime.git",
-			"commit": "7bac2c2775808aaec5d4aa5627a5e447b51102cf",
+			"commit": "ebf20ab7cbf35fa3fbd8202562017fda6a541021",
 			"patches": [
-				"gbm0xv16dc1fs2km",
-				"zsjxmza3dms0hr10",
-				"4rr93pqjtwm5m701",
-				"r6518c8dxghpkhsj",
-				"6xy06vg0d71czwmm"
+				"wyqzzn2hxndgbxbx",
+				"mgz066ws46rvhghv",
+				"x77t41kns34hzzhb",
+				"fvfcbfxe3ng3djg8",
+				"nwdw669v5p3aamta"
 			],
 			"submodules": []
 		},
