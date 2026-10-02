@@ -173,6 +173,12 @@ async fn consume_message_fee_internal(
     }
 
     let fee_total = fee_cost.reported_fee();
+    // A child transaction must be funded for its first attempt
+    if fee_total.is_zero() {
+        return Err(internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::fee().below_minimum(),
+        )));
+    }
 
     let receipt_cost = shared_data
         .data_fees_limit
