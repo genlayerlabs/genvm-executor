@@ -35,7 +35,7 @@ local contract_instance_slot = 'e1ae23412792df6b6a98fb7c9839701fb8b02b6fc7ed0228
 			{"": "push_code", "args": [code[len(code)//2:].encode()]}
 		|||,
 	},
-	// finish bootstrapping (copies code from temp slot to code slot)
+	// finish bootstrapping (points the root code slot at the pushed code)
 	s {
 		code: null,
 		calldata: |||

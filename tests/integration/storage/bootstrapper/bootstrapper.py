@@ -20,11 +20,13 @@ VACANT_SLOT = _CALC_MANAGER.get_store_slot(gl.storage.ROOT_SLOT_ID).indirect(
 	gl.vm.ABI.root_offsets.MAJOR
 )
 
-SPECIAL_SLOTS = [gl.storage.ROOT_SLOT_ID, CODE_SLOT, LOCKED_SLOT]
+SPECIAL_SLOTS = [gl.storage.ROOT_SLOT_ID, LOCKED_SLOT]
 
 SPECIAL_SLOTS_TWINS = {
 	slt: VACANT_SLOT.indirect(i).id for i, slt in enumerate(SPECIAL_SLOTS)
 }
+
+CODE_TARGET_SLOT = VACANT_SLOT.indirect(len(SPECIAL_SLOTS)).id
 
 
 def get_twin_vla(slot_id: bytes) -> gl.storage.VLA[gl.types.u8]:
@@ -72,17 +74,19 @@ class Contract(gl.contract.Contract):
 		"""
 
 		for slot, offset, slice in data:
-			if slot in SPECIAL_SLOTS_TWINS.values():
-				gl.vm.UserError.immediate('Cannot write to the temporary code slots')
+			if slot in SPECIAL_SLOTS_TWINS.values() or slot == CODE_TARGET_SLOT:
+				gl.vm.UserError.immediate('Cannot write to the temporary slots')
 			if twin := SPECIAL_SLOTS_TWINS.get(slot):
 				write_to_twin(twin, offset, slice)
 			else:
+				if slot == CODE_SLOT:
+					slot = CODE_TARGET_SLOT
 				gl.storage.Root.MANAGER.get_store_slot(slot).write(offset, slice)
 
 	@gl.public.write
 	def push_code(self, code: bytes):
 		"""
-		Push code to the contract. This will write the code to a temporary slot, which can be copied to the code slot in the ``finish`` method.
+		Push code to the contract. This will append the code to a slot, which the ``finish`` method makes the code slot.
 
 		:param code: code to push
 
@@ -91,19 +95,14 @@ class Contract(gl.contract.Contract):
 			otherwise the contract may be left in undefined state
 		"""
 
-		twin_slot_id = SPECIAL_SLOTS_TWINS[CODE_SLOT]
-		code_twin_vla = get_twin_vla(twin_slot_id)
-		code_vla = gl.storage.cast_slot(
-			gl.storage.VLA[gl.types.u8], gl.storage.Root.MANAGER, twin_slot_id, 4
-		)
-		code_vla.extend(code)
-		new_len = len(code_vla)
-		code_twin_vla.set_length(new_len + 4)
+		gl.storage.cast_slot(
+			gl.storage.VLA[gl.types.u8], gl.storage.Root.MANAGER, CODE_TARGET_SLOT, 0
+		).extend(code)
 
 	@gl.public.write
 	def finish(self):
 		"""
-		Finish bootstrapping. This will copy the code from the temporary slot to the code slot and make it available for execution.
+		Finish bootstrapping. This will copy the root and locked slots from their temporary slots and point the root at the pushed code, making it available for execution.
 		"""
 		BUF_SIZE = 65536
 		for dst, src in SPECIAL_SLOTS_TWINS.items():
@@ -114,3 +113,10 @@ class Contract(gl.contract.Contract):
 				chunk_size = min(BUF_SIZE, copy_len - offset)
 				data = vla_from.slot().read(vla_from.data_offset() + offset, chunk_size)
 				to.write(offset, data)
+
+		root = gl.storage.Root.get()
+		code_target = int.from_bytes(CODE_TARGET_SLOT, 'little')
+		root.code_slot = code_target
+		locked = root.locked_slots.get()
+		if int.from_bytes(CODE_SLOT, 'little') in locked:
+			locked.append(code_target)
