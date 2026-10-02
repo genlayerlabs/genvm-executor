@@ -206,6 +206,26 @@ fn internal_allocation_keeps_zero_budget_synthetic_wildcard() {
 }
 
 #[test]
+fn internal_zero_budget_recipient_wildcard_shadows_synthetic_wildcard() {
+    let recipient = calldata::Address::from([7; 20]);
+    let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
+    let synthetic = internal_message_allocation();
+    let mut wildcard = synthetic.clone();
+    wildcard.recipient = Some(recipient);
+    wildcard.budget = Some(U256::zero());
+    let nodes = vec![synthetic, wildcard];
+
+    let (matched, _) = resolve_internal_allocation(
+        &nodes,
+        genvm_modules_interfaces::On::Finalized,
+        recipient,
+        call_key,
+    )
+    .expect("the stored recipient wildcard must shadow the synthetic one");
+    assert_eq!(matched, 1);
+}
+
+#[test]
 fn internal_allocation_keeps_uncapped_exact_key() {
     let recipient = calldata::Address::from([7; 20]);
     let call_key = genvm_modules_interfaces::abi_stub::CallKey([8; 32]);
