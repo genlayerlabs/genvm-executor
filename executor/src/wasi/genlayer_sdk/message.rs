@@ -5,11 +5,6 @@ fn allocation_match_priority(
     recipient: calldata::Address,
     call_key: genvm_modules_interfaces::abi_stub::CallKey,
 ) -> Option<u8> {
-    // Consensus resolves only keys with a nonzero budget
-    if node.recipient.is_some() && node.budget.is_some_and(|budget| budget.is_zero()) {
-        return None;
-    }
-
     let recipient_priority = match node.recipient {
         Some(candidate) if candidate == recipient => 0,
         Some(_) => return None,
@@ -70,6 +65,10 @@ pub(super) fn external_allocation_candidates(
                 &node.fee_params,
                 genvm_modules_interfaces::fees::MessageAllocationNodeParams::External(_)
             )
+        })
+        // Consensus resolves external chain keys only with a nonzero budget
+        .filter(|(_, node)| {
+            node.recipient.is_none() || node.budget.is_none_or(|budget| !budget.is_zero())
         })
         .filter_map(|(index, node)| {
             allocation_match_priority(node, recipient, call_key).map(|priority| (priority, index))
