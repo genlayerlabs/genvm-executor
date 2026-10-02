@@ -68,37 +68,30 @@ impl From<std::str::Utf8Error> for BinDecodeError {
     }
 }
 
+/// Returns the decoded number and the bytes following it
+pub(crate) fn split_uleb(data: &[u8]) -> Result<(num_bigint::BigUint, &[u8]), BinDecodeError> {
+    let Some(last) = data.iter().position(|b| b & 0x80 == 0) else {
+        return Err(BinDecodeError::UnterminatedUleb);
+    };
+    if last != 0 && data[last] == 0 {
+        return Err(BinDecodeError::InvalidUlebEncoding);
+    }
+    let (num, rest) = data.split_at(last + 1);
+    let digits: Vec<u8> = num.iter().map(|b| b & 0x7f).collect();
+    // power-of-two radix is a linear bit repack
+    let res =
+        num_bigint::BigUint::from_radix_le(&digits, 128).expect("digits are masked below radix");
+    Ok((res, rest))
+}
+
 #[derive(Clone, Copy)]
 struct Parser<'a>(&'a [u8]);
 
 impl Parser<'_> {
     fn fetch_uleb(&mut self) -> Result<num_bigint::BigUint, BinDecodeError> {
-        let mut res = num_bigint::BigUint::ZERO;
-        let mut off = 0u64;
-        loop {
-            if self.0.is_empty() {
-                return Err(BinDecodeError::UnterminatedUleb);
-            }
-
-            let byte = self.0[0];
-            self.0 = &self.0[1..];
-
-            res += num_bigint::BigUint::from(byte & 0x7f) << off;
-
-            if byte & 0x80 == 0 {
-                if byte == 0 && off != 0 {
-                    return Err(BinDecodeError::InvalidUlebEncoding);
-                }
-                return Ok(res);
-            }
-
-            off = match off.checked_add(7) {
-                Some(off) => off,
-                None => {
-                    return Err(BinDecodeError::NumberTooBig);
-                }
-            };
-        }
+        let (res, rest) = split_uleb(self.0)?;
+        self.0 = rest;
+        Ok(res)
     }
 
     fn fetch_slice(&mut self, expected: usize) -> Result<&[u8], BinDecodeError> {
@@ -521,6 +514,75 @@ mod tests {
             decode(&[0x80, 0x00]),
             Err(BinDecodeError::InvalidUlebEncoding)
         ));
+    }
+
+    #[test]
+    fn huge_uleb_roundtrips_in_linear_time() {
+        // quadratic uleb handling takes ~35s on a 1 MiB integer in release, linear ~3ms
+        let mag = num_bigint::BigUint::from_bytes_le(&vec![0xa5; 1 << 20]);
+        let value = Value::Number(-num_bigint::BigInt::from(mag));
+        let encoded = encode(&value);
+        assert_eq!(decode(&encoded).unwrap(), value);
+        let Value::Number(expected) = value else {
+            unreachable!()
+        };
+        let decoded: num_bigint::BigInt =
+            crate::codec::Raw::new(encoded.into()).decode_as().unwrap();
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn decode_rejects_unterminated_uleb() {
+        for data in [&[][..], &[0x80, 0x80]] {
+            assert!(matches!(
+                decode(data),
+                Err(BinDecodeError::UnterminatedUleb)
+            ));
+            let codec: Result<Value, _> = crate::codec::Raw::new(data.to_vec().into()).decode_as();
+            assert!(matches!(
+                codec,
+                Err(crate::codec::DecodeError::BinDecodeError(
+                    BinDecodeError::UnexpectedEnd {
+                        expected: 1,
+                        available: 0
+                    }
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn codec_rejects_non_minimal_uleb() {
+        let codec: Result<Value, _> = crate::codec::Raw::new(vec![0x80, 0x00].into()).decode_as();
+        assert!(matches!(
+            codec,
+            Err(crate::codec::DecodeError::BinDecodeError(
+                BinDecodeError::InvalidUlebEncoding
+            ))
+        ));
+    }
+
+    #[test]
+    fn uleb_byte_boundaries() {
+        let cases: [(u128, &[u8]); 6] = [
+            (0, &[0x00]),
+            (127, &[0x7f]),
+            (128, &[0x80, 0x01]),
+            ((1 << 14) - 1, &[0xff, 0x7f]),
+            (1 << 14, &[0x80, 0x80, 0x01]),
+            (
+                1 << 63,
+                &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01],
+            ),
+        ];
+        for (n, bytes) in cases {
+            let mut out = Vec::new();
+            crate::encoder::write_uleb(&mut out, n.into()).unwrap();
+            assert_eq!(out, bytes, "encoding {n}");
+            let (decoded, rest) = split_uleb(bytes).unwrap();
+            assert_eq!(decoded, n.into(), "decoding {n}");
+            assert!(rest.is_empty());
+        }
     }
 
     #[test]

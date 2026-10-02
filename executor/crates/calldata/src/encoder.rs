@@ -2,26 +2,13 @@ use crate::Address;
 use crate::consts::*;
 use crate::int_traits::IntoIntComptime;
 
-fn write_uleb<W: Writer>(w: &mut W, mut num: num_bigint::BigUint) -> Result<(), W::Error> {
-    if num == num_bigint::BigUint::ZERO {
-        return w.write_one(0);
+pub(crate) fn write_uleb<W: Writer>(w: &mut W, num: num_bigint::BigUint) -> Result<(), W::Error> {
+    let mut digits = num.to_radix_le(128);
+    let last = digits.len() - 1;
+    for d in &mut digits[..last] {
+        *d |= 0x80;
     }
-
-    loop {
-        let mut cur = (num.iter_u32_digits().next().unwrap_or(0) & 0x7f) as u8;
-        num >>= 7u32;
-        let has_next = num != num_bigint::BigUint::ZERO;
-
-        if has_next {
-            cur |= 0x80;
-        }
-
-        w.write_one(cur)?;
-
-        if !has_next {
-            return Ok(());
-        }
-    }
+    w.write_all(&digits)
 }
 
 fn write_uleb_u64<W: Writer>(w: &mut W, mut num: u64) -> Result<(), W::Error> {

@@ -49,19 +49,6 @@ impl<'a> BinaryDeserializer<'a> {
         self.data.len()
     }
 
-    fn fetch_byte(&mut self) -> Result<u8, DecodeError> {
-        if self.data.is_empty() {
-            return Err(BinDecodeError::UnexpectedEnd {
-                expected: 1,
-                available: 0,
-            }
-            .into());
-        }
-        let b = self.data[0];
-        self.data = &self.data[1..];
-        Ok(b)
-    }
-
     fn fetch_slice(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
         if self.data.len() < n {
             return Err(BinDecodeError::UnexpectedEnd {
@@ -76,19 +63,15 @@ impl<'a> BinaryDeserializer<'a> {
     }
 
     fn fetch_uleb(&mut self) -> Result<num_bigint::BigUint, DecodeError> {
-        let mut res = num_bigint::BigUint::ZERO;
-        let mut off = 0u64;
-        loop {
-            let byte = self.fetch_byte()?;
-            res += num_bigint::BigUint::from(byte & 0x7f) << off;
-            if byte & 0x80 == 0 {
-                if byte == 0 && off != 0 {
-                    return Err(BinDecodeError::InvalidUlebEncoding.into());
-                }
-                return Ok(res);
-            }
-            off = off.checked_add(7).ok_or(BinDecodeError::NumberTooBig)?;
-        }
+        let (res, rest) = crate::bin::split_uleb(self.data).map_err(|e| match e {
+            BinDecodeError::UnterminatedUleb => BinDecodeError::UnexpectedEnd {
+                expected: 1,
+                available: 0,
+            },
+            e => e,
+        })?;
+        self.data = rest;
+        Ok(res)
     }
 
     fn uleb_to_usize(val: &num_bigint::BigUint) -> Result<usize, DecodeError> {
