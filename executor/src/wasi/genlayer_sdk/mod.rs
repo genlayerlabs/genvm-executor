@@ -951,6 +951,14 @@ impl ContextVFS<'_> {
             return Err(generated::types::Errno::Inval.into());
         }
 
+        let space_left = self.context.limiter.get_remaining_memory();
+        if space_left < top_limits::EXEC_PROMPT_MIN_SPACE {
+            log_warn!(@user, space_left = space_left; "not enough memory for exec prompt");
+            return Err(generated::types::Error::trap(crate::anyhow_to_wasmtime(
+                rt::errors::Error::vm(abi::consts::VmError::out_of().memory().val()).into(),
+            )));
+        }
+
         let host_remaining_time_fee_gen_wei = self
             .context
             .data
