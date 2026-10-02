@@ -158,7 +158,7 @@ index afa5ab6..5f3fdee 100644
          let mut validator =
              validator.into_validator(mem::take(&mut compiler.cx.validator_allocations));
 diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
-index 7dea98f..ee471b7 100644
+index 266938b..dadf341 100644
 --- a/crates/cranelift/src/func_environ.rs
 +++ b/crates/cranelift/src/func_environ.rs
 @@ -52,6 +52,14 @@ pub(crate) enum Extension {
@@ -197,7 +197,7 @@ index 7dea98f..ee471b7 100644
  
              stack_switching_handler_list_buffer: None,
              stack_switching_values_buffer: None,
-@@ -5144,25 +5149,42 @@ impl FuncEnvironment<'_> {
+@@ -5154,25 +5159,42 @@ impl FuncEnvironment<'_> {
  
          self.update_state_slot_vmctx(builder);
  
@@ -256,7 +256,7 @@ index 7dea98f..ee471b7 100644
  
          // Additionally we initialize `fuel_var` if it will get used.
          if self.tunables.consume_fuel {
-@@ -5225,22 +5247,44 @@ impl FuncEnvironment<'_> {
+@@ -5235,22 +5257,44 @@ impl FuncEnvironment<'_> {
      }
  
      pub fn before_return(&mut self, builder: &mut FunctionBuilder) {
@@ -317,7 +317,7 @@ index 7dea98f..ee471b7 100644
  
      pub fn translate_cont_bind(
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 772f112..a7bf09c 100644
+index d4c2afd..fdff6a5 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
 @@ -368,22 +368,17 @@ pub fn translate_operator(
@@ -1091,15 +1091,15 @@ index 772f112..a7bf09c 100644
      let (a, b) = env.stacks.pop2();
      let bitcast_a = optionally_bitcast_vector(a, needed_type, builder);
      let bitcast_b = optionally_bitcast_vector(b, needed_type, builder);
-@@ -4720,6 +4848,7 @@ fn create_catch_block(
-     let block = builder.create_block();
+@@ -4721,6 +4849,7 @@ fn create_catch_block(
      let exn_ref = builder.append_block_param(block, exn_payload_ty);
      builder.switch_to_block(block);
+     environ.on_catch_block_entry(builder);
 +    environ.restore_semantic_stack_limits_after_exception(builder);
      debug_assert!(exn_ref_ty.bits() <= exn_payload_ty.bits());
      let exn_ref = if exn_ref_ty.bits() < exn_payload_ty.bits() {
          builder.ins().ireduce(exn_ref_ty, exn_ref)
-@@ -4760,7 +4889,10 @@ fn create_catch_block(
+@@ -4761,7 +4890,10 @@ fn create_catch_block(
      Ok(block)
  }
  
@@ -1281,7 +1281,7 @@ index bd8f42f..b90a75d 100644
              memory_init_cow,
              other.memory_init_cow,
 diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
-index c657833..b129bed 100644
+index 94da452..30f7016 100644
 --- a/crates/wasmtime/src/runtime/func.rs
 +++ b/crates/wasmtime/src/runtime/func.rs
 @@ -1509,7 +1509,10 @@ impl<'a, T: 'static> StoreContextMut<'a, T> {
@@ -1342,7 +1342,7 @@ index f7ab83b..cad9d79 100644
              continuations: Vec::new(),
              instances: TryPrimaryMap::new(),
 diff --git a/crates/wasmtime/src/runtime/vm/vmcontext.rs b/crates/wasmtime/src/runtime/vm/vmcontext.rs
-index 4509bc4..a086355 100644
+index 44cee91..781007d 100644
 --- a/crates/wasmtime/src/runtime/vm/vmcontext.rs
 +++ b/crates/wasmtime/src/runtime/vm/vmcontext.rs
 @@ -721,6 +721,14 @@ const _: () = {

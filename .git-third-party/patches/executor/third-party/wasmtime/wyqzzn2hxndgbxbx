@@ -35,10 +35,10 @@ Subject: [PATCH] feat: rebase genvm
  28 files changed, 466 insertions(+), 52 deletions(-)
 
 diff --git a/Cargo.toml b/Cargo.toml
-index 83b09c9..4560d95 100644
+index 69b668d..36c85f5 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -375,18 +375,18 @@ wit-bindgen = { version = "0.60.0", default-features = false }
+@@ -370,18 +370,18 @@ wit-bindgen = { version = "0.60.0", default-features = false }
  wit-bindgen-rust-macro = { version = "0.60.0", default-features = false }
  
  # wasm-tools family:
@@ -181,7 +181,7 @@ index 5f3fdee..afa5ab6 100644
          let mut validator =
              validator.into_validator(mem::take(&mut compiler.cx.validator_allocations));
 diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
-index 64e9642..fe1b8d8 100644
+index b72e825..dbe4e3f 100644
 --- a/crates/cranelift/src/func_environ.rs
 +++ b/crates/cranelift/src/func_environ.rs
 @@ -211,6 +211,9 @@ pub struct FuncEnvironment<'module_environment> {
@@ -204,7 +204,7 @@ index 64e9642..fe1b8d8 100644
              stack_switching_handler_list_buffer: None,
              stack_switching_values_buffer: None,
  
-@@ -3444,6 +3450,7 @@ impl FuncEnvironment<'_> {
+@@ -3445,6 +3451,7 @@ impl FuncEnvironment<'_> {
          sig_ref: ir::SigRef,
          call_args: &[ir::Value],
      ) -> WasmResult<()> {
@@ -212,7 +212,7 @@ index 64e9642..fe1b8d8 100644
          Call::new_tail(builder, self, srcloc).direct_call(callee_index, sig_ref, call_args)?;
          Ok(())
      }
-@@ -3458,6 +3465,7 @@ impl FuncEnvironment<'_> {
+@@ -3459,6 +3466,7 @@ impl FuncEnvironment<'_> {
          callee: ir::Value,
          call_args: &[ir::Value],
      ) -> WasmResult<()> {
@@ -220,7 +220,7 @@ index 64e9642..fe1b8d8 100644
          Call::new_tail(builder, self, srcloc).indirect_call(
              table_index,
              ty_index,
-@@ -3476,6 +3484,7 @@ impl FuncEnvironment<'_> {
+@@ -3477,6 +3485,7 @@ impl FuncEnvironment<'_> {
          callee: ir::Value,
          call_args: &[ir::Value],
      ) -> WasmResult<()> {
@@ -228,7 +228,7 @@ index 64e9642..fe1b8d8 100644
          Call::new_tail(builder, self, srcloc).call_ref(sig_ref, callee, call_args)?;
          Ok(())
      }
-@@ -5135,6 +5144,26 @@ impl FuncEnvironment<'_> {
+@@ -5145,6 +5154,26 @@ impl FuncEnvironment<'_> {
  
          self.update_state_slot_vmctx(builder);
  
@@ -255,7 +255,7 @@ index 64e9642..fe1b8d8 100644
          // Additionally we initialize `fuel_var` if it will get used.
          if self.tunables.consume_fuel {
              self.fuel_function_entry(builder);
-@@ -5177,6 +5206,43 @@ impl FuncEnvironment<'_> {
+@@ -5187,6 +5216,43 @@ impl FuncEnvironment<'_> {
          self.isa.triple().architecture == target_lexicon::Architecture::X86_64
      }
  
@@ -299,7 +299,7 @@ index 64e9642..fe1b8d8 100644
      pub fn translate_cont_bind(
          &mut self,
          builder: &mut FunctionBuilder<'_>,
-@@ -5334,6 +5400,7 @@ impl FuncEnvironment<'_> {
+@@ -5344,6 +5410,7 @@ impl FuncEnvironment<'_> {
      }
  
      pub fn handle_before_return(&mut self, retvals: &[ir::Value], builder: &mut FunctionBuilder) {
@@ -321,7 +321,7 @@ index 50c0b26..1511a65 100644
  /// Creates a new cranelift `Signature` with no wasm params/results for the
  /// given calling convention.
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 7de3ab3..5c33b47 100644
+index dcb41ff..925a145 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
 @@ -1071,120 +1071,145 @@ pub fn translate_operator(
@@ -830,7 +830,7 @@ index 7de3ab3..5c33b47 100644
  }
  
  /// Generate a `jump` instruction, but first cast all 128-bit vector values to I8X16 if they
-@@ -4669,3 +4758,11 @@ fn create_catch_block(
+@@ -4670,3 +4759,11 @@ fn create_catch_block(
  
      Ok(block)
  }
@@ -1129,7 +1129,7 @@ index f3f0a3f..698ffc6 100644
  
  fn _assertions_lib() {
 diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
-index d847800..b0a53c5 100644
+index b9520fd..ad9f759 100644
 --- a/crates/wasmtime/src/runtime/func.rs
 +++ b/crates/wasmtime/src/runtime/func.rs
 @@ -1446,6 +1446,32 @@ impl Func {
@@ -1312,7 +1312,7 @@ index a081654..9911f9d 100644
  impl<T: fmt::Debug> fmt::Debug for Store<T> {
      fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 diff --git a/crates/wasmtime/src/runtime/vm/vmcontext.rs b/crates/wasmtime/src/runtime/vm/vmcontext.rs
-index 9324674..4509bc4 100644
+index 0a9c934..44cee91 100644
 --- a/crates/wasmtime/src/runtime/vm/vmcontext.rs
 +++ b/crates/wasmtime/src/runtime/vm/vmcontext.rs
 @@ -810,8 +810,10 @@ impl Default for VMStoreContext {

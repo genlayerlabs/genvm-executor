@@ -16,7 +16,7 @@ place, so trapping on them broke real numpy code paths.
  1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 5c33b47..0a02c4d 100644
+index 925a145..0e12a52 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
 @@ -1804,7 +1804,8 @@ pub fn translate_operator(

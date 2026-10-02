@@ -45,10 +45,10 @@ index 80dcb86..342489f 100644
  
  #[repr(C)]
 diff --git a/crates/cranelift/src/func_environ.rs b/crates/cranelift/src/func_environ.rs
-index fe1b8d8..7dea98f 100644
+index dbe4e3f..266938b 100644
 --- a/crates/cranelift/src/func_environ.rs
 +++ b/crates/cranelift/src/func_environ.rs
-@@ -5218,9 +5218,9 @@ impl FuncEnvironment<'_> {
+@@ -5228,9 +5228,9 @@ impl FuncEnvironment<'_> {
          self.fuel_save_from_var(builder);
      }
  
@@ -76,10 +76,10 @@ index 1511a65..5669ddb 100644
  /// Creates a new cranelift `Signature` with no wasm params/results for the
  /// given calling convention.
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 0a02c4d..772f112 100644
+index 0e12a52..d4c2afd 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -4764,6 +4764,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
+@@ -4765,6 +4765,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
      if environ.are_floats_enabled() {
          return false;
      }
