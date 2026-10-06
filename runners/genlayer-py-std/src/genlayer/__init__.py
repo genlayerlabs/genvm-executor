@@ -52,6 +52,7 @@ __all__ = (
 	'contract',
 	'chain',
 	'message',
+	'message_allocation',
 	'vm',
 	'evm',
 	'nondet',
@@ -152,6 +153,7 @@ if typing.TYPE_CHECKING or _gen_docs:
 		evm,
 		gvm32,
 		message,
+		message_allocation,
 		nondet,
 		storage,
 		types,
@@ -162,6 +164,7 @@ else:
 	_lazy_modules = {
 		'contract': 'genlayer.contract',
 		'message': 'genlayer.message',
+		'message_allocation': 'genlayer.message_allocation',
 		'vm': 'genlayer.vm',
 		'evm': 'genlayer.evm',
 		'nondet': 'genlayer.nondet',

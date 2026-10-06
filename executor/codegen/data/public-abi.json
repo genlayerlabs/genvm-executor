@@ -175,7 +175,11 @@
             ]
           },
           "below_minimum",
-          "too_many_rounds"
+          "too_many_rounds",
+          {
+            "head": "descendant_grant",
+            "tail": ["budget", "tree", "external"]
+          }
         ]
       },
       "forbidden",

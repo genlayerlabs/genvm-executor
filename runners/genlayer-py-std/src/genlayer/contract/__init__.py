@@ -17,6 +17,7 @@ __all__ = (
 	'GenVMContractDeclaration',
 	'StorageView',
 	'ON',
+	'UseBalanceParams',
 )
 
 import collections.abc
@@ -25,7 +26,8 @@ import typing
 
 import genlayer.calldata as calldata
 from genlayer import IS_IN_VM
-from genlayer.chain import IAccount, InternalMessageParams
+from genlayer.chain import IAccount
+from genlayer.message_allocation import UseBalanceParams, _flatten_allocations
 from genlayer.types import Address, Lazy, u256
 
 if typing.TYPE_CHECKING or IS_IN_VM:
@@ -35,6 +37,34 @@ from genlayer._internal.on_chain.gl_call import gl_call_generic
 
 type ON = typing.Literal['decided', 'finalized']
 """When the transaction message should be applied: ``'decided'`` or ``'finalized'``"""
+
+
+def _balance_fields(
+	use_balance: UseBalanceParams | None,
+) -> dict[str, calldata.Encodable]:
+	if use_balance is None:
+		return {}
+	if not isinstance(use_balance, UseBalanceParams):
+		raise TypeError('use_balance must be UseBalanceParams or None')
+	descendants = use_balance.descendants
+	if isinstance(descendants, bool):
+		raise TypeError('descendants must not be bool')
+	closed = (
+		descendants is None
+		or (isinstance(descendants, int) and descendants == 0)
+		or (isinstance(descendants, (list, tuple)) and not descendants)
+	)
+	fields: dict[str, calldata.Encodable] = {
+		'use_balance': True,
+		'fee_params': use_balance.fee_params,
+	}
+	if not closed:
+		fields['descendants'] = (
+			_flatten_allocations(descendants)
+			if isinstance(descendants, list)
+			else descendants
+		)
+	return fields
 
 
 def _make_calldata_obj(method, args, kwargs) -> calldata.Encodable:
@@ -96,7 +126,13 @@ class _ContractAtViewMethod:
 
 
 class _ContractAtEmitMethod:
-	__slots__ = ('_addr', '_fee_params', '_name', '_on', '_use_balance', '_value')
+	__slots__ = (
+		'_addr',
+		'_name',
+		'_on',
+		'_use_balance',
+		'_value',
+	)
 
 	def __init__(
 		self,
@@ -104,15 +140,13 @@ class _ContractAtEmitMethod:
 		addr: Address,
 		value: u256,
 		on: str,
-		use_balance: bool = False,
-		fee_params: InternalMessageParams | None = None,
+		use_balance: UseBalanceParams | None = None,
 	):
 		self._addr = addr
 		self._name = name
 		self._value = value
 		self._on = on
 		self._use_balance = use_balance
-		self._fee_params = fee_params
 
 	def __call__(self, *args, **kwargs) -> None:
 		message: dict[str, calldata.Encodable] = {
@@ -121,10 +155,7 @@ class _ContractAtEmitMethod:
 			'value': self._value,
 			'on': self._on,
 		}
-		if self._use_balance:
-			message['use_balance'] = True
-		if self._fee_params is not None:
-			message['fee_params'] = self._fee_params
+		message.update(_balance_fields(self._use_balance))
 		wasi.gl_call(calldata.encode({'EmitInternalMessage': message}))
 
 
@@ -182,22 +213,19 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 
 	def emit(
 		self,
+		use_balance: UseBalanceParams | None = None,
 		*,
 		value: u256 = 0,
 		on: ON = 'finalized',
-		use_balance: bool = False,
-		fee_params: InternalMessageParams | None = None,
 	) -> TSend:
 		"""
 		Get a namespace for emitting write transactions.
 
 		:param value: Amount of native tokens to transfer with the transaction
 		:param on: When the transaction message should be emitted to consensus
-		:param use_balance: Fund the message fee from this contract's balance instead
-			of the sender's prefunded pool. Requires the
-			``can_use_balance_for_message_fees`` permission and ``fee_params``.
-		:param fee_params: Fee parameters GenVM meters the balance-funded fee from;
-			required when ``use_balance`` is set, ignored otherwise
+		:param use_balance: Balance funding parameters, or None to use the sender's
+			prefunded pool. Balance funding requires
+			``can_use_balance_for_message_fees`` permission
 		:returns: Object providing access to write methods
 
 		.. warning::
@@ -209,10 +237,9 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 	def emit_transfer(
 		self,
 		value: u256,
+		use_balance: UseBalanceParams | None = None,
 		*,
 		on: ON = 'finalized',
-		use_balance: bool = False,
-		fee_params: InternalMessageParams | None = None,
 	) -> None:
 		"""
 		Emit a simple value transfer without calling any method. Receiver may catch it with
@@ -221,7 +248,6 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 		:param value: Amount of native tokens to transfer
 		:param on: When transaction message should be emitted to consensus
 		:param use_balance: Fund the message fee from this contract's balance; see :py:meth:`emit`
-		:param fee_params: Fee parameters for the balance-funded fee; required when ``use_balance`` is set
 
 		:raises ValueError: If value is zero
 		"""
@@ -304,27 +330,29 @@ class _ContractAt(Proxy[ErasedMethods, ErasedMethods]):
 
 	def emit(
 		self,
+		use_balance: UseBalanceParams | None = None,
 		*,
 		value: u256 = 0,
 		on: ON = 'finalized',
-		use_balance: bool = False,
-		fee_params: InternalMessageParams | None = None,
 	) -> ErasedMethods:
 		return _ContractAtGetter(
-			_ContractAtEmitMethod, self._address, value, on, use_balance, fee_params
+			_ContractAtEmitMethod,
+			self._address,
+			value,
+			on,
+			use_balance,
 		)
 
 	def emit_transfer(
 		self,
 		value: u256,
+		use_balance: UseBalanceParams | None = None,
 		*,
 		on: ON = 'finalized',
-		use_balance: bool = False,
-		fee_params: InternalMessageParams | None = None,
 	) -> None:
 		if value <= 0:
 			raise ValueError('value must be greater than 0 for emit_transfer')
-		_ContractAtEmitMethod(None, self._address, value, on, use_balance, fee_params)()
+		_ContractAtEmitMethod(None, self._address, value, on, use_balance)()
 
 	@property
 	def balance(self) -> u256:
@@ -454,6 +482,7 @@ from genlayer.types import u256  # noqa: E402
 
 @typing.overload
 def deploy(
+	use_balance: UseBalanceParams | None = None,
 	*,
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
@@ -461,13 +490,12 @@ def deploy(
 	salt_nonce: typing.Literal[0] = 0,
 	value: u256 = 0,
 	on: ON = 'finalized',
-	use_balance: bool = False,
-	fee_params: InternalMessageParams | None = None,
 ) -> None: ...
 
 
 @typing.overload
 def deploy(
+	use_balance: UseBalanceParams | None = None,
 	*,
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
@@ -475,12 +503,11 @@ def deploy(
 	salt_nonce: u256,
 	value: u256 = 0,
 	on: ON = 'finalized',
-	use_balance: bool = False,
-	fee_params: InternalMessageParams | None = None,
-) -> Address: ...
+) -> Address | None: ...
 
 
 def deploy(
+	use_balance: UseBalanceParams | None = None,
 	*,
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
@@ -488,8 +515,6 @@ def deploy(
 	salt_nonce: u256 | typing.Literal[0] = 0,
 	value: u256 = 0,
 	on: ON = 'finalized',
-	use_balance: bool = False,
-	fee_params: InternalMessageParams | None = None,
 ) -> Address | None:
 	"""
 	Deploy a new GenVM contract to the blockchain.
@@ -505,7 +530,6 @@ def deploy(
 	:param value: Amount of native tokens to send to the contract during deployment
 	:param on: When to execute the deployment ('decided' or 'finalized')
 	:param use_balance: Fund the deploy message fee from this contract's balance; see :py:meth:`Proxy.emit`
-	:param fee_params: Fee parameters for the balance-funded fee; required when ``use_balance`` is set
 	:returns: Contract address if salt_nonce != 0, None otherwise
 
 	Example:
@@ -543,10 +567,7 @@ def deploy(
 		'on': on,
 		'salt_nonce': salt_nonce,
 	}
-	if use_balance:
-		message['use_balance'] = True
-	if fee_params is not None:
-		message['fee_params'] = fee_params
+	message.update(_balance_fields(use_balance))
 	wasi.gl_call(calldata.encode({'EmitInternalDeployMessage': message}))
 
 	if salt_nonce == 0:
@@ -617,13 +638,19 @@ class Contract(IAccount):
 
 		return message.contract_address
 
-	def emit_transfer(self, value: u256, *, on: ON = 'finalized') -> None:
+	def emit_transfer(
+		self,
+		value: u256,
+		use_balance: UseBalanceParams | None = None,
+		*,
+		on: ON = 'finalized',
+	) -> None:
 		import warnings
 
 		warnings.warn('Emitting transfer to self without data makes little sense')
 		from genlayer.contract import get_at
 
-		get_at(self.address).emit_transfer(value, on=on)
+		get_at(self.address).emit_transfer(value, use_balance, on=on)
 
 	def __handle_undefined_method__(
 		self, method_name: str, args: list[typing.Any], kwargs: dict[str, typing.Any]

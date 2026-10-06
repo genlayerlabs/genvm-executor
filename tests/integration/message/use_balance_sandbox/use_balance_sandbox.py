@@ -30,7 +30,7 @@ class Contract(gl.contract.Contract):
 		def sandbox_fn():
 			try:
 				gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
-					use_balance=True, fee_params=_PARAMS
+					use_balance=gl.contract.UseBalanceParams(_PARAMS)
 				).foo(1, 2)
 				print('sandbox: emitted')
 			except SystemError as e:

@@ -29,5 +29,5 @@ class Contract(gl.contract.Contract):
 		# succeeds. The metered fee is charged against this contract's balance
 		# and the emitted message carries `use_balance=true` with an empty subtree.
 		gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
-			use_balance=True, fee_params=_PARAMS
+			use_balance=gl.contract.UseBalanceParams(_PARAMS)
 		).foo(1, 2)

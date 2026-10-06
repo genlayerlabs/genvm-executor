@@ -607,10 +607,26 @@ impl DataLimit {
         &self,
         matched_fee_params: &genlayer_sdk::abi::fees::InternalMessageParams,
     ) -> rt::errors::Result<CostVec> {
+        self.calculate_message_fee_internal_impl(matched_fee_params, false)
+    }
+
+    pub fn calculate_descendant_message_fee_internal(
+        &self,
+        matched_fee_params: &genlayer_sdk::abi::fees::InternalMessageParams,
+    ) -> rt::errors::Result<CostVec> {
+        self.calculate_message_fee_internal_impl(matched_fee_params, true)
+    }
+
+    fn calculate_message_fee_internal_impl(
+        &self,
+        matched_fee_params: &genlayer_sdk::abi::fees::InternalMessageParams,
+        skip_budget_floor: bool,
+    ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
             &self.message_fee,
             &[
                 ("isInternal", true.into()),
+                ("skipBudgetFloor", skip_budget_floor.into()),
                 (
                     "matchedFeeParams",
                     fee_params_value_internal(matched_fee_params),

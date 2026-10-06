@@ -28,7 +28,7 @@ class Contract(gl.contract.Contract):
 		# use_balance with a zero price cap is rejected with Inval (errno 2).
 		try:
 			gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
-				use_balance=True, fee_params=_PARAMS
+				use_balance=gl.contract.UseBalanceParams(_PARAMS)
 			).foo(1, 2)
 		except SystemError as e:
 			print(e)

@@ -8,7 +8,7 @@ from genlayer.vm.public_abi import Permissions
 # units, rotations entries) to < 2^32.
 _PARAMS = gl.chain.InternalMessageParams(
 	leader_time_units_allocation=2**250,
-	validator_time_units_allocation=0,
+	validator_time_units_allocation=1,
 	execution_budget_per_round=0,
 	rotations=[0],
 	max_price_gen_per_time_unit=2**250,
@@ -29,7 +29,7 @@ class Contract(gl.contract.Contract):
 		# (errno 2), not an internal abort.
 		try:
 			gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
-				use_balance=True, fee_params=_PARAMS
+				use_balance=gl.contract.UseBalanceParams(_PARAMS)
 			).foo(1, 2)
 		except SystemError as e:
 			print(e)

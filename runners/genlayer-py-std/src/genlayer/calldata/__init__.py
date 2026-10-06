@@ -149,6 +149,8 @@ Type that can be encoded into calldata, provided ``default`` function ``T -> Enc
 
 
 def encode_default_parameter(b, /):
+	if isinstance(b, CalldataEncodable):
+		return b
 	if not dataclasses.is_dataclass(b):
 		return b
 	if isinstance(b, type):

@@ -171,7 +171,7 @@ fees:
       # Each `bytes` field is length + data, rounded up to 32 bytes. The extra
       # calldata word conservatively covers the internal RLP wrapper
       let calldataBytes = 32 + 32 + ceilDiv a.calldataLength 32 * 32 in
-      # allocationSubtree is empty for external and balance-funded messages
+      # allocationSubtree is empty for external and Closed balance-funded messages
       let subtreeBytes = 32 + 32 + ceilDiv a.subtreeLength 32 * 32 in
       # Internal fee params have an outer offset, 8-word head, and rotations
       # array; external fee params are a static 2-word tuple
@@ -238,7 +238,8 @@ fees:
       # reject only a non-zero per-round budget below the floor (matches the
       # chain's `execBudget > 0 && execBudget < floor`)
       let budgetTooLow =
-        if a.matchedFeeParams.executionBudgetPerRound > 0
+        if a.skipBudgetFloor then false
+        else if a.matchedFeeParams.executionBudgetPerRound > 0
         then a.matchedFeeParams.executionBudgetPerRound < budgetFloor
         else false in
       if a.isInternal

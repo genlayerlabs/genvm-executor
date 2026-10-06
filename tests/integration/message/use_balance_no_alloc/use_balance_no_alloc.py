@@ -33,5 +33,5 @@ class Contract(gl.contract.Contract):
 		# use_balance bypasses allocation matching entirely, so the same
 		# emission succeeds despite the empty tree.
 		gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
-			use_balance=True, fee_params=_PARAMS
+			use_balance=gl.contract.UseBalanceParams(_PARAMS)
 		).foo(1, 2)

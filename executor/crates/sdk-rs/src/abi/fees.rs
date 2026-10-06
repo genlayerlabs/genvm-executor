@@ -18,8 +18,11 @@ use primitive_types::U256;
     genlayer_calldata::Encode,
     genlayer_calldata::Decode,
 )]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct ExternalMessageParams {
+    #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
     pub gas_limit: U256,
+    #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
     pub max_gas_price: U256,
 }
 

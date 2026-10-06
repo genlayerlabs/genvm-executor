@@ -16,6 +16,50 @@ Within v0.3: Release-Candidate Changes
 .. warning::
     v0.3 is not released yet, and these changes are breaking *within* v0.3: a contract that ran on an earlier release candidate needs them. They are also folded into the v0.2 sections below
 
+Message Funding
+~~~~~~~~~~~~~~~
+
+``emit``, ``emit_transfer`` and ``deploy`` accept an optional ``UseBalanceParams``
+as a positional or keyword ``use_balance`` argument. Omission or ``None`` uses
+sender funding. Replace ``use_balance=True, fee_params=fees`` with
+``use_balance=gl.contract.UseBalanceParams(fee_params=fees)``
+
+.. code-block:: python
+
+    target.emit().run()  # Sender-funded
+    target.emit(gl.contract.UseBalanceParams(fees)).run()  # Closed
+    target.emit(use_balance=gl.contract.UseBalanceParams(fees, descendants=100)).run()  # Open
+    target.emit(gl.contract.UseBalanceParams(fees, descendants=[
+        gl.message_allocation.InternalAllocation(
+            recipient=child, call_key="run", fee_params=child_fees, budget=100,
+            children=[
+                gl.message_allocation.InternalAllocation(
+                    recipient=grandchild, call_key="run", fee_params=grandchild_fees, budget=40,
+                ),
+            ],
+        ),
+    ])).run()  # Pinned
+    target.emit_transfer(1, gl.contract.UseBalanceParams(fees))
+    gl.contract.deploy(gl.contract.UseBalanceParams(fees), code=source)
+
+``descendants=None``, ``0`` and ``[]`` select Closed; a positive integer selects
+Open, and a nonempty allocation list selects Pinned. The SDK converts the tree
+to a flat list of parent indices; contracts do not need to calculate indices
+
+For either allocation type, ``call_key=None`` now means any method, equivalent
+to ``gl.message_allocation.ANY_METHOD``. Use ``bytes(32)`` for the exact zero
+key previously selected by ``None``: internal deploys/transfers and external
+calldata shorter than 4 bytes
+
+Internal allocations accept method names or raw 32-byte keys. External allocations
+accept 4-byte EVM selectors, padded on the right to 32 bytes, or raw 32-byte keys
+unchanged; strings are rejected. For example, ``call_key=bytes.fromhex("a9059cbb")``
+selects the EVM ``transfer(address,uint256)`` method
+
+The executor validates topology, positive node budgets and funding inequalities
+independently. The example budgets above are illustrative; actual budgets must
+cover primary fees and descendants, including the applicable appeal multiplier
+
 Pre-finalization State Is ``decided``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
