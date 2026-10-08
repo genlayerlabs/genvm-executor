@@ -17,6 +17,7 @@ use genlayer_sdk::abi::{self, gl_call};
 
 use super::{base, vfs};
 
+mod descendant_grant;
 mod message;
 mod run;
 #[cfg(test)]
@@ -524,7 +525,7 @@ fn slot_access_fits(index: u32, buf_len: u32) -> bool {
     u64::from(index) + u64::from(buf_len) <= rt::vm::storage::SLOT_SIZE
 }
 
-use message::EmitInternalDeployMessageArgs;
+use message::{EmitInternalDeployMessageArgs, EmitInternalMessageArgs};
 
 #[allow(unused_variables)]
 impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
@@ -582,14 +583,18 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 on,
                 use_balance,
                 fee_params,
+                descendants,
             } => {
                 self.gl_call_emit_internal_message(
                     address,
                     calldata,
-                    value,
-                    on,
-                    use_balance,
-                    fee_params,
+                    EmitInternalMessageArgs {
+                        value,
+                        on,
+                        use_balance,
+                        fee_params,
+                        descendants,
+                    },
                 )
                 .await
             }
@@ -601,6 +606,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                 salt_nonce,
                 use_balance,
                 fee_params,
+                descendants,
             } => {
                 self.gl_call_emit_internal_deploy_message(
                     calldata,
@@ -611,6 +617,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                         value,
                         salt_nonce,
                         use_balance,
+                        descendants,
                     },
                 )
                 .await

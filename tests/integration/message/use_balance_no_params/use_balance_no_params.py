@@ -16,6 +16,18 @@ class Contract(gl.contract.Contract):
 		# use_balance without fee_params is rejected with Inval (errno 2):
 		# GenVM cannot meter the balance-funded fee without explicit params.
 		try:
-			gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(use_balance=True).foo(1, 2)
+			gl.wasi.gl_call(
+				gl.calldata.encode(
+					{
+						'EmitInternalMessage': {
+							'address': gl.Address(b'\x30' * 20),
+							'calldata': {'': 'foo', 'args': [1, 2]},
+							'value': 0,
+							'on': 'finalized',
+							'use_balance': True,
+						}
+					}
+				)
+			)
 		except SystemError as e:
 			print(e)

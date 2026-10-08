@@ -17,5 +17,5 @@ class Contract(gl.contract.Contract):
 		# A deploy has no stored permission bitfield to read yet, so it runs with
 		# every contract-owned permission granted: the emission must succeed.
 		gl.contract.get_at(gl.Address(b'\x30' * 20)).emit(
-			use_balance=True, fee_params=_PARAMS
+			use_balance=gl.contract.UseBalanceParams(_PARAMS)
 		).foo(1, 2)

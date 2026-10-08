@@ -32,6 +32,7 @@ pub mod wasi;
     serde::Serialize,
     serde::Deserialize,
 )]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct CallKey(
     #[calldata(
         serialize_with = ::genlayer_calldata::codec::as_bytes::serialize,

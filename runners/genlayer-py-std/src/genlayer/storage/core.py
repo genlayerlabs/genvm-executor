@@ -522,6 +522,30 @@ class VLATypeDesc[T](SpecialTypeDesc, TypeDesc[VLA[T]], ComplexCopyAction):
 		return VLATypeDesc.SIZE
 
 
+@typing.final
+class ZeroManager(Manager):
+	"""
+	Read-only singleton storage source that returns zero-filled bytes.
+	"""
+
+	_instance: typing.ClassVar['ZeroManager | None'] = None
+	__slots__ = ()
+
+	def __new__(cls):
+		if cls._instance is None:
+			cls._instance = super().__new__(cls)
+		return cls._instance
+
+	def get_store_slot(self, slot_id: bytes | u256, /) -> Slot:
+		return Slot(slot_id_to_bytes(slot_id), self)
+
+	def do_read(self, slot_id: bytes, off: int, len: int, /) -> bytes:
+		return bytes(len)
+
+	def do_write(self, slot_id: bytes, off: int, what: collections.abc.Buffer, /):
+		raise TypeError('zero storage is read-only')
+
+
 class InmemManager(Manager):
 	"""
 	In-memory storage backend, useful for testing.

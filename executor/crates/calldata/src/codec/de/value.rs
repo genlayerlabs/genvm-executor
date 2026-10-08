@@ -94,8 +94,8 @@ impl Decode for Value {
                 Ok(Value::Bytes(value.to_vec()))
             }
 
-            fn visit_seq<A: SeqAccess>(self, len: u64, mut seq: A) -> Result<Value, DecodeError> {
-                let mut result = Vec::with_capacity(len as usize);
+            fn visit_seq<A: SeqAccess>(self, _len: u64, mut seq: A) -> Result<Value, DecodeError> {
+                let mut result = Vec::new();
                 while let Some(elem) = seq.next_element::<Value>()? {
                     result.push(elem);
                 }

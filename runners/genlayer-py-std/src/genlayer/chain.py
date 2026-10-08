@@ -1,7 +1,20 @@
-__all__ = ('ON', 'IAccount', 'Account', 'Event', 'InternalMessageParams', 'id')
+__all__ = (
+	'ON',
+	'IAccount',
+	'Account',
+	'Event',
+	'ExternalMessageParams',
+	'InternalMessageParams',
+	'id',
+)
 
 import dataclasses
 import typing
+
+import genlayer
+
+if typing.TYPE_CHECKING:
+	import genlayer.message_allocation
 
 import genlayer._internal.on_chain.gl_call as gl_call
 import genlayer.calldata as calldata
@@ -17,8 +30,8 @@ type ON = typing.Literal['decided', 'finalized']
 class InternalMessageParams(calldata.DataclassMixin):
 	"""
 	Fee parameters for a balance-funded internal message (``use_balance``). GenVM
-	meters the fee from these params (against the emitting contract's balance) and
-	that metered amount becomes the child transaction's ``declaredBudget``.
+	meters the primary fee from these params against the emitting contract's balance.
+	The child transaction's ``declaredBudget`` also includes its descendant grant.
 
 	Field names and layout mirror the executor's calldata encoding exactly.
 
@@ -38,6 +51,13 @@ class InternalMessageParams(calldata.DataclassMixin):
 	max_price_gen_per_time_unit: u256
 	storage_fee_max_gas_price: u256
 	receipt_fee_max_gas_price: u256
+
+
+@typing.final
+@dataclasses.dataclass(frozen=True)
+class ExternalMessageParams(calldata.DataclassMixin):
+	gas_limit: u256
+	max_gas_price: u256
 
 
 @typing.runtime_checkable
@@ -61,11 +81,18 @@ class IAccount(typing.Protocol):
 		"""
 		...
 
-	def emit_transfer(self, value: u256, *, on: ON = 'finalized') -> None:
+	def emit_transfer(
+		self,
+		value: u256,
+		use_balance: 'genlayer.message_allocation.UseBalanceParams | None' = None,
+		*,
+		on: ON = 'finalized',
+	) -> None:
 		"""
 		Emit a transfer message to this account's address.
 
 		:param value: amount to transfer
+		:param use_balance: Balance funding parameters, or None for sender funding
 		:param on: transaction stage at which the transfer is applied
 		"""
 		...
@@ -105,16 +132,23 @@ class Account(IAccount):
 
 		return get_at(self.address).balance
 
-	def emit_transfer(self, value: u256, *, on: ON = 'finalized') -> None:
+	def emit_transfer(
+		self,
+		value: u256,
+		use_balance: 'genlayer.message_allocation.UseBalanceParams | None' = None,
+		*,
+		on: ON = 'finalized',
+	) -> None:
 		"""
 		Emit a transfer message to this account's address.
 
 		:param value: amount to transfer
+		:param use_balance: Balance funding parameters, or None for sender funding
 		:param on: transaction stage at which the transfer is applied
 		"""
 		from genlayer.contract import get_at
 
-		get_at(self.address).emit_transfer(value, on=on)
+		get_at(self.address).emit_transfer(value, use_balance, on=on)
 
 
 import inspect  # noqa: E402

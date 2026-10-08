@@ -54,6 +54,18 @@ def test_dataclass():
 	}
 
 
+@dataclass
+class EncodableDataclass(calldata.CalldataEncodable):
+	value: int
+
+	def __to_calldata__(self):
+		return self.value + 1
+
+
+def test_dataclass_calldata_encodable_uses_custom_encoding():
+	assert calldata.decode(calldata.encode(EncodableDataclass(10))) == 11
+
+
 class Strange:
 	def __to_calldata__(self):
 		return 11

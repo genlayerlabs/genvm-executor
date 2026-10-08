@@ -1,3 +1,4 @@
+use super::descendant_grant::{prepare_descendants, GrantValidationError, PreparedGrant};
 use super::*;
 
 fn allocation_match_priority(
@@ -97,16 +98,71 @@ enum FeeFunding<'a> {
         node: &'a genvm_modules_interfaces::fees::MessageAllocationNode,
         consumed: &'a mut primitive_types::U256,
     },
-    /// Balance-funded (`useBalance`): the metered fee is the `declaredBudget`,
-    /// reserved from the contract balance. On-chain such messages are excluded
-    /// from the sender pool, so the message-fee bucket is skipped and only the
-    /// receipt is charged. The balance is checked here, before the receipt is
-    /// consumed, so nothing is charged unless funding is guaranteed.
+    /// Balance-funded (`useBalance`): the primary fee plus the descendant grant
+    /// budget is the `declaredBudget`, reserved from the contract balance. Such
+    /// messages skip the sender pool and message-fee bucket. The balance is
+    /// checked before receipt consumption, so failed funding charges nothing.
     Balance {
         value: primitive_types::U256,
         messages_value_decremented: primitive_types::U256,
         my_balance: primitive_types::U256,
+        fee_cost: rt::fees::CostVec,
     },
+}
+
+fn grant_validation_error(error: GrantValidationError) -> generated::types::Error {
+    match error {
+        GrantValidationError::Inval => generated::types::Errno::Inval.into(),
+        GrantValidationError::Budget => internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::fee().descendant_grant().budget(),
+        )),
+        GrantValidationError::Tree => internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::fee().descendant_grant().tree(),
+        )),
+        GrantValidationError::External => internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::fee().descendant_grant().external(),
+        )),
+        GrantValidationError::Internal(error) => internal_trap(error),
+    }
+}
+
+fn prepare_grant(
+    data_fees_limit: &rt::fees::DataLimit,
+    fee_params: Option<&abi::fees::InternalMessageParams>,
+    descendants: Option<gl_call::Descendants>,
+) -> Result<PreparedGrant, generated::types::Error> {
+    match (fee_params, descendants) {
+        (None, None) => Ok(PreparedGrant {
+            budget: primitive_types::U256::zero(),
+            subtree: vec![],
+        }),
+        (None, Some(_)) => Err(generated::types::Errno::Inval.into()),
+        (Some(params), descendants) => {
+            // The transaction-pinned primary quote is not in host input; preserve the existing quote.
+            prepare_descendants(params, descendants, |node_params| {
+                data_fees_limit
+                    .calculate_descendant_message_fee_internal(node_params)
+                    .map(|cost| cost.reported_fee())
+            })
+            .map_err(grant_validation_error)
+        }
+    }
+}
+
+fn balance_fee_cost(
+    data_fees_limit: &rt::fees::DataLimit,
+    fee_params: &abi::fees::InternalMessageParams,
+    descendant_budget: primitive_types::U256,
+) -> Result<rt::fees::CostVec, generated::types::Error> {
+    let mut fee_cost = data_fees_limit
+        .calculate_message_fee_internal(fee_params)
+        .map_err(internal_trap)?;
+    fee_cost.0[0] = fee_cost
+        .reported_fee()
+        .checked_add(descendant_budget)
+        .ok_or(GrantValidationError::Budget)
+        .map_err(grant_validation_error)?;
+    Ok(fee_cost)
 }
 
 fn convert_on_to_modules(on: gl_call::On) -> genvm_modules_interfaces::On {
@@ -156,10 +212,13 @@ async fn consume_message_fee_internal(
     args: ConsumeInternalArgs,
 ) -> Result<rt::fees::MessageFeeConsumption, generated::types::Error> {
     validate_internal_price_caps(&fee_params)?;
-    let mut fee_cost = shared_data
-        .data_fees_limit
-        .calculate_message_fee_internal(&fee_params)
-        .map_err(internal_trap)?;
+    let mut fee_cost = match &funding {
+        FeeFunding::Allocation { .. } => shared_data
+            .data_fees_limit
+            .calculate_message_fee_internal(&fee_params)
+            .map_err(internal_trap)?,
+        FeeFunding::Balance { fee_cost, .. } => fee_cost.clone(),
+    };
 
     if let FeeFunding::Allocation { node, .. } = &funding {
         let declared_budget = fee_cost
@@ -244,6 +303,7 @@ async fn consume_message_fee_internal(
             value,
             messages_value_decremented,
             my_balance,
+            ..
         } => {
             // `value + fee_total` can itself overflow U256.
             let Some(total) = value.checked_add(fee_total) else {
@@ -398,11 +458,11 @@ async fn consume_external_receipt_only(
 /// Magnitude bounds (in significant bits; a larger field is rejected) on
 /// guest-supplied fee params. Invariant the code cannot express: the worst-case
 /// `messageFeeFloor` result must stay within U256, since the fee evaluator's
-/// `rational_to_u256` treats overflow as an internal abort. Three guest fields
+/// `rational_to_u256` saturates overflow. Three guest fields
 /// multiply into one floor term (`maxPrice × rotations entry × validatorTU`),
 /// so with the default 18-round validator table (counts ≤ 1537 < 2^11) the
 /// worst case is
-///   price(<2^96) × rounds(<2^5) × rot(<2^33)
+///   price(<2^96) × rounds(<2^5) × rot(<2^32)
 ///     × (leaderTU + vpr × validatorTU)(<2^44)
 ///     + price(<2^96) × leaderRounds(<2^36)
 ///   < 2^183 ≪ 2^256.
@@ -411,13 +471,39 @@ async fn consume_external_receipt_only(
 pub(super) const FEE_PARAM_PRICE_BITS: usize = 96;
 pub(super) const FEE_PARAM_COUNT_BITS: usize = 32;
 
+fn internal_price_caps_valid(params: &abi::fees::InternalMessageParams) -> bool {
+    !params.max_price_gen_per_time_unit.is_zero()
+        && !params.storage_fee_max_gas_price.is_zero()
+        && !params.receipt_fee_max_gas_price.is_zero()
+}
+
+pub(super) fn internal_params_valid(params: &abi::fees::InternalMessageParams) -> bool {
+    // Transaction-pinned time-unit bounds and budget floor are not in host input yet.
+    if params.rotations.is_empty() || !internal_price_caps_valid(params) {
+        return false;
+    }
+
+    let time_units_are_valid = (params.leader_time_units_allocation.is_zero()
+        && params.validator_time_units_allocation.is_zero())
+        || (!params.leader_time_units_allocation.is_zero()
+            && !params.validator_time_units_allocation.is_zero());
+    time_units_are_valid
+        && params.max_price_gen_per_time_unit.bits() <= FEE_PARAM_PRICE_BITS
+        && params.storage_fee_max_gas_price.bits() <= FEE_PARAM_PRICE_BITS
+        && params.receipt_fee_max_gas_price.bits() <= FEE_PARAM_PRICE_BITS
+        && params.execution_budget_per_round.bits() <= FEE_PARAM_PRICE_BITS
+        && params.leader_time_units_allocation.bits() <= FEE_PARAM_COUNT_BITS
+        && params.validator_time_units_allocation.bits() <= FEE_PARAM_COUNT_BITS
+        && params
+            .rotations
+            .iter()
+            .all(|rotation| rotation.bits() <= FEE_PARAM_COUNT_BITS)
+}
+
 fn validate_internal_price_caps(
     params: &abi::fees::InternalMessageParams,
 ) -> Result<(), generated::types::Error> {
-    if params.max_price_gen_per_time_unit.is_zero()
-        || params.storage_fee_max_gas_price.is_zero()
-        || params.receipt_fee_max_gas_price.is_zero()
-    {
+    if !internal_price_caps_valid(params) {
         log_debug!("internal message rejected: zero price cap (Inval)");
         return Err(generated::types::Errno::Inval.into());
     }
@@ -434,8 +520,9 @@ fn validate_internal_price_caps(
 /// reveal: `rotations` must be non-empty (the yaml floor derives
 /// `appealRounds = len - 1` and would go negative otherwise), the three
 /// price caps must be non-zero (the chain reverts `FeeValueMustBeNonZero(4/5/6)`
-/// at reveal), and every numeric field -- rotations entries included -- is
-/// bounded by [`FEE_PARAM_PRICE_BITS`] / [`FEE_PARAM_COUNT_BITS`] so the
+/// at reveal), leader and validator time units must be either both zero or both
+/// non-zero, and every numeric field -- rotations entries included -- is
+/// bounded by `FEE_PARAM_PRICE_BITS` / `FEE_PARAM_COUNT_BITS` so the
 /// metered floor fits in U256. The rotations-length upper bound is
 /// node-config-dependent (validator table length) and is enforced in the yaml
 /// fee expression instead.
@@ -455,23 +542,8 @@ pub(super) fn validate_balance_fee(
             Err(generated::types::Errno::Inval.into())
         }
         (true, Some(params)) => {
-            if params.rotations.is_empty() {
-                log_debug!("balance-funded message rejected: rotations empty (Inval)");
-                return Err(generated::types::Errno::Inval.into());
-            }
-            validate_internal_price_caps(&params)?;
-            let too_large = params.max_price_gen_per_time_unit.bits() > FEE_PARAM_PRICE_BITS
-                || params.storage_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
-                || params.receipt_fee_max_gas_price.bits() > FEE_PARAM_PRICE_BITS
-                || params.execution_budget_per_round.bits() > FEE_PARAM_PRICE_BITS
-                || params.leader_time_units_allocation.bits() > FEE_PARAM_COUNT_BITS
-                || params.validator_time_units_allocation.bits() > FEE_PARAM_COUNT_BITS
-                || params
-                    .rotations
-                    .iter()
-                    .any(|r| r.bits() > FEE_PARAM_COUNT_BITS);
-            if too_large {
-                log_debug!("balance-funded message rejected: fee param too large (Inval)");
+            if !internal_params_valid(&params) {
+                log_debug!("balance-funded message rejected: invalid fee params (Inval)");
                 return Err(generated::types::Errno::Inval.into());
             }
             Ok(Some(params))
@@ -489,6 +561,15 @@ pub(super) struct EmitInternalDeployMessageArgs {
     pub value: primitive_types::U256,
     pub salt_nonce: primitive_types::U256,
     pub use_balance: bool,
+    pub descendants: Option<gl_call::Descendants>,
+}
+
+pub(super) struct EmitInternalMessageArgs {
+    pub value: primitive_types::U256,
+    pub on: gl_call::On,
+    pub use_balance: bool,
+    pub fee_params: Option<abi::fees::InternalMessageParams>,
+    pub descendants: Option<gl_call::Descendants>,
 }
 
 impl ContextVFS<'_> {
@@ -739,11 +820,15 @@ impl ContextVFS<'_> {
         &mut self,
         address: calldata::Address,
         calldata: abi::entry::MainCallData,
-        value: primitive_types::U256,
-        on: gl_call::On,
-        use_balance: bool,
-        fee_params: Option<abi::fees::InternalMessageParams>,
+        args: EmitInternalMessageArgs,
     ) -> Result<generated::types::Fd, generated::types::Error> {
+        let EmitInternalMessageArgs {
+            value,
+            on,
+            use_balance,
+            fee_params,
+            descendants,
+        } = args;
         log_debug!(
             recipient = address,
             on:? = on,
@@ -768,6 +853,11 @@ impl ContextVFS<'_> {
             use_balance,
             fee_params,
         )?;
+        let grant = prepare_grant(
+            &self.context.data.supervisor.shared_data.data_fees_limit,
+            balance_params.as_ref(),
+            descendants,
+        )?;
         let is_first_message = next_message_is_first(&self.context.data.accumulator.emissions);
 
         let call_key = if let Some(method_name) = &calldata.name {
@@ -777,6 +867,11 @@ impl ContextVFS<'_> {
         };
 
         if let Some(params) = balance_params {
+            let fee_cost = balance_fee_cost(
+                &self.context.data.supervisor.shared_data.data_fees_limit,
+                &params,
+                grant.budget,
+            )?;
             let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
             calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
             let calldata_length = enc.into_inner().0;
@@ -784,7 +879,11 @@ impl ContextVFS<'_> {
                 .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
             let allocation = reserve_permanent(
                 &self.context.limiter,
-                emission_allocation_size(&[calldata_length, rotations_size]),
+                emission_allocation_size(&[
+                    calldata_length,
+                    rotations_size,
+                    grant.subtree.len().into_int_comptime(),
+                ]),
                 "internal message",
             )?;
 
@@ -801,6 +900,7 @@ impl ContextVFS<'_> {
                     value,
                     messages_value_decremented,
                     my_balance,
+                    fee_cost,
                 },
                 Arc::new(params.clone()),
                 ConsumeInternalArgs {
@@ -808,14 +908,13 @@ impl ContextVFS<'_> {
                     is_deploy: false,
                     calldata_length,
                     code_length: 0,
-                    subtree_length: 0,
+                    subtree_length: grant.subtree.len().into_int_comptime(),
                 },
             )
             .await?;
 
-            let metered_fee = fees.message_fee.reported_fee();
+            let declared_budget = fees.message_fee.reported_fee();
 
-            // Empty subtree: use_balance nesting is fail-closed on-chain.
             self.context.data.accumulator.emissions.push(
                 domain::ExecutionEmission::InternalMessage {
                     call_key,
@@ -823,10 +922,10 @@ impl ContextVFS<'_> {
                     calldata,
                     value,
                     on,
-                    message_fee: metered_fee,
+                    message_fee: declared_budget,
                     receipt_fee: fees.receipt_fee.reported_fee(),
                     fee_params: params,
-                    subtree: bytes::Bytes::new(),
+                    subtree: grant.subtree.into(),
                     use_balance: true,
                 },
             );
@@ -834,7 +933,7 @@ impl ContextVFS<'_> {
 
             self.context.data.accumulator.messages_value_decremented = messages_value_decremented
                 .saturating_add(value)
-                .saturating_add(metered_fee);
+                .saturating_add(declared_budget);
 
             return Ok(file_fd_none());
         }
@@ -964,6 +1063,7 @@ impl ContextVFS<'_> {
             value,
             salt_nonce,
             use_balance,
+            descendants,
         } = args;
 
         if !self.context.data.conf.permissions.deterministic {
@@ -982,9 +1082,19 @@ impl ContextVFS<'_> {
             use_balance,
             fee_params,
         )?;
+        let grant = prepare_grant(
+            &self.context.data.supervisor.shared_data.data_fees_limit,
+            balance_params.as_ref(),
+            descendants,
+        )?;
         let is_first_message = next_message_is_first(&self.context.data.accumulator.emissions);
 
         if let Some(params) = balance_params {
+            let fee_cost = balance_fee_cost(
+                &self.context.data.supervisor.shared_data.data_fees_limit,
+                &params,
+                grant.budget,
+            )?;
             let code_length = code.len().into_int_comptime();
             let mut enc = calldata::Encoder::new(calldata::CounterWriter(0));
             calldata::codec::Encode::encode(&calldata, &mut enc).unwrap_or_else(|e| match e {});
@@ -993,7 +1103,12 @@ impl ContextVFS<'_> {
                 .saturating_mul(memory_limiter_consts::MESSAGE_FEE_ROTATION_ELEMENT_SIZE.into());
             let allocation = reserve_permanent(
                 &self.context.limiter,
-                emission_allocation_size(&[calldata_length, code_length, rotations_size]),
+                emission_allocation_size(&[
+                    calldata_length,
+                    code_length,
+                    rotations_size,
+                    grant.subtree.len().into_int_comptime(),
+                ]),
                 "internal deploy message",
             )?;
 
@@ -1010,6 +1125,7 @@ impl ContextVFS<'_> {
                     value,
                     messages_value_decremented,
                     my_balance,
+                    fee_cost,
                 },
                 Arc::new(params.clone()),
                 ConsumeInternalArgs {
@@ -1017,12 +1133,12 @@ impl ContextVFS<'_> {
                     is_deploy: true,
                     calldata_length,
                     code_length,
-                    subtree_length: 0,
+                    subtree_length: grant.subtree.len().into_int_comptime(),
                 },
             )
             .await?;
 
-            let metered_fee = fees.message_fee.reported_fee();
+            let declared_budget = fees.message_fee.reported_fee();
 
             self.context.data.accumulator.emissions.push(
                 domain::ExecutionEmission::InternalDeployMessage {
@@ -1032,9 +1148,9 @@ impl ContextVFS<'_> {
                     on,
                     salt_nonce,
                     receipt_fee: fees.receipt_fee.reported_fee(),
-                    message_fee: metered_fee,
+                    message_fee: declared_budget,
                     fee_params: params,
-                    subtree: bytes::Bytes::new(),
+                    subtree: grant.subtree.into(),
                     use_balance: true,
                 },
             );
@@ -1042,7 +1158,7 @@ impl ContextVFS<'_> {
 
             self.context.data.accumulator.messages_value_decremented = messages_value_decremented
                 .saturating_add(value)
-                .saturating_add(metered_fee);
+                .saturating_add(declared_budget);
 
             return Ok(file_fd_none());
         }

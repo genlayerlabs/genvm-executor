@@ -314,8 +314,8 @@ impl<T: Decode> Decode for Vec<T> {
         struct V<T>(std::marker::PhantomData<T>);
         impl<T: Decode> Visitor for V<T> {
             type Value = Vec<T>;
-            fn visit_seq<A: SeqAccess>(self, len: u64, mut seq: A) -> Result<Vec<T>, DecodeError> {
-                let mut result = Vec::with_capacity(len as usize);
+            fn visit_seq<A: SeqAccess>(self, _len: u64, mut seq: A) -> Result<Vec<T>, DecodeError> {
+                let mut result = Vec::new();
                 while let Some(elem) = seq.next_element::<T>()? {
                     result.push(elem);
                 }
@@ -450,5 +450,47 @@ impl<T: Decode> Decode for std::rc::Rc<T> {
 
     fn validate<D: Deserializer>(deserializer: D) -> Result<(), DecodeError> {
         T::validate(deserializer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Value;
+
+    use super::super::{Decode, DecodeError, Deserializer, SeqAccess, ValueDeserializer, Visitor};
+
+    struct InflatedLen;
+
+    impl Deserializer for InflatedLen {
+        fn deserialize<V: Visitor>(self, visitor: V) -> Result<V::Value, DecodeError> {
+            visitor.visit_seq(1_000_000, OneBool(true))
+        }
+    }
+
+    struct OneBool(bool);
+
+    impl SeqAccess for OneBool {
+        fn next_element<T: Decode>(&mut self) -> Result<Option<T>, DecodeError> {
+            if std::mem::take(&mut self.0) {
+                T::decode(ValueDeserializer(Value::Bool(true))).map(Some)
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn next_element_validate<T: Decode>(&mut self) -> Result<Option<()>, DecodeError> {
+            self.next_element::<T>().map(|value| value.map(drop))
+        }
+    }
+
+    #[test]
+    fn sequence_decoders_do_not_trust_declared_capacity() {
+        let decoded = Vec::<bool>::decode(InflatedLen).unwrap();
+        assert!(decoded.capacity() < 1_000_000);
+
+        let Value::Array(decoded) = Value::decode(InflatedLen).unwrap() else {
+            panic!("expected array");
+        };
+        assert!(decoded.capacity() < 1_000_000);
     }
 }

@@ -1,3 +1,7 @@
+use super::descendant_grant::{
+    encode_grant, prepare_descendants, AllocationFeeParams, FlatAllocation, Grant, GrantPolicy,
+    GrantValidationError, ROOT_PARENT,
+};
 use super::message::{
     external_allocation_candidates, next_message_is_first, resolve_internal_allocation,
     validate_balance_fee, FEE_PARAM_COUNT_BITS, FEE_PARAM_PRICE_BITS,
@@ -24,6 +28,499 @@ fn valid_params() -> abi::fees::InternalMessageParams {
         storage_fee_max_gas_price: U256::from(20),
         receipt_fee_max_gas_price: U256::from(20),
     }
+}
+
+fn grant_params() -> abi::fees::InternalMessageParams {
+    abi::fees::InternalMessageParams {
+        leader_time_units_allocation: U256::from(5),
+        validator_time_units_allocation: U256::from(10),
+        execution_budget_per_round: U256::from_dec_str("100000000000000000").unwrap(),
+        rotations: vec![U256::zero()],
+        max_price_gen_per_time_unit: U256::one(),
+        storage_fee_max_gas_price: U256::from_dec_str("1000000000000000000").unwrap(),
+        receipt_fee_max_gas_price: U256::from_dec_str("1000000000000000000").unwrap(),
+    }
+}
+
+fn grant_address(last: u8) -> calldata::Address {
+    let mut raw = [0; 20];
+    raw[19] = last;
+    calldata::Address::from(raw)
+}
+
+fn vector_payload(name: &str) -> Vec<u8> {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("testdata/descendant-grant-vectors.json")).unwrap();
+    let payload = fixture["validVectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|vector| vector["name"] == name)
+        .unwrap()["payloadHex"]
+        .as_str()
+        .unwrap();
+    hex::decode(payload.strip_prefix("0x").unwrap()).unwrap()
+}
+
+fn internal_flat(
+    parent_index: U256,
+    last: u8,
+    budget: &str,
+    on_acceptance: bool,
+) -> FlatAllocation {
+    FlatAllocation {
+        on_acceptance,
+        parent_index,
+        recipient: grant_address(last),
+        call_key: abi::CallKey::DEPLOY,
+        budget: U256::from_dec_str(budget).unwrap(),
+        fee_params: AllocationFeeParams::Internal(grant_params()),
+    }
+}
+
+fn internal_allocation(
+    last: u8,
+    budget: u64,
+    on: gl_call::On,
+    parent_index: U256,
+) -> gl_call::AllocationNode {
+    gl_call::AllocationNode::Internal(gl_call::InternalAllocation {
+        recipient: grant_address(last),
+        call_key: abi::CallKey::DEPLOY,
+        budget: U256::from(budget),
+        fee_params: grant_params(),
+        on,
+        parent_index,
+    })
+}
+
+fn external_allocation_node(budget: U256) -> gl_call::AllocationNode {
+    gl_call::AllocationNode::External(gl_call::ExternalAllocation {
+        parent_index: ROOT_PARENT,
+        recipient: grant_address(0x33),
+        call_key: abi::CallKey([7; 32]),
+        budget,
+        fee_params: abi::fees::ExternalMessageParams {
+            gas_limit: U256::from(20),
+            max_gas_price: U256::from(10),
+        },
+    })
+}
+
+fn prepare(
+    descendants: Option<gl_call::Descendants>,
+) -> Result<super::descendant_grant::PreparedGrant, GrantValidationError> {
+    prepare_descendants(&grant_params(), descendants, |_| Ok(U256::from(10)))
+}
+
+#[test]
+fn descendant_grant_domain_matches_consensus_vector() {
+    use sha3::Digest as _;
+
+    let expected =
+        hex::decode("5f77181a28fb88dd0597390f852a7f174bad95303defeefb5ba806aaa3ef64fb").unwrap();
+    assert_eq!(
+        sha3::Keccak256::digest(b"genlayer.contract-descendant-grant").as_slice(),
+        expected
+    );
+}
+
+#[test]
+fn descendant_grant_closed_and_open_match_vectors() {
+    let closed = Grant {
+        policy: GrantPolicy::Closed,
+        budget: U256::zero(),
+        allocations: vec![],
+    };
+    assert_eq!(encode_grant(&closed), vector_payload("closed-explicit"));
+
+    let open = Grant {
+        policy: GrantPolicy::Open,
+        budget: U256::from_dec_str("300000000000000000").unwrap(),
+        allocations: vec![],
+    };
+    assert_eq!(encode_grant(&open), vector_payload("open-explicit"));
+}
+
+#[test]
+fn descendant_grant_single_internal_matches_vector() {
+    let grant = Grant {
+        policy: GrantPolicy::Pinned,
+        budget: U256::from_dec_str("300000000000000000").unwrap(),
+        allocations: vec![internal_flat(
+            ROOT_PARENT,
+            0x11,
+            "300000000000000000",
+            false,
+        )],
+    };
+    assert_eq!(
+        encode_grant(&grant),
+        vector_payload("pinned-single-internal")
+    );
+}
+
+#[test]
+fn descendant_grant_nested_mixed_matches_vector() {
+    let mut call_key = [0; 32];
+    call_key.copy_from_slice(
+        &hex::decode("b9ee2e14f00c68d60911d6c13db158044bd494f772f7785c2f108fdeb2949f81").unwrap(),
+    );
+    let grant = Grant {
+        policy: GrantPolicy::Pinned,
+        budget: U256::from_dec_str("600200000000000000").unwrap(),
+        allocations: vec![
+            internal_flat(ROOT_PARENT, 0x11, "600000000000000000", false),
+            internal_flat(U256::zero(), 0x22, "200000000000000000", true),
+            FlatAllocation {
+                on_acceptance: false,
+                parent_index: ROOT_PARENT,
+                recipient: grant_address(0x33),
+                call_key: abi::CallKey(call_key),
+                budget: U256::from_dec_str("200000000000000").unwrap(),
+                fee_params: AllocationFeeParams::External(abi::fees::ExternalMessageParams {
+                    gas_limit: U256::from(200_000),
+                    max_gas_price: U256::from(1_000_000_000),
+                }),
+            },
+        ],
+    };
+    assert_eq!(
+        encode_grant(&grant),
+        vector_payload("pinned-nested-internal-and-external-root")
+    );
+}
+
+#[test]
+fn descendant_grant_closed_forms_emit_no_bytes() {
+    for descendants in [
+        None,
+        Some(gl_call::Descendants::Open(U256::zero())),
+        Some(gl_call::Descendants::Pinned(vec![])),
+    ] {
+        let prepared = prepare(descendants).unwrap();
+        assert_eq!(prepared.budget, U256::zero());
+        assert!(prepared.subtree.is_empty());
+    }
+}
+
+#[test]
+fn descendant_grant_rejects_more_than_twenty_four_nodes() {
+    let roots = (0..25)
+        .map(|last| internal_allocation(last, 10, gl_call::On::Finalized, ROOT_PARENT))
+        .collect();
+    let result = prepare(Some(gl_call::Descendants::Pinned(roots)));
+    assert!(matches!(result, Err(GrantValidationError::Tree)));
+}
+
+#[test]
+fn descendant_grant_accepts_a_twenty_four_node_chain() {
+    let nodes = (0..24u8)
+        .map(|index| {
+            internal_allocation(
+                index,
+                u64::from(24 - index) * 10,
+                gl_call::On::Finalized,
+                if index == 0 {
+                    ROOT_PARENT
+                } else {
+                    U256::from(index - 1)
+                },
+            )
+        })
+        .collect();
+    let prepared = prepare(Some(gl_call::Descendants::Pinned(nodes))).unwrap();
+    assert_eq!(prepared.budget, U256::from(240));
+}
+
+#[test]
+fn descendant_grant_rejects_duplicate_siblings_regardless_of_phase() {
+    let mut duplicate = match internal_allocation(1, 10, gl_call::On::Finalized, ROOT_PARENT) {
+        gl_call::AllocationNode::Internal(node) => node,
+        _ => unreachable!(),
+    };
+    duplicate.on = gl_call::On::Decided;
+    let roots = vec![
+        internal_allocation(1, 10, gl_call::On::Finalized, ROOT_PARENT),
+        gl_call::AllocationNode::Internal(duplicate),
+    ];
+    let result = prepare(Some(gl_call::Descendants::Pinned(roots)));
+    assert!(matches!(result, Err(GrantValidationError::Tree)));
+}
+
+#[test]
+fn descendant_grant_rejects_external_child() {
+    let root = internal_allocation(1, 210, gl_call::On::Finalized, ROOT_PARENT);
+    let mut child = external_allocation_node(U256::from(200));
+    let gl_call::AllocationNode::External(node) = &mut child else {
+        unreachable!()
+    };
+    node.parent_index = U256::zero();
+    let result = prepare(Some(gl_call::Descendants::Pinned(vec![root, child])));
+    assert!(matches!(result, Err(GrantValidationError::Tree)));
+}
+
+#[test]
+fn descendant_grant_rejects_self_forward_and_out_of_range_parents() {
+    for parent_index in [U256::zero(), U256::one(), U256::MAX - U256::one()] {
+        let result = prepare(Some(gl_call::Descendants::Pinned(vec![
+            internal_allocation(1, 10, gl_call::On::Finalized, parent_index),
+        ])));
+        assert!(
+            matches!(result, Err(GrantValidationError::Tree)),
+            "unexpected result: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn descendant_grant_rejects_children_of_external_nodes() {
+    let result = prepare(Some(gl_call::Descendants::Pinned(vec![
+        external_allocation_node(U256::from(200)),
+        internal_allocation(1, 10, gl_call::On::Finalized, U256::zero()),
+    ])));
+    assert!(
+        matches!(result, Err(GrantValidationError::Tree)),
+        "unexpected result: {result:?}"
+    );
+}
+
+#[test]
+fn descendant_grant_preserves_non_preorder_indices() {
+    let nodes = vec![
+        internal_allocation(1, 20, gl_call::On::Finalized, ROOT_PARENT),
+        external_allocation_node(U256::from(200)),
+        internal_allocation(2, 10, gl_call::On::Finalized, U256::zero()),
+    ];
+    let prepared = prepare(Some(gl_call::Descendants::Pinned(nodes))).unwrap();
+    let expected = Grant {
+        policy: GrantPolicy::Pinned,
+        budget: U256::from(220),
+        allocations: vec![
+            internal_flat(ROOT_PARENT, 1, "20", false),
+            FlatAllocation {
+                on_acceptance: false,
+                parent_index: ROOT_PARENT,
+                recipient: grant_address(0x33),
+                call_key: abi::CallKey([7; 32]),
+                budget: U256::from(200),
+                fee_params: AllocationFeeParams::External(abi::fees::ExternalMessageParams {
+                    gas_limit: U256::from(20),
+                    max_gas_price: U256::from(10),
+                }),
+            },
+            internal_flat(U256::zero(), 2, "10", false),
+        ],
+    };
+    assert_eq!(prepared.subtree, encode_grant(&expected));
+}
+
+#[test]
+fn descendant_grant_rejects_invalid_internal_fee_shapes() {
+    let mut invalid = grant_params();
+    invalid.leader_time_units_allocation = U256::zero();
+    let gl_call::AllocationNode::Internal(mut node) =
+        internal_allocation(1, 10, gl_call::On::Finalized, ROOT_PARENT)
+    else {
+        unreachable!()
+    };
+    node.fee_params = invalid;
+    let result = prepare(Some(gl_call::Descendants::Pinned(vec![
+        gl_call::AllocationNode::Internal(node),
+    ])));
+    assert!(matches!(result, Err(GrantValidationError::Inval)));
+
+    let gl_call::AllocationNode::Internal(mut oversized) =
+        internal_allocation(1, 10, gl_call::On::Finalized, ROOT_PARENT)
+    else {
+        unreachable!()
+    };
+    oversized.fee_params.rotations = vec![U256::zero(); 23];
+    let result = prepare(Some(gl_call::Descendants::Pinned(vec![
+        gl_call::AllocationNode::Internal(oversized),
+    ])));
+    assert!(matches!(result, Err(GrantValidationError::Inval)));
+}
+
+#[test]
+fn descendant_grant_accepts_twenty_two_rotations_and_rejects_twenty_three() {
+    let make_root = |rotation_count| {
+        let gl_call::AllocationNode::Internal(mut node) =
+            internal_allocation(1, 10, gl_call::On::Finalized, ROOT_PARENT)
+        else {
+            unreachable!()
+        };
+        node.fee_params.rotations = vec![U256::zero(); rotation_count];
+        gl_call::AllocationNode::Internal(node)
+    };
+
+    prepare(Some(gl_call::Descendants::Pinned(vec![make_root(22)]))).unwrap();
+    let result = prepare(Some(gl_call::Descendants::Pinned(vec![make_root(23)])));
+    assert!(matches!(result, Err(GrantValidationError::Inval)));
+}
+
+#[test]
+fn descendant_grant_rejects_zero_budget_nodes_at_any_depth() {
+    let cases = [
+        vec![internal_allocation(
+            1,
+            0,
+            gl_call::On::Finalized,
+            ROOT_PARENT,
+        )],
+        vec![external_allocation_node(U256::zero())],
+        vec![
+            internal_allocation(1, 10, gl_call::On::Finalized, ROOT_PARENT),
+            internal_allocation(2, 0, gl_call::On::Finalized, U256::zero()),
+        ],
+    ];
+
+    for nodes in cases {
+        let result = prepare(Some(gl_call::Descendants::Pinned(nodes)));
+        assert!(matches!(result, Err(GrantValidationError::Budget)));
+    }
+}
+
+#[test]
+fn descendant_grant_rejects_invalid_external_budget() {
+    let zero = prepare(Some(gl_call::Descendants::Pinned(vec![
+        external_allocation_node(U256::zero()),
+    ])));
+    assert!(matches!(zero, Err(GrantValidationError::Budget)));
+
+    for budget in [U256::from(199), U256::MAX] {
+        let result = prepare(Some(gl_call::Descendants::Pinned(vec![
+            external_allocation_node(budget),
+        ])));
+        assert!(matches!(result, Err(GrantValidationError::External)));
+    }
+}
+
+#[test]
+fn descendant_grant_rejects_insufficient_internal_budget() {
+    let result = prepare(Some(gl_call::Descendants::Pinned(vec![
+        internal_allocation(1, 9, gl_call::On::Finalized, ROOT_PARENT),
+    ])));
+    assert!(matches!(result, Err(GrantValidationError::Budget)));
+}
+
+#[test]
+fn descendant_grant_accepts_exact_required_internal_budget() {
+    let prepared = prepare(Some(gl_call::Descendants::Pinned(vec![
+        internal_allocation(1, 10, gl_call::On::Finalized, ROOT_PARENT),
+    ])))
+    .unwrap();
+    assert_eq!(prepared.budget, U256::from(10));
+}
+
+#[test]
+fn descendant_grant_allows_the_same_key_under_different_parents() {
+    let roots = vec![
+        internal_allocation(1, 20, gl_call::On::Finalized, ROOT_PARENT),
+        internal_allocation(2, 20, gl_call::On::Finalized, ROOT_PARENT),
+        internal_allocation(3, 10, gl_call::On::Finalized, U256::zero()),
+        internal_allocation(3, 10, gl_call::On::Finalized, U256::one()),
+    ];
+
+    let prepared = prepare(Some(gl_call::Descendants::Pinned(roots))).unwrap();
+    assert_eq!(prepared.budget, U256::from(40));
+}
+
+#[test]
+fn descendant_grant_decided_root_uses_enclosing_appeal_multiplier() {
+    let mut enclosing = grant_params();
+    enclosing.rotations.push(U256::zero());
+    let descendants = Some(gl_call::Descendants::Pinned(vec![internal_allocation(
+        1,
+        19,
+        gl_call::On::Decided,
+        ROOT_PARENT,
+    )]));
+    let result = prepare_descendants(&enclosing, descendants, |_| Ok(U256::from(10)));
+    assert!(matches!(result, Err(GrantValidationError::Budget)));
+}
+
+#[test]
+fn descendant_grant_budget_is_sum_of_roots_and_payload_is_bounded() {
+    let roots = (0..24)
+        .map(|last| {
+            let mut node = match internal_allocation(last, 10, gl_call::On::Finalized, ROOT_PARENT)
+            {
+                gl_call::AllocationNode::Internal(node) => node,
+                _ => unreachable!(),
+            };
+            node.fee_params.rotations = vec![U256::zero(); 22];
+            gl_call::AllocationNode::Internal(node)
+        })
+        .collect();
+    let prepared = prepare(Some(gl_call::Descendants::Pinned(roots))).unwrap();
+    assert_eq!(prepared.budget, U256::from(240));
+    assert_eq!(prepared.subtree.len(), 31_712);
+}
+
+#[test]
+fn descendant_grant_rejects_budget_arithmetic_overflow() {
+    let gl_call::AllocationNode::Internal(mut max_root) =
+        internal_allocation(1, 1, gl_call::On::Finalized, ROOT_PARENT)
+    else {
+        unreachable!()
+    };
+    max_root.budget = U256::MAX;
+    let root_sum = prepare(Some(gl_call::Descendants::Pinned(vec![
+        gl_call::AllocationNode::Internal(max_root),
+        internal_allocation(2, 1, gl_call::On::Finalized, ROOT_PARENT),
+    ])));
+    assert!(matches!(root_sum, Err(GrantValidationError::Budget)));
+
+    let child = internal_allocation(2, 1, gl_call::On::Finalized, U256::zero());
+    let gl_call::AllocationNode::Internal(mut parent) =
+        internal_allocation(1, 1, gl_call::On::Finalized, ROOT_PARENT)
+    else {
+        unreachable!()
+    };
+    parent.budget = U256::MAX;
+    let mut quotes = [U256::MAX, U256::one()].into_iter();
+    let primary_and_children = prepare_descendants(
+        &grant_params(),
+        Some(gl_call::Descendants::Pinned(vec![
+            gl_call::AllocationNode::Internal(parent),
+            child,
+        ])),
+        |_| Ok(quotes.next().unwrap()),
+    );
+    assert!(matches!(
+        primary_and_children,
+        Err(GrantValidationError::Budget)
+    ));
+
+    let gl_call::AllocationNode::Internal(mut decided) =
+        internal_allocation(1, 1, gl_call::On::Decided, ROOT_PARENT)
+    else {
+        unreachable!()
+    };
+    decided.budget = U256::MAX;
+    let mut enclosing = grant_params();
+    enclosing.rotations.push(U256::zero());
+    let decided_multiplier = prepare_descendants(
+        &enclosing,
+        Some(gl_call::Descendants::Pinned(vec![
+            gl_call::AllocationNode::Internal(decided),
+        ])),
+        |_| Ok(U256::MAX / U256::from(2) + U256::one()),
+    );
+    assert!(matches!(
+        decided_multiplier,
+        Err(GrantValidationError::Budget)
+    ));
+
+    let mut external = external_allocation_node(U256::MAX);
+    let gl_call::AllocationNode::External(node) = &mut external else {
+        unreachable!()
+    };
+    node.fee_params.gas_limit = U256::MAX;
+    node.fee_params.max_gas_price = U256::from(2);
+    let external_unit = prepare(Some(gl_call::Descendants::Pinned(vec![external])));
+    assert!(matches!(external_unit, Err(GrantValidationError::External)));
 }
 
 fn errno(e: generated::types::Error) -> generated::types::Errno {
@@ -446,6 +943,19 @@ impl EmissionTestContext {
     }
 
     fn with_fees(memory_limit: u32, fee_total: u64, fees: crate::config::FeesConfig) -> Self {
+        Self::with_fees_and_balance(memory_limit, fee_total, fees, U256::MAX)
+    }
+
+    fn with_balance(memory_limit: u32, fee_total: u64, balance: U256) -> Self {
+        Self::with_fees_and_balance(memory_limit, fee_total, emission_fees(), balance)
+    }
+
+    fn with_fees_and_balance(
+        memory_limit: u32,
+        fee_total: u64,
+        fees: crate::config::FeesConfig,
+        balance: U256,
+    ) -> Self {
         let root = TestDir::new();
         let runners_dir = root.join("runners");
         let registry_dir = root.join("registry");
@@ -536,7 +1046,7 @@ impl EmissionTestContext {
         .unwrap();
         supervisor
             .balances
-            .insert(calldata::Address::zero(), U256::MAX);
+            .insert(calldata::Address::zero(), balance);
 
         let limiter = rt::memlimiter::Limiter::with_limit(memory_limit);
         let permissions = base::Permissions {
@@ -658,10 +1168,13 @@ impl EmissionTestContext {
                         args: None,
                         kwargs: None,
                     },
-                    U256::zero(),
-                    gl_call::On::Finalized,
-                    use_balance,
-                    use_balance.then(valid_params),
+                    EmitInternalMessageArgs {
+                        value: U256::zero(),
+                        on: gl_call::On::Finalized,
+                        use_balance,
+                        fee_params: use_balance.then(valid_params),
+                        descendants: None,
+                    },
                 )
                 .await
             }
@@ -679,6 +1192,7 @@ impl EmissionTestContext {
                         value: U256::zero(),
                         salt_nonce: U256::zero(),
                         use_balance,
+                        descendants: None,
                     },
                 )
                 .await
@@ -1376,6 +1890,460 @@ async fn child_budget_overflow_is_internal_and_has_no_effect() {
 }
 
 #[tokio::test]
+async fn balance_descendant_grant_is_emitted_and_reserved_once() {
+    let mut test = EmissionTestContext::new(u32::MAX, 100);
+
+    test.wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            EmitInternalMessageArgs {
+                value: U256::zero(),
+                on: gl_call::On::Finalized,
+                use_balance: true,
+                fee_params: Some(valid_params()),
+                descendants: Some(gl_call::Descendants::Open(U256::from(3))),
+            },
+        )
+        .await
+        .unwrap();
+
+    let [domain::ExecutionEmission::InternalMessage {
+        message_fee,
+        subtree,
+        use_balance,
+        ..
+    }] = test.context.data.accumulator.emissions.as_slice()
+    else {
+        panic!("expected one internal message")
+    };
+    assert!(*use_balance);
+    assert_eq!(*message_fee, U256::from(4));
+    assert_eq!(subtree.len(), 224);
+    assert_eq!(
+        test.context.data.accumulator.messages_value_decremented,
+        U256::from(4)
+    );
+    assert_eq!(
+        test.context
+            .data
+            .supervisor
+            .shared_data
+            .data_fees_limit
+            .consumed()
+            .await
+            .message_fee,
+        U256::zero()
+    );
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn balance_deploy_descendant_grant_is_emitted_and_reserved_once() {
+    let mut test = EmissionTestContext::new(u32::MAX, 100);
+
+    test.wasi()
+        .gl_call_emit_internal_deploy_message(
+            abi::entry::MainDeployData {
+                args: None,
+                kwargs: None,
+            },
+            gl_call::On::Finalized,
+            Some(valid_params()),
+            EmitInternalDeployMessageArgs {
+                code: bytes::Bytes::new(),
+                value: U256::zero(),
+                salt_nonce: U256::zero(),
+                use_balance: true,
+                descendants: Some(gl_call::Descendants::Open(U256::from(3))),
+            },
+        )
+        .await
+        .unwrap();
+
+    let [domain::ExecutionEmission::InternalDeployMessage {
+        message_fee,
+        subtree,
+        use_balance,
+        ..
+    }] = test.context.data.accumulator.emissions.as_slice()
+    else {
+        panic!("expected one internal deploy message")
+    };
+    assert!(*use_balance);
+    assert_eq!(*message_fee, U256::from(4));
+    assert_eq!(subtree.len(), 224);
+    assert_eq!(
+        test.context.data.accumulator.messages_value_decremented,
+        U256::from(4)
+    );
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn zero_declared_budget_balance_messages_are_rejected() {
+    let mut fees = emission_fees();
+    fees.message_fee.delta_expr = "\\attrs = 0".to_owned();
+    let mut test = EmissionTestContext::with_fees(u32::MAX, 100, fees);
+
+    let error = test
+        .wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            EmitInternalMessageArgs {
+                value: U256::zero(),
+                on: gl_call::On::Finalized,
+                use_balance: true,
+                fee_params: Some(valid_params()),
+                descendants: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    let message = trap_message(error);
+    assert!(
+        message.contains("fee below_minimum"),
+        "unexpected error: {message}"
+    );
+
+    let error = test
+        .wasi()
+        .gl_call_emit_internal_deploy_message(
+            abi::entry::MainDeployData {
+                args: None,
+                kwargs: None,
+            },
+            gl_call::On::Finalized,
+            Some(valid_params()),
+            EmitInternalDeployMessageArgs {
+                code: bytes::Bytes::new(),
+                value: U256::zero(),
+                salt_nonce: U256::zero(),
+                use_balance: true,
+                descendants: Some(gl_call::Descendants::Open(U256::zero())),
+            },
+        )
+        .await
+        .unwrap_err();
+    let message = trap_message(error);
+    assert!(
+        message.contains("fee below_minimum"),
+        "unexpected error: {message}"
+    );
+
+    assert!(test.context.data.accumulator.emissions.is_empty());
+    assert!(test
+        .context
+        .data
+        .accumulator
+        .messages_value_decremented
+        .is_zero());
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn descendant_budget_is_included_in_the_balance_check() {
+    let mut test = EmissionTestContext::with_balance(u32::MAX, 100, U256::one());
+    let memory_before = test.context.limiter.get_remaining_memory();
+
+    let error = test
+        .wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            EmitInternalMessageArgs {
+                value: U256::zero(),
+                on: gl_call::On::Finalized,
+                use_balance: true,
+                fee_params: Some(valid_params()),
+                descendants: Some(gl_call::Descendants::Open(U256::from(3))),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(errno(error), generated::types::Errno::InsufficientBalance);
+    assert!(test.context.data.accumulator.emissions.is_empty());
+    assert_eq!(test.context.limiter.get_remaining_memory(), memory_before);
+    assert_eq!(test.context.limiter.get_new_permanent_allocations(), 0);
+    assert_eq!(
+        test.context.data.accumulator.messages_value_decremented,
+        U256::zero()
+    );
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn descendant_grants_are_forbidden_without_permission_or_in_nondet_mode() {
+    for remove_permission in [true, false] {
+        let mut test = EmissionTestContext::new(u32::MAX, 100);
+        if remove_permission {
+            test.context
+                .data
+                .conf
+                .permissions
+                .can_use_balance_for_message_fees = false;
+        } else {
+            test.context.data.conf.permissions.deterministic = false;
+        }
+
+        let error = test
+            .wasi()
+            .gl_call_emit_internal_message(
+                calldata::Address::zero(),
+                abi::entry::MainCallData {
+                    name: None,
+                    args: None,
+                    kwargs: None,
+                },
+                EmitInternalMessageArgs {
+                    value: U256::zero(),
+                    on: gl_call::On::Finalized,
+                    use_balance: true,
+                    fee_params: Some(valid_params()),
+                    descendants: Some(gl_call::Descendants::Open(U256::one())),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(errno(error), generated::types::Errno::Forbidden);
+        assert!(test.context.data.accumulator.emissions.is_empty());
+        assert_eq!(
+            test.context.data.accumulator.messages_value_decremented,
+            U256::zero()
+        );
+        test.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn repeated_descendant_grants_drain_the_contract_balance() {
+    let mut test = EmissionTestContext::with_balance(u32::MAX, 100, U256::from(8));
+
+    for _ in 0..2 {
+        test.wasi()
+            .gl_call_emit_internal_message(
+                calldata::Address::zero(),
+                abi::entry::MainCallData {
+                    name: None,
+                    args: None,
+                    kwargs: None,
+                },
+                EmitInternalMessageArgs {
+                    value: U256::zero(),
+                    on: gl_call::On::Finalized,
+                    use_balance: true,
+                    fee_params: Some(valid_params()),
+                    descendants: Some(gl_call::Descendants::Open(U256::from(3))),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let error = test
+        .wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            EmitInternalMessageArgs {
+                value: U256::zero(),
+                on: gl_call::On::Finalized,
+                use_balance: true,
+                fee_params: Some(valid_params()),
+                descendants: Some(gl_call::Descendants::Open(U256::from(3))),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(errno(error), generated::types::Errno::InsufficientBalance);
+    assert_eq!(test.context.data.accumulator.emissions.len(), 2);
+    assert_eq!(
+        test.context.data.accumulator.messages_value_decremented,
+        U256::from(8)
+    );
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn allocation_funding_accepts_absent_descendants_and_rejects_explicit_descendants() {
+    let mut test = EmissionTestContext::new(u32::MAX, 100);
+
+    test.wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            EmitInternalMessageArgs {
+                value: U256::zero(),
+                on: gl_call::On::Finalized,
+                use_balance: false,
+                fee_params: None,
+                descendants: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    for descendants in [
+        gl_call::Descendants::Open(U256::zero()),
+        gl_call::Descendants::Pinned(vec![]),
+    ] {
+        let error = test
+            .wasi()
+            .gl_call_emit_internal_message(
+                calldata::Address::zero(),
+                abi::entry::MainCallData {
+                    name: None,
+                    args: None,
+                    kwargs: None,
+                },
+                EmitInternalMessageArgs {
+                    value: U256::zero(),
+                    on: gl_call::On::Finalized,
+                    use_balance: false,
+                    fee_params: None,
+                    descendants: Some(descendants),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(errno(error), generated::types::Errno::Inval);
+    }
+
+    assert_eq!(test.context.data.accumulator.emissions.len(), 1);
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn rejected_descendant_grant_has_no_emission_reservation_or_fee_effect() {
+    let mut test = EmissionTestContext::new(u32::MAX, 100);
+    let memory_before = test.context.limiter.get_remaining_memory();
+    let node = internal_allocation(1, 1, gl_call::On::Finalized, ROOT_PARENT);
+
+    let error = test
+        .wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            EmitInternalMessageArgs {
+                value: U256::zero(),
+                on: gl_call::On::Finalized,
+                use_balance: true,
+                fee_params: Some(valid_params()),
+                descendants: Some(gl_call::Descendants::Pinned(vec![node.clone(), node])),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        trap_message(error).contains("fee descendant_grant tree"),
+        "unexpected grant error"
+    );
+    assert!(test.context.data.accumulator.emissions.is_empty());
+    assert_eq!(test.context.limiter.get_remaining_memory(), memory_before);
+    assert_eq!(test.context.limiter.get_new_permanent_allocations(), 0);
+    assert_eq!(
+        test.context.data.accumulator.messages_value_decremented,
+        U256::zero()
+    );
+    let consumed = test
+        .context
+        .data
+        .supervisor
+        .shared_data
+        .data_fees_limit
+        .consumed()
+        .await;
+    assert_eq!(consumed.message_fee, U256::zero());
+    assert_eq!(consumed.message_receipt, U256::zero());
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
+async fn descendant_budget_overflow_has_no_emission_reservation_or_fee_effect() {
+    let mut test = EmissionTestContext::new(u32::MAX, 100);
+    let memory_before = test.context.limiter.get_remaining_memory();
+
+    let error = test
+        .wasi()
+        .gl_call_emit_internal_message(
+            calldata::Address::zero(),
+            abi::entry::MainCallData {
+                name: None,
+                args: None,
+                kwargs: None,
+            },
+            EmitInternalMessageArgs {
+                value: U256::zero(),
+                on: gl_call::On::Finalized,
+                use_balance: true,
+                fee_params: Some(valid_params()),
+                descendants: Some(gl_call::Descendants::Open(U256::MAX)),
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        trap_message(error).contains("fee descendant_grant budget"),
+        "unexpected grant error"
+    );
+    assert!(test.context.data.accumulator.emissions.is_empty());
+    assert_eq!(test.context.limiter.get_remaining_memory(), memory_before);
+    assert_eq!(test.context.limiter.get_new_permanent_allocations(), 0);
+    assert_eq!(
+        test.context.data.accumulator.messages_value_decremented,
+        U256::zero()
+    );
+    let consumed = test
+        .context
+        .data
+        .supervisor
+        .shared_data
+        .data_fees_limit
+        .consumed()
+        .await;
+    assert_eq!(consumed.message_fee, U256::zero());
+    assert_eq!(consumed.message_receipt, U256::zero());
+
+    test.shutdown().await;
+}
+
+#[tokio::test]
 async fn event_rejected_by_memory_is_not_appended_or_charged() {
     let mut test = EmissionTestContext::new(0, 1);
 
@@ -1510,6 +2478,7 @@ fn flat_argument_request(deploy: bool) -> (Vec<u8>, u32) {
             salt_nonce: U256::zero(),
             use_balance: true,
             fee_params: Some(params),
+            descendants: None,
         }
     } else {
         gl_call::Message::EmitInternalMessage {
@@ -1523,6 +2492,7 @@ fn flat_argument_request(deploy: bool) -> (Vec<u8>, u32) {
             on: gl_call::On::Finalized,
             use_balance: true,
             fee_params: Some(params),
+            descendants: None,
         }
     };
     (calldata::encode_obj(&request), memory)
@@ -1663,6 +2633,7 @@ async fn gl_call_internal_message_retains_calldata_args_as_validated_wire_bytes(
         on: gl_call::On::Finalized,
         use_balance: false,
         fee_params: None,
+        descendants: None,
     });
 
     gl_call_wire(&mut test, &request).await.unwrap();
@@ -1963,13 +2934,24 @@ fn zero_price_caps_are_inval() {
 }
 
 #[test]
+fn mixed_zero_time_units_are_inval_without_descendants() {
+    for (leader, validator) in [(U256::zero(), U256::one()), (U256::one(), U256::zero())] {
+        let mut params = valid_params();
+        params.leader_time_units_allocation = leader;
+        params.validator_time_units_allocation = validator;
+        let error = validate_balance_fee(true, true, Some(params)).unwrap_err();
+        assert_eq!(errno(error), generated::types::Errno::Inval);
+    }
+}
+
+#[test]
 fn huge_magnitude_params_are_inval() {
     // Security-review N1 repro: passes the emptiness/zero checks, but the
     // 2^250 magnitudes would push messageFeeFloor past U256 and saturate the
     // evaluator's result to U256::MAX.
     let p = abi::fees::InternalMessageParams {
         leader_time_units_allocation: U256::one() << 250,
-        validator_time_units_allocation: U256::zero(),
+        validator_time_units_allocation: U256::one(),
         execution_budget_per_round: U256::zero(),
         rotations: vec![U256::zero()],
         max_price_gen_per_time_unit: U256::one() << 250,
@@ -2454,6 +3436,9 @@ fn proposable_generated_trie_codes_are_accepted() {
         public_abi::VmError::out_of().receipt().nondet_output(),
         public_abi::VmError::out_of().message_fee().total().val(),
         public_abi::VmError::fee().below_minimum(),
+        public_abi::VmError::fee().descendant_grant().budget(),
+        public_abi::VmError::fee().descendant_grant().tree(),
+        public_abi::VmError::fee().descendant_grant().external(),
         public_abi::VmError::evm().reverted(),
         public_abi::VmError::invalid_contract().val(),
         public_abi::VmError::invalid_contract().wasm().linking(),

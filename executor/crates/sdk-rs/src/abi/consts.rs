@@ -397,6 +397,17 @@ pub mod __VmError {
         }
     }
 
+    pub struct FeeDescendantGrant;
+
+    impl FeeDescendantGrant {
+        pub const fn prefix_(&self) -> &'static str {
+            "fee descendant_grant"
+        }
+        pub const fn budget(&self) -> VmError { VmError(Cow::Borrowed("fee descendant_grant budget")) }
+        pub const fn tree(&self) -> VmError { VmError(Cow::Borrowed("fee descendant_grant tree")) }
+        pub const fn external(&self) -> VmError { VmError(Cow::Borrowed("fee descendant_grant external")) }
+    }
+
     pub struct Fee;
 
     impl Fee {
@@ -406,6 +417,7 @@ pub mod __VmError {
         pub const fn below_minimum(&self) -> VmError { VmError(Cow::Borrowed("fee below_minimum")) }
         pub const fn too_many_rounds(&self) -> VmError { VmError(Cow::Borrowed("fee too_many_rounds")) }
         pub const fn no_matching_allocation(&self) -> FeeNoMatchingAllocation { FeeNoMatchingAllocation }
+        pub const fn descendant_grant(&self) -> FeeDescendantGrant { FeeDescendantGrant }
     }
 
     pub struct Evm;
@@ -525,6 +537,9 @@ impl VmError {
             "fee no_matching_allocation" |
             "fee below_minimum" |
             "fee too_many_rounds" |
+            "fee descendant_grant budget" |
+            "fee descendant_grant tree" |
+            "fee descendant_grant external" |
             "forbidden" |
             "evm reverted" |
             "invalid_contract" |

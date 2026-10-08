@@ -486,6 +486,84 @@ pub enum On {
     Decided,
 }
 
+#[derive(Clone, PartialEq, Eq, Debug, Encode)]
+#[calldata(untagged)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
+pub enum Descendants {
+    Open(
+        #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
+        primitive_types::U256,
+    ),
+    Pinned(Vec<AllocationNode>),
+}
+
+impl calldata::codec::Decode for Descendants {
+    fn decode<D: calldata::codec::Deserializer>(
+        deserializer: D,
+    ) -> Result<Self, calldata::codec::DecodeError> {
+        use calldata::codec::{
+            Decode, DecodeError, Deserializer, SeqAccess, ValueDeserializer, Visitor,
+        };
+
+        struct V;
+        impl Visitor for V {
+            type Value = Descendants;
+
+            fn visit_bigint(self, value: &num_bigint::BigInt) -> Result<Self::Value, DecodeError> {
+                primitive_types::U256::decode(ValueDeserializer(calldata::Value::Number(
+                    value.clone(),
+                )))
+                .map(Descendants::Open)
+            }
+
+            fn visit_seq<A: SeqAccess>(self, len: u64, seq: A) -> Result<Self::Value, DecodeError> {
+                struct Sequence<A>(u64, A);
+                impl<A: SeqAccess> Deserializer for Sequence<A> {
+                    fn deserialize<V: Visitor>(self, visitor: V) -> Result<V::Value, DecodeError> {
+                        visitor.visit_seq(self.0, self.1)
+                    }
+                }
+                calldata::LenLimitedVec::<1024, AllocationNode>::decode(Sequence(len, seq))
+                    .map(|nodes| Descendants::Pinned(nodes.into_inner()))
+            }
+        }
+        deserializer.deserialize(V)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode)]
+#[calldata(untagged)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
+pub enum AllocationNode {
+    Internal(InternalAllocation),
+    External(ExternalAllocation),
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
+pub struct InternalAllocation {
+    #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
+    pub parent_index: primitive_types::U256,
+    pub recipient: calldata::Address,
+    pub call_key: abi::CallKey,
+    #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
+    pub budget: primitive_types::U256,
+    pub fee_params: fees::InternalMessageParams,
+    pub on: On,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
+pub struct ExternalAllocation {
+    #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
+    pub parent_index: primitive_types::U256,
+    pub recipient: calldata::Address,
+    pub call_key: abi::CallKey,
+    #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_u256))]
+    pub budget: primitive_types::U256,
+    pub fee_params: fees::ExternalMessageParams,
+}
+
 fn encode_storage_view<W: calldata::Writer>(
     view: &public_abi::StorageView,
     enc: &mut calldata::Encoder<W>,
@@ -581,6 +659,9 @@ pub enum Message {
         /// only honored when `use_balance` is set.
         #[calldata(default = default_none)]
         fee_params: Option<fees::InternalMessageParams>,
+        /// Descendant funding policy for the emitted child
+        #[calldata(default = default_none)]
+        descendants: Option<Descendants>,
     },
     EmitInternalDeployMessage {
         calldata: abi::entry::MainDeployData,
@@ -597,6 +678,9 @@ pub enum Message {
         /// Guest fee params for the balance-funded deploy; see `EmitInternalMessage::fee_params`.
         #[calldata(default = default_none)]
         fee_params: Option<fees::InternalMessageParams>,
+        /// Descendant funding policy for the emitted child
+        #[calldata(default = default_none)]
+        descendants: Option<Descendants>,
     },
     EmitEvent {
         #[cfg_attr(feature = "fuzzing", arbitrary(with = crate::abi::arb::arb_limited_vec_bytes))]

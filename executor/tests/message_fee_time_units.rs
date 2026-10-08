@@ -144,3 +144,19 @@ fn no_appeals_reserve_no_appeal_profit() {
         U256::from(8)
     );
 }
+
+#[test]
+fn descendant_quote_skips_unavailable_pinned_budget_floor() {
+    let mut gas_data = gas_data(1, 100, 1, 100);
+    gas_data.insert("messageBudgetFloor".to_owned(), "2".to_owned());
+    let fees = DataLimit::new(bucket_totals(), default_fees(), gas_data).unwrap();
+    let params = fee_params(2, 1);
+
+    assert!(fees.calculate_message_fee_internal(&params).is_err());
+    assert_eq!(
+        fees.calculate_descendant_message_fee_internal(&params)
+            .unwrap()
+            .reported_fee(),
+        U256::from(8)
+    );
+}

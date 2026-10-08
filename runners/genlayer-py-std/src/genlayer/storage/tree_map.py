@@ -6,10 +6,22 @@ import typing
 
 from genlayer.types import i8, u32
 
+from ._internal.desc_record import RecordExtraFields
 from ._internal.generate import allow
+from .core import Slot, ZeroManager, actions_apply_copy
 from .dyn_array import DynArray
 
 _NO_OBJ = object()
+_active_suppliers: set[tuple[Slot, int]] = set()
+
+
+def _record(view: object) -> RecordExtraFields:
+	return typing.cast(RecordExtraFields, view)
+
+
+def _location(view: object) -> tuple[Slot, int]:
+	rec = _record(view)
+	return rec._storage_slot, rec._off
 
 
 @allow
@@ -24,6 +36,16 @@ class _Node[K, V]:
 		self.key = k
 		if v is not _NO_OBJ:
 			self.value = v
+		else:
+			rec = _record(self)
+			field = rec.__type_desc__.layout.fields['value']
+			actions_apply_copy(
+				field.desc.copy_actions,
+				rec._storage_slot,
+				rec._off + field.offset,
+				ZeroManager().get_store_slot(0),
+				0,
+			)
 		self.left = 0
 		self.right = 0
 		self.balance = 0
@@ -52,13 +74,20 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 	_slots: DynArray[_Node[K, V]]
 	_free_slots: DynArray[u32]
 
+	def _check_mutation(self):
+		if _location(self) in _active_suppliers:
+			raise RuntimeError('cannot mutate TreeMap during its supplier callback')
+
 	def clear(self):
 		"""
 		Remove all entries from the map.
 
+		:raises RuntimeError: if called during this map's supplier callback
+
 		The root is cleared before the backing arrays. If a storage write fails,
 		the map may already appear empty while unreachable backing data remains.
 		"""
+		self._check_mutation()
 		self._root = 0
 		self._slots.clear()
 		self._free_slots.clear()
@@ -181,10 +210,12 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 
 		:param k: key to remove
 		:raises KeyError: when key is not found
+		:raises RuntimeError: if called during this map's supplier callback
 
 		Key comparisons finish before mutation starts. A later storage error can
 		leave the tree only partially updated; storage errors must not be caught.
 		"""
+		self._check_mutation()
 		seq, is_less = self._find_seq(k)
 		# not found
 		if seq[-1] == 0:
@@ -319,11 +350,14 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 
 		:param k: key
 		:param v: value to associate with the key
+		:raises RuntimeError: if called during this map's supplier callback
 
 		Overwriting an entry has the value encoder's exception safety. During an
 		insertion, an encoding or storage error can leave an allocated node linked
 		and partially initialized; such errors must not be caught.
 		"""
+
+		self._check_mutation()
 
 		def setter(node: _Node[K, V]):
 			node.value = v
@@ -337,6 +371,7 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 	def compute_if_absent(self, k: K, supplier: typing.Callable[[], V], /) -> V:
 		"""
 		:returns: Value associated with `k` if it is present, otherwise get's new value from the supplier, stores it at `k` and returns
+		:raises RuntimeError: if the supplier attempts to mutate this map through its mapping methods
 
 		The supplier is called before storage is mutated. If encoding or storing
 		the supplied value fails, insertion can remain partially applied.
@@ -346,10 +381,18 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 		def existing(node: _Node[K, V]):
 			res.append(node.value)
 
+		def supply():
+			key = _location(self)
+			_active_suppliers.add(key)
+			try:
+				return supplier()
+			finally:
+				_active_suppliers.remove(key)
+
 		ret = self._get_set(
 			k,
 			existing,
-			supplier,
+			supply,
 		)
 		return res[0] if res else ret
 
@@ -359,6 +402,7 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 
 		:param k: key to look up or insert
 		:returns: value associated with the key
+		:raises RuntimeError: if insertion is attempted during this map's supplier callback
 
 		If insertion fails during a storage write, it can remain partially applied.
 		"""
@@ -380,6 +424,7 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 			slot = self._slots[seq[-1] - 1]
 			exists(slot)
 			return slot.value
+		self._check_mutation()
 		# patch root
 		if len(seq) == 1:
 			value = does_not_exist()
@@ -484,13 +529,21 @@ class TreeMap[K: Comparable, V](collections.abc.MutableMapping[K, V]):
 	def assign(self, arr: typing.Mapping[K, V], /) -> typing.Self:
 		"""
 		Clear the map and populate it from the given mapping.
+		Assigning from a view of the same map is a no-op.
 
 		:param arr: mapping to copy entries from
 		:returns: self
+		:raises RuntimeError: if replacement is attempted during this map's supplier callback
 
 		The old map is cleared first. If iteration or insertion fails, entries
 		inserted before the error remain visible.
 		"""
+		if (
+			isinstance(arr, TreeMap)
+			and _location(arr) == _location(self)
+			and _record(arr).__type_desc__ == _record(self).__type_desc__
+		):
+			return self
 		self.clear()
 		for k, v in arr.items():
 			self[k] = v
