@@ -1,5 +1,9 @@
+import typing
+
 import pytest
-from genlayer.storage import TreeMap, inmem_allocate
+from genlayer.storage import Array, DynArray, TreeMap, allow, inmem_allocate
+from genlayer.storage.core import Indirection, Slot
+from genlayer.types import u32
 
 
 def new_map():
@@ -145,6 +149,40 @@ def test_assign():
 	same_iter(sorted(m.items()), sorted(r.items()))
 
 
+@pytest.mark.parametrize('separate_view', [False, True])
+@pytest.mark.parametrize('values', [{}, {'a': '1', 'b': '2', 'c': '3'}])
+def test_assign_same_storage_is_noop(separate_view, values, monkeypatch):
+	m = new_map().assign(values)
+	source = m
+	if separate_view:
+		slot = m._storage_slot
+		source = Slot(slot.id, slot.manager).cast(TreeMap[str, str], m._off)
+		assert source is not m
+
+	def unexpected_write(*args):
+		pytest.fail('same-storage assignment must not write')
+
+	monkeypatch.setattr(type(m._storage_slot.manager), 'do_write', unexpected_write)
+	assert m.assign(source) is m
+	assert dict(m.items()) == values
+
+
+@pytest.mark.parametrize('location', ['manager', 'slot', 'offset'])
+def test_assign_distinct_storage(location):
+	m = new_map().assign({'old': 'value'})
+	slot = m._storage_slot
+	if location == 'manager':
+		source = new_map()
+	elif location == 'slot':
+		source = slot.indirect(100).cast(TreeMap[str, str], 0)
+	else:
+		source = slot.cast(TreeMap[str, str], m.__type_desc__.size)
+	values = {'a': '1', 'b': '2'}
+	source.assign(values)
+	assert m.assign(source) is m
+	assert dict(m.items()) == dict(source.items()) == values
+
+
 def test_compute_if_absent_missing():
 	m = new_map()
 	result = m.compute_if_absent('k', lambda: 'new_val')
@@ -173,10 +211,132 @@ def test_compute_if_absent_supplier_error_does_not_mutate():
 	assert list(m.items()) == [('before', 'value')]
 
 
+@pytest.mark.parametrize('separate_view', [False, True])
+@pytest.mark.parametrize('values', [{}, {'existing': 'value'}])
+@pytest.mark.parametrize(
+	'operation',
+	['insert', 'overwrite', 'delete', 'clear', 'assign', 'default', 'compute'],
+)
+def test_supplier_cannot_mutate_same_map(separate_view, values, operation):
+	m = new_map().assign(values)
+	alias = m
+	if separate_view:
+		slot = m._storage_slot
+		alias = Slot(slot.id, slot.manager).cast(TreeMap[str, str], m._off)
+
+	def supplier():
+		if operation == 'insert':
+			alias['other'] = 'new'
+		elif operation == 'overwrite':
+			alias['existing'] = 'new'
+		elif operation == 'delete':
+			del alias['existing']
+		elif operation == 'clear':
+			alias.clear()
+		elif operation == 'assign':
+			alias.assign({'other': 'new'})
+		elif operation == 'default':
+			alias.get_or_insert_default('other')
+		else:
+			alias.compute_if_absent('other', lambda: 'new')
+		return 'result'
+
+	with pytest.raises(RuntimeError, match='supplier callback'):
+		m.compute_if_absent('missing', supplier)
+	assert dict(m.items()) == values
+	assert len(m) == len(values)
+	assert m.compute_if_absent('missing', lambda: 'result') == 'result'
+
+
+def test_supplier_can_read_same_map_and_mutate_other_map():
+	m = new_map().assign({'existing': 'value'})
+	other = new_map()
+
+	def supplier():
+		assert m['existing'] == 'value'
+		assert m.get_or_insert_default('existing') == 'value'
+		assert m.compute_if_absent('existing', lambda: pytest.fail('called')) == 'value'
+		other.compute_if_absent('key', lambda: 'other')
+		return 'result'
+
+	assert m.compute_if_absent('missing', supplier) == 'result'
+	assert dict(m.items()) == {'existing': 'value', 'missing': 'result'}
+	assert dict(other.items()) == {'key': 'other'}
+
+
+def test_supplier_guard_is_released_after_exception():
+	m = new_map()
+
+	def supplier():
+		raise ValueError('supplier failed')
+
+	with pytest.raises(ValueError, match='supplier failed'):
+		m.compute_if_absent('key', supplier)
+	m['key'] = 'value'
+	assert dict(m.items()) == {'key': 'value'}
+
+
 def test_get_or_insert_default():
 	m = new_map()
 	m.get_or_insert_default('k')
 	assert 'k' in m
+
+
+@pytest.mark.parametrize('reuse', ['last', 'free', 'clear'])
+@pytest.mark.parametrize('typ, old, default', [(u32, 100, 0), (str, 'old', '')])
+def test_default_initializes_recycled_value(reuse, typ, old, default):
+	m = inmem_allocate(TreeMap[str, typ])
+	m['old'] = old
+	if reuse == 'free':
+		m['keep'] = old
+	if reuse == 'clear':
+		m.clear()
+	else:
+		del m['old']
+	assert m.get_or_insert_default('new') == default
+	assert m['new'] == default
+	if reuse == 'free':
+		assert m['keep'] == old
+
+
+@allow
+class DefaultValue:
+	number: u32
+	text: str
+	fixed: Array[u32, typing.Literal[2]]
+	items: DynArray[str]
+	mapping: TreeMap[str, u32]
+	indirect: Indirection[u32]
+
+
+@pytest.mark.parametrize('reuse', ['last', 'free', 'clear'])
+def test_default_initializes_recycled_compound_value(reuse):
+	m = inmem_allocate(TreeMap[str, DefaultValue])
+	old = m.get_or_insert_default('old')
+	old.number = 100
+	old.text = 'old'
+	old.fixed = [3, 4]
+	old.items.append('old')
+	old.mapping['old'] = 100
+	old.indirect.set(100)
+	if reuse == 'free':
+		m.get_or_insert_default('keep').number = 200
+	if reuse == 'clear':
+		m.clear()
+	else:
+		del m['old']
+	value = m.get_or_insert_default('new')
+	assert value.number == 0
+	assert value.text == ''
+	assert list(value.fixed) == [0, 0]
+	assert list(value.items) == []
+	assert dict(value.mapping.items()) == {}
+	assert len(value.mapping) == 0
+	assert value.indirect.get() == 0
+	value.mapping['new'] = 5
+	assert dict(value.mapping.items()) == {'new': 5}
+	if reuse == 'free':
+		assert m['keep'].number == 200
 
 
 def test_get_or_insert_default_existing():

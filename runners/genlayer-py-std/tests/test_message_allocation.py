@@ -1,5 +1,6 @@
 import types
 import typing
+from collections import UserList
 
 import genlayer as gl
 import genlayer.calldata as calldata
@@ -185,7 +186,7 @@ class Zero(int):
 	pass
 
 
-@pytest.mark.parametrize('descendants', [None, 0, Zero(0), [], ()])
+@pytest.mark.parametrize('descendants', [None, 0, Zero(0), [], (), UserList()])
 def test_closed_descendants_are_omitted_from_emit(monkeypatch, descendants):
 	calls = []
 	monkeypatch.setattr(
@@ -291,7 +292,8 @@ def test_sender_funding_omits_balance_fields(monkeypatch):
 		contract.get_at(Address.ZERO).emit(True).run()
 
 
-def test_descendant_tree_flattens_in_preorder_without_mutation(monkeypatch):
+@pytest.mark.parametrize('sequence', [list, tuple, UserList])
+def test_descendant_tree_flattens_in_preorder_without_mutation(monkeypatch, sequence):
 	calls = []
 	monkeypatch.setattr(
 		contract, 'wasi', types.SimpleNamespace(gl_call=calls.append), raising=False
@@ -302,7 +304,7 @@ def test_descendant_tree_flattens_in_preorder_without_mutation(monkeypatch):
 	external = ExternalAllocation(
 		Address.ZERO, None, gl.chain.ExternalMessageParams(1, 1), 1
 	)
-	balance = UseBalanceParams(params(), [root, external])
+	balance = UseBalanceParams(params(), sequence([root, external]))
 	for _ in range(2):
 		contract.get_at(Address.ZERO).emit(balance).run()
 		flat = calldata.decode(calls.pop())['EmitInternalMessage']['descendants']
@@ -311,7 +313,8 @@ def test_descendant_tree_flattens_in_preorder_without_mutation(monkeypatch):
 	assert root.children == [child, leaf]
 
 
-def test_cyclic_descendant_tree_is_bounded(monkeypatch):
+@pytest.mark.parametrize('sequence', [list, tuple, UserList])
+def test_cyclic_descendant_tree_is_bounded(monkeypatch, sequence):
 	calls = []
 	monkeypatch.setattr(
 		contract, 'wasi', types.SimpleNamespace(gl_call=calls.append), raising=False
@@ -319,5 +322,21 @@ def test_cyclic_descendant_tree_is_bounded(monkeypatch):
 	root = InternalAllocation(Address.ZERO, None, params(), 1)
 	root.children.append(root)
 	with pytest.raises(ValueError, match='1024'):
-		contract.get_at(Address.ZERO).emit(UseBalanceParams(params(), [root])).run()
+		contract.get_at(Address.ZERO).emit(
+			UseBalanceParams(params(), sequence([root]))
+		).run()
 	assert calls == []
+
+
+@pytest.mark.parametrize(
+	'descendants', ['', 'x', b'', b'x', bytearray(), bytearray(b'x')]
+)
+def test_string_descendants_are_rejected(descendants):
+	with pytest.raises(TypeError, match='str, bytes, or bytearray'):
+		contract._balance_fields(UseBalanceParams(params(), descendants))
+
+
+@pytest.mark.parametrize('sequence', [list, tuple, UserList])
+def test_descendant_sequences_reject_non_allocations(sequence):
+	with pytest.raises(TypeError, match='allocation objects'):
+		contract._balance_fields(UseBalanceParams(params(), sequence([1])))

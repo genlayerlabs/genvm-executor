@@ -44,11 +44,11 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		return idx
 
 	@typing.overload
-	def __getitem__(self, idx: int) -> T: ...
+	def __getitem__(self, idx: typing.SupportsIndex) -> T: ...
 	@typing.overload
 	def __getitem__(self, idx: slice) -> list[T]: ...
 
-	def __getitem__(self, idx: int | slice) -> T | list[T]:
+	def __getitem__(self, idx: typing.SupportsIndex | slice) -> T | list[T]:
 		"""
 		Get element by index or sublist by slice.
 
@@ -56,8 +56,8 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		:returns: single element for int index, list of elements for slice
 		:raises IndexError: when integer index is out of range
 		"""
-		if isinstance(idx, int):
-			idx = self._map_index(idx)
+		if not isinstance(idx, slice):
+			idx = self._map_index(operator.index(idx))
 			items_at = self._storage_slot.indirect(self._off)
 			return self._item_desc.get(items_at, idx * self._item_desc.size)
 		else:
@@ -91,19 +91,21 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		assignment changes the length only after all new elements are written.
 		"""
 		if not isinstance(idx, slice):
-			idx = self._map_index(idx.__index__())
+			idx = self._map_index(operator.index(idx))
 			items_at = self._storage_slot.indirect(self._off)
 			self._item_desc.set(items_at, idx * self._item_desc.size, val)
 			return
 		else:
+			signed_step = 1 if idx.step is None else operator.index(idx.step)
+			idx = slice(idx.start, idx.stop, signed_step)
 			start, stop, step = self._slice_to_idx(idx)
 			# materialized: the algorithm below needs `len` and reversal
 			new_val = list(typing.cast(collections.abc.Iterable[T], val))
 			left_in_new = len(new_val)
-			if isinstance(idx.step, int) and idx.step < 0:
+			if signed_step < 0:
 				new_val.reverse()
 			left_in_range = len(range(start, stop, step))
-			if idx.step is not None and idx.step != 1 and left_in_new != left_in_range:
+			if signed_step != 1 and left_in_new != left_in_range:
 				raise ValueError(
 					f'attempt to assign sequence of size {left_in_new} to extended slice of size {left_in_range}'
 				)
@@ -147,11 +149,11 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		return start, stop, step
 
 	@typing.overload
-	def __delitem__(self, idx: int) -> None: ...
+	def __delitem__(self, idx: typing.SupportsIndex) -> None: ...
 	@typing.overload
 	def __delitem__(self, idx: slice) -> None: ...
 
-	def __delitem__(self, idx: int | slice) -> None:
+	def __delitem__(self, idx: typing.SupportsIndex | slice) -> None:
 		"""
 		Delete element by index or range by slice.
 
@@ -161,8 +163,8 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		Elements are shifted before the length is reduced. If shifting fails,
 		the original length and any shifts already completed remain visible.
 		"""
-		if isinstance(idx, int):
-			start = self._map_index(idx)
+		if not isinstance(idx, slice):
+			start = self._map_index(operator.index(idx))
 			stop = start + 1
 			step = 1
 		else:
@@ -184,12 +186,20 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 	def assign(self, arr: typing.Sequence[T], /) -> typing.Self:
 		"""
 		Same as ``self[:] = arr`` but more efficient
+		Assigning from a view of the same array is a no-op
 
 		.. admonition:: Exception safety
 			:class: note
 
 			On error list becomes empty
 		"""
+		if (
+			isinstance(arr, DynArray)
+			and arr._storage_slot == self._storage_slot
+			and arr._off == self._off
+			and arr._item_desc == self._item_desc
+		):
+			return self
 		_u32_desc.set(self._storage_slot, self._off, 0)
 		for idx in range(len(arr)):
 			items_at = self._storage_slot.indirect(self._off)
@@ -261,10 +271,11 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		:param index: element to remove (default last)
 		:raises IndexError: when the array is empty or index is out of range
 
-		Storage-backed compound values are returned as views, not detached
-		Python objects. Removing a non-last element shifts another element into
-		the returned view's location; reusing the removed last slot can likewise
-		change a previously returned view.
+		.. warning::
+			Storage-backed compound values are returned as live views. When removing
+			a non-last element, the returned view already refers to the shifted
+			element when ``pop()`` returns. Reusing the removed last slot can also
+			change a previously returned view.
 		"""
 		index = self._map_index(operator.index(index))
 		ret = self[index]

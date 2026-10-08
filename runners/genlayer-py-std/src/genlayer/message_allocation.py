@@ -6,6 +6,7 @@ __all__ = (
 	'UseBalanceParams',
 )
 
+import collections.abc
 import dataclasses
 import typing
 
@@ -101,7 +102,9 @@ class ExternalAllocation(calldata.CalldataEncodable):
 		}
 
 
-type Descendants = None | u256 | list[InternalAllocation | ExternalAllocation]
+type Descendants = (
+	None | u256 | collections.abc.Sequence[InternalAllocation | ExternalAllocation]
+)
 
 
 @typing.final
@@ -111,7 +114,9 @@ class UseBalanceParams:
 	descendants: Descendants = None
 
 
-def _flatten_allocations(roots: list[InternalAllocation | ExternalAllocation]):
+def _flatten_allocations(
+	roots: collections.abc.Iterable[InternalAllocation | ExternalAllocation],
+):
 	result = []
 	pending = [(iter(roots), _ROOT)]
 	while pending:

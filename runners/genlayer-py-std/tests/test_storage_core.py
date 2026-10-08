@@ -5,8 +5,33 @@ from genlayer.storage.core import (
 	VLA,
 	Indirection,
 	InmemManager,
+	ZeroManager,
 )
 from genlayer.types import u32
+
+
+def test_zero_manager_is_singleton():
+	manager = ZeroManager()
+	assert manager is ZeroManager()
+	slot = manager.get_store_slot(0)
+	assert slot.id == bytes(32)
+	assert manager.get_store_slot(bytes([1]) * 32).id == bytes([1]) * 32
+	indirect = slot.indirect(100).indirect(200)
+	assert indirect.manager is manager
+	assert indirect.read(100, 32) == bytes(32)
+
+
+@pytest.mark.parametrize('length', [0, 1, 32, 4096])
+def test_zero_manager_reads_ignore_offset(length):
+	slot = ZeroManager().get_store_slot(0)
+	assert slot.read(2**32 - 1, length) == bytes(length)
+
+
+def test_zero_manager_rejects_writes():
+	slot = ZeroManager().get_store_slot(0)
+	with pytest.raises(TypeError, match='read-only'):
+		slot.write(0, b'nonzero')
+	assert slot.read(0, 7) == bytes(7)
 
 
 def new_vla():

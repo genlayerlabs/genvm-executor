@@ -1,7 +1,7 @@
 import pytest
 from genlayer.storage import DynArray, allow
 from genlayer.storage._internal.generate import _BuilderCtx, _storage_build
-from genlayer.storage.core import ROOT_SLOT_ID, InmemManager
+from genlayer.storage.core import ROOT_SLOT_ID, InmemManager, Slot
 from genlayer.types import u8, u32
 
 from .common import SameOp
@@ -257,6 +257,34 @@ def test_assign_empty():
 	assert len(lx) == 0
 
 
+@pytest.mark.parametrize('separate_view', [False, True])
+@pytest.mark.parametrize('values', [[], ['a', 'b', 'c']])
+def test_assign_same_storage_is_noop(separate_view, values):
+	lx = new_vec().assign(values)
+	source = lx
+	if separate_view:
+		slot = lx._storage_slot
+		source = Slot(slot.id, slot.manager).cast(DynArray[str], lx._off)
+		assert source is not lx
+	assert lx.assign(source) is lx
+	assert list(lx) == values
+
+
+@pytest.mark.parametrize('location', ['manager', 'slot', 'offset'])
+def test_assign_distinct_storage(location):
+	lx = new_vec().assign(['a'])
+	slot = lx._storage_slot
+	if location == 'manager':
+		source = new_vec()
+	elif location == 'slot':
+		source = slot.indirect(100).cast(DynArray[str], 0)
+	else:
+		source = slot.cast(DynArray[str], 4)
+	source.assign(['b', 'c'])
+	lx.assign(source)
+	assert list(lx) == list(source) == ['b', 'c']
+
+
 def test_append_new_get():
 	lx = new_vec()
 	lx.append('hello')
@@ -286,6 +314,75 @@ class Index:
 
 	def __index__(self) -> int:
 		return self.value
+
+
+@pytest.mark.parametrize('operation', ['get', 'set', 'delete'])
+@pytest.mark.parametrize('index', [0, -1, 3, -4])
+def test_item_operations_accept_index_protocol(operation, index):
+	lx = new_vec().assign(['a', 'b', 'c'])
+	expected = ['a', 'b', 'c']
+
+	def apply(arr, idx):
+		if operation == 'get':
+			return arr[idx]
+		if operation == 'set':
+			arr[idx] = 'x'
+		else:
+			del arr[idx]
+
+	try:
+		result = apply(expected, index)
+	except IndexError:
+		with pytest.raises(IndexError):
+			apply(lx, Index(index))
+	else:
+		assert apply(lx, Index(index)) == result
+	assert list(lx) == expected
+
+
+@pytest.mark.parametrize('operation', ['get', 'set', 'delete'])
+@pytest.mark.parametrize('index', [1.0, '1', None, Index('1')])
+def test_item_operations_reject_invalid_indices(operation, index):
+	lx = new_vec().assign(['a', 'b', 'c'])
+	with pytest.raises(TypeError):
+		if operation == 'get':
+			lx[index]
+		elif operation == 'set':
+			lx[index] = 'x'
+		else:
+			del lx[index]
+	assert list(lx) == ['a', 'b', 'c']
+
+
+@pytest.mark.parametrize('step', [1, 2, -1, -2, 0])
+@pytest.mark.parametrize('count', [0, 2, 3, 4])
+def test_setitem_slice_accepts_index_step(step, count):
+	lx = new_vec()
+	r = ['a', 'b', 'c']
+	lx.assign(r)
+	idx = slice(None, None, Index(step))
+	values = [str(i) for i in range(count)]
+	try:
+		r[idx] = values
+	except ValueError:
+		with pytest.raises(ValueError):
+			lx[idx] = values
+	else:
+		lx[idx] = values
+	assert list(lx) == r
+
+
+def test_setitem_slice_normalizes_step_once():
+	class Once:
+		def __index__(self):
+			assert not getattr(self, 'called', False)
+			self.called = True
+			return 1
+
+	lx = new_vec()
+	lx.assign(['a', 'b', 'c'])
+	lx[:: Once()] = ['x', 'y']
+	assert list(lx) == ['x', 'y']
 
 
 def test_insert_and_pop_accept_index_protocol():

@@ -49,10 +49,12 @@ def _balance_fields(
 	descendants = use_balance.descendants
 	if isinstance(descendants, bool):
 		raise TypeError('descendants must not be bool')
+	if isinstance(descendants, (str, bytes, bytearray)):
+		raise TypeError('descendants must not be str, bytes, or bytearray')
 	closed = (
 		descendants is None
 		or (isinstance(descendants, int) and descendants == 0)
-		or (isinstance(descendants, (list, tuple)) and not descendants)
+		or (isinstance(descendants, collections.abc.Sequence) and not descendants)
 	)
 	fields: dict[str, calldata.Encodable] = {
 		'use_balance': True,
@@ -61,7 +63,7 @@ def _balance_fields(
 	if not closed:
 		fields['descendants'] = (
 			_flatten_allocations(descendants)
-			if isinstance(descendants, list)
+			if isinstance(descendants, collections.abc.Sequence)
 			else descendants
 		)
 	return fields
