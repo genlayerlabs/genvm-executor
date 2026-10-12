@@ -393,6 +393,7 @@ pub async fn run_with_impl(
             topmost_runner_id,
         },
     };
+    let message_fee_cascade = entry_data.message_fee_cascade;
     let message_fee_allocation = entry_data
         .message_fee_allocation
         .into_iter()
@@ -434,7 +435,11 @@ pub async fn run_with_impl(
         det_subvm_hashes: Default::default(),
     });
 
-    let run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
+    let mut run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
+
+    if let Some(cascade) = &message_fee_cascade {
+        rt::cascade::apply(&mut run_result.vm_data.accumulator.emissions, cascade);
+    }
 
     Ok(rt::vm::FullResult {
         kind: match &run_result.run_ok {
