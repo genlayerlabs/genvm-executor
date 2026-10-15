@@ -470,6 +470,7 @@ pub async fn run_with_impl(
     };
 
     let data_fees_limit = supervisor.shared_data.gep(|x| &x.data_fees_limit);
+    let message_fee_cascade = entry_data.message_fee_cascade;
 
     let essential_data = Box::new(wasi::genlayer_sdk::SingleVMData {
         limiter: limiter_det,
@@ -515,7 +516,11 @@ pub async fn run_with_impl(
         granted_custom: Vec::new(),
     });
 
-    let run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
+    let mut run_result = rt::spawn_apply_run(&supervisor, essential_data).await?;
+
+    if let Some(cascade) = &message_fee_cascade {
+        rt::cascade::apply(&mut run_result.vm_data.accumulator.emissions, cascade);
+    }
 
     if let Some(code) = extra_leader_nondet_output_error(&supervisor, &run_result.run_ok) {
         return Ok(rt::vm::FullResult::empty_from(rt::vm::RunOk::FatalVMError(
