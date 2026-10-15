@@ -238,8 +238,7 @@ fees:
       # reject only a non-zero per-round budget below the floor (matches the
       # chain's `execBudget > 0 && execBudget < floor`)
       let budgetTooLow =
-        if a.skipBudgetFloor then false
-        else if a.matchedFeeParams.executionBudgetPerRound > 0
+        if a.matchedFeeParams.executionBudgetPerRound > 0
         then a.matchedFeeParams.executionBudgetPerRound < budgetFloor
         else false in
       if a.isInternal

@@ -264,6 +264,8 @@ pub struct MessageReceiptParams {
 
 #[derive(Debug)]
 pub struct DataLimit {
+    pub max_allocation_tree_depth: u32,
+    pub min_external_gas_limit: primitive_types::U256,
     buckets: tokio::sync::Mutex<std::collections::HashMap<String, primitive_types::U256>>,
     storage: Bucket,
     message_receipt: Bucket,
@@ -278,6 +280,19 @@ impl DataLimit {
         fees: crate::config::FeesConfig,
         gas_data: std::collections::BTreeMap<String, String>,
     ) -> rt::errors::Result<Self> {
+        let max_allocation_tree_depth = gas_data
+            .get("maxAllocationTreeDepth")
+            .map(|value| primitive_types::U256::from_dec_str(value))
+            .transpose()
+            .map_err(|e| rt::errors::internal!("parsing maxAllocationTreeDepth: {e}"))?
+            .map(|value| value.min(primitive_types::U256::from(u32::MAX)).low_u32())
+            .unwrap_or(genvm_common::internal_constants::top_limits::DEFAULT_ALLOCATION_TREE_DEPTH);
+        let min_external_gas_limit = gas_data
+            .get("minExternalGasLimit")
+            .map(|value| primitive_types::U256::from_dec_str(value))
+            .transpose()
+            .map_err(|e| rt::errors::internal!("parsing minExternalGasLimit: {e}"))?
+            .unwrap_or_default();
         let prelude = &fees.expr_prelude;
 
         // Host-provided values are exposed under a single `node` object, e.g.
@@ -343,6 +358,8 @@ impl DataLimit {
         }
 
         Ok(Self {
+            max_allocation_tree_depth,
+            min_external_gas_limit,
             buckets: tokio::sync::Mutex::new(bucket_totals),
             storage,
             message_receipt,
@@ -607,26 +624,10 @@ impl DataLimit {
         &self,
         matched_fee_params: &genlayer_sdk::abi::fees::InternalMessageParams,
     ) -> rt::errors::Result<CostVec> {
-        self.calculate_message_fee_internal_impl(matched_fee_params, false)
-    }
-
-    pub fn calculate_descendant_message_fee_internal(
-        &self,
-        matched_fee_params: &genlayer_sdk::abi::fees::InternalMessageParams,
-    ) -> rt::errors::Result<CostVec> {
-        self.calculate_message_fee_internal_impl(matched_fee_params, true)
-    }
-
-    fn calculate_message_fee_internal_impl(
-        &self,
-        matched_fee_params: &genlayer_sdk::abi::fees::InternalMessageParams,
-        skip_budget_floor: bool,
-    ) -> rt::errors::Result<CostVec> {
         self.calculate_bucket(
             &self.message_fee,
             &[
                 ("isInternal", true.into()),
-                ("skipBudgetFloor", skip_budget_floor.into()),
                 (
                     "matchedFeeParams",
                     fee_params_value_internal(matched_fee_params),

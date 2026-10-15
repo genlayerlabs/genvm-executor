@@ -146,17 +146,54 @@ fn no_appeals_reserve_no_appeal_profit() {
 }
 
 #[test]
-fn descendant_quote_skips_unavailable_pinned_budget_floor() {
+fn message_quote_enforces_pinned_budget_floor() {
     let mut gas_data = gas_data(1, 100, 1, 100);
     gas_data.insert("messageBudgetFloor".to_owned(), "2".to_owned());
     let fees = DataLimit::new(bucket_totals(), default_fees(), gas_data).unwrap();
     let params = fee_params(2, 1);
 
     assert!(fees.calculate_message_fee_internal(&params).is_err());
-    assert_eq!(
-        fees.calculate_descendant_message_fee_internal(&params)
-            .unwrap()
-            .reported_fee(),
-        U256::from(8)
-    );
+}
+
+#[test]
+fn descendant_depth_uses_host_input_or_default() {
+    for (input, expected) in [
+        (None, 5),
+        (Some("3"), 3),
+        (Some("0"), 0),
+        (Some("4294967296"), u32::MAX),
+    ] {
+        let mut data = gas_data(1, 100, 1, 100);
+        if let Some(value) = input {
+            data.insert("maxAllocationTreeDepth".to_owned(), value.to_owned());
+        }
+        let fees = DataLimit::new(bucket_totals(), default_fees(), data).unwrap();
+        assert_eq!(fees.max_allocation_tree_depth, expected);
+    }
+}
+
+#[test]
+fn external_gas_floor_uses_host_input_or_zero() {
+    for (input, expected) in [
+        (None, U256::zero()),
+        (Some("0"), U256::zero()),
+        (Some("21000"), U256::from(21_000)),
+        (Some(&*U256::MAX.to_string()), U256::MAX),
+    ] {
+        let mut data = gas_data(1, 100, 1, 100);
+        if let Some(value) = input {
+            data.insert("minExternalGasLimit".to_owned(), value.to_owned());
+        }
+        let fees = DataLimit::new(bucket_totals(), default_fees(), data).unwrap();
+        assert_eq!(fees.min_external_gas_limit, expected);
+    }
+}
+
+#[test]
+fn external_gas_floor_rejects_non_uint256_input() {
+    for input in ["abc", "-1", &(U256::MAX.to_string() + "0")] {
+        let mut data = gas_data(1, 100, 1, 100);
+        data.insert("minExternalGasLimit".to_owned(), input.to_owned());
+        assert!(DataLimit::new(bucket_totals(), default_fees(), data).is_err());
+    }
 }

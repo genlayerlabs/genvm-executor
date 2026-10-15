@@ -139,11 +139,17 @@ fn prepare_grant(
         (None, Some(_)) => Err(generated::types::Errno::Inval.into()),
         (Some(params), descendants) => {
             // The transaction-pinned primary quote is not in host input; preserve the existing quote.
-            prepare_descendants(params, descendants, |node_params| {
-                data_fees_limit
-                    .calculate_descendant_message_fee_internal(node_params)
-                    .map(|cost| cost.reported_fee())
-            })
+            prepare_descendants(
+                params,
+                descendants,
+                data_fees_limit.max_allocation_tree_depth,
+                data_fees_limit.min_external_gas_limit,
+                |node_params| {
+                    data_fees_limit
+                        .calculate_message_fee_internal(node_params)
+                        .map(|cost| cost.reported_fee())
+                },
+            )
             .map_err(grant_validation_error)
         }
     }
@@ -478,7 +484,6 @@ fn internal_price_caps_valid(params: &abi::fees::InternalMessageParams) -> bool 
 }
 
 pub(super) fn internal_params_valid(params: &abi::fees::InternalMessageParams) -> bool {
-    // Transaction-pinned time-unit bounds and budget floor are not in host input yet.
     if params.rotations.is_empty() || !internal_price_caps_valid(params) {
         return false;
     }

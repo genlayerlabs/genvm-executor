@@ -173,6 +173,8 @@ fn sibling_key(node: &abi::gl_call::AllocationNode) -> (u8, [u8; 20], [u8; 32]) 
 fn validate_nodes<F>(
     nodes: &[abi::gl_call::AllocationNode],
     enclosing_rotations: usize,
+    max_depth: u32,
+    min_external_gas_limit: U256,
     quote: &mut F,
 ) -> Result<Grant, GrantValidationError>
 where
@@ -183,6 +185,7 @@ where
     }
     let mut budget = U256::zero();
     let mut children_budgets = vec![U256::zero(); nodes.len()];
+    let mut depths = vec![0u32; nodes.len()];
     let mut sibling_keys = BTreeSet::new();
     for (index, node) in nodes.iter().enumerate() {
         let (parent_index, node_budget) = match node {
@@ -196,6 +199,7 @@ where
             return Err(GrantValidationError::Tree);
         }
         let total = if parent_index == ROOT_PARENT {
+            depths[index] = 1;
             &mut budget
         } else {
             if parent_index >= U256::from(index)
@@ -207,8 +211,12 @@ where
             {
                 return Err(GrantValidationError::Tree);
             }
+            depths[index] = depths[parent_index.as_usize()] + 1;
             &mut children_budgets[parent_index.as_usize()]
         };
+        if depths[index] > max_depth {
+            return Err(GrantValidationError::Tree);
+        }
         *total = total
             .checked_add(node_budget)
             .ok_or(GrantValidationError::Budget)?;
@@ -258,7 +266,9 @@ where
                 }
             }
             abi::gl_call::AllocationNode::External(node) => {
-                // The transaction-pinned minimum external gas limit is not available in host input yet.
+                if node.fee_params.gas_limit < min_external_gas_limit {
+                    return Err(GrantValidationError::External);
+                }
                 let unit = node
                     .fee_params
                     .gas_limit
@@ -289,6 +299,8 @@ where
 pub(super) fn prepare_descendants<F>(
     enclosing_params: &abi::fees::InternalMessageParams,
     descendants: Option<abi::gl_call::Descendants>,
+    max_depth: u32,
+    min_external_gas_limit: U256,
     mut quote: F,
 ) -> Result<PreparedGrant, GrantValidationError>
 where
@@ -318,9 +330,13 @@ where
             budget,
             allocations: vec![],
         },
-        Some(abi::gl_call::Descendants::Pinned(nodes)) => {
-            validate_nodes(&nodes, enclosing_params.rotations.len(), &mut quote)?
-        }
+        Some(abi::gl_call::Descendants::Pinned(nodes)) => validate_nodes(
+            &nodes,
+            enclosing_params.rotations.len(),
+            max_depth,
+            min_external_gas_limit,
+            &mut quote,
+        )?,
     };
 
     let subtree = encode_grant(&grant);

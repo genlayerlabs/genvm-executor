@@ -110,7 +110,47 @@ fn external_allocation_node(budget: U256) -> gl_call::AllocationNode {
 fn prepare(
     descendants: Option<gl_call::Descendants>,
 ) -> Result<super::descendant_grant::PreparedGrant, GrantValidationError> {
-    prepare_descendants(&grant_params(), descendants, |_| Ok(U256::from(10)))
+    prepare_descendants(&grant_params(), descendants, 5, U256::zero(), |_| {
+        Ok(U256::from(10))
+    })
+}
+
+#[test]
+fn descendant_grant_depth_matches_pinned_limit() {
+    for (length, limit, admitted) in [
+        (5, 5, true),
+        (6, 5, false),
+        (3, 3, true),
+        (4, 3, false),
+        (1, 0, false),
+    ] {
+        let nodes = (0..length)
+            .map(|index| {
+                internal_allocation(
+                    index as u8,
+                    10 * (length - index),
+                    gl_call::On::Finalized,
+                    if index == 0 {
+                        ROOT_PARENT
+                    } else {
+                        U256::from(index - 1)
+                    },
+                )
+            })
+            .collect();
+        let result = prepare_descendants(
+            &grant_params(),
+            Some(gl_call::Descendants::Pinned(nodes)),
+            limit,
+            U256::zero(),
+            |_| Ok(U256::from(10)),
+        );
+        assert_eq!(
+            result.is_ok(),
+            admitted,
+            "length={length}, limit={limit}: {result:?}"
+        );
+    }
 }
 
 #[test]
@@ -214,7 +254,7 @@ fn descendant_grant_rejects_more_than_twenty_four_nodes() {
 }
 
 #[test]
-fn descendant_grant_accepts_a_twenty_four_node_chain() {
+fn descendant_grant_accepts_a_twenty_four_node_chain_when_host_allows_it() {
     let nodes = (0..24u8)
         .map(|index| {
             internal_allocation(
@@ -229,7 +269,14 @@ fn descendant_grant_accepts_a_twenty_four_node_chain() {
             )
         })
         .collect();
-    let prepared = prepare(Some(gl_call::Descendants::Pinned(nodes))).unwrap();
+    let prepared = prepare_descendants(
+        &grant_params(),
+        Some(gl_call::Descendants::Pinned(nodes)),
+        24,
+        U256::zero(),
+        |_| Ok(U256::from(10)),
+    )
+    .unwrap();
     assert_eq!(prepared.budget, U256::from(240));
 }
 
@@ -397,6 +444,34 @@ fn descendant_grant_rejects_invalid_external_budget() {
 }
 
 #[test]
+fn descendant_grant_external_gas_limit_matches_pinned_floor() {
+    for (floor, admitted) in [
+        (U256::zero(), true),
+        (U256::from(20), true),
+        (U256::from(21), false),
+        (U256::MAX, false),
+    ] {
+        let result = prepare_descendants(
+            &grant_params(),
+            Some(gl_call::Descendants::Pinned(vec![
+                external_allocation_node(U256::from(200)),
+            ])),
+            5,
+            floor,
+            |_| Ok(U256::from(10)),
+        );
+        if admitted {
+            assert!(result.is_ok(), "floor={floor}: {result:?}");
+        } else {
+            assert!(
+                matches!(result, Err(GrantValidationError::External)),
+                "floor={floor}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn descendant_grant_rejects_insufficient_internal_budget() {
     let result = prepare(Some(gl_call::Descendants::Pinned(vec![
         internal_allocation(1, 9, gl_call::On::Finalized, ROOT_PARENT),
@@ -436,7 +511,9 @@ fn descendant_grant_decided_root_uses_enclosing_appeal_multiplier() {
         gl_call::On::Decided,
         ROOT_PARENT,
     )]));
-    let result = prepare_descendants(&enclosing, descendants, |_| Ok(U256::from(10)));
+    let result = prepare_descendants(&enclosing, descendants, 5, U256::zero(), |_| {
+        Ok(U256::from(10))
+    });
     assert!(matches!(result, Err(GrantValidationError::Budget)));
 }
 
@@ -486,6 +563,8 @@ fn descendant_grant_rejects_budget_arithmetic_overflow() {
             gl_call::AllocationNode::Internal(parent),
             child,
         ])),
+        5,
+        U256::zero(),
         |_| Ok(quotes.next().unwrap()),
     );
     assert!(matches!(
@@ -506,6 +585,8 @@ fn descendant_grant_rejects_budget_arithmetic_overflow() {
         Some(gl_call::Descendants::Pinned(vec![
             gl_call::AllocationNode::Internal(decided),
         ])),
+        5,
+        U256::zero(),
         |_| Ok(U256::MAX / U256::from(2) + U256::one()),
     );
     assert!(matches!(

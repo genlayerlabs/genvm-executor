@@ -18,6 +18,7 @@ pub mod memory_limiter_consts {
 
 pub mod top_limits {
     pub const NONDET_BLOCKS: u32 = 4096;
+    pub const DEFAULT_ALLOCATION_TREE_DEPTH: u32 = 5;
     pub const LOCKED_SLOTS: u32 = 256;
     pub const UPGRADERS: u32 = 32;
     pub const VM_RECURSION: u32 = 512;

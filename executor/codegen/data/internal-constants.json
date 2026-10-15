@@ -23,6 +23,7 @@
     "repr": "u32",
     "values": {
       "nondet_blocks": 4096,
+      "default_allocation_tree_depth": 5,
       "locked_slots": 256,
       "upgraders": 32,
       "vm_recursion": 512,

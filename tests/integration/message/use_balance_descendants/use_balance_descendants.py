@@ -35,6 +35,30 @@ class Contract(gl.contract.Contract):
 		self._emit_pinned(None)
 
 	@gl.public.write
+	def depth_five(self):
+		self._emit_depth(5)
+
+	@gl.public.write
+	def depth_six(self):
+		self._emit_depth(6)
+
+	def _emit_depth(self, depth: int):
+		children = []
+		for index in range(depth):
+			children = [
+				gl.message_allocation.InternalAllocation(
+					gl.Address(bytes([index + 1]) * 20),
+					bytes(32),
+					_PARAMS,
+					100_000 * (index + 1),
+					children=children,
+				)
+			]
+		_TARGET.emit(
+			use_balance=gl.contract.UseBalanceParams(_PARAMS, descendants=children)
+		).foo()
+
+	@gl.public.write
 	def pinned_selector(self):
 		self._emit_pinned(bytes.fromhex('a9059cbb'))
 
@@ -82,11 +106,18 @@ class Contract(gl.contract.Contract):
 
 	@gl.public.write
 	def external_budget(self):
+		self._emit_external(199)
+
+	@gl.public.write
+	def external_floor(self):
+		self._emit_external(200)
+
+	def _emit_external(self, budget: int):
 		external = gl.message_allocation.ExternalAllocation(
 			gl.Address(b'\x33' * 20),
 			bytes.fromhex('a9059cbb'),
 			gl.chain.ExternalMessageParams(20, 10),
-			199,
+			budget,
 		)
 		_TARGET.emit(
 			use_balance=gl.contract.UseBalanceParams(_PARAMS, descendants=[external]),
