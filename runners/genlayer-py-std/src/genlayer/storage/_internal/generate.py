@@ -560,7 +560,9 @@ from .numpy import populate_np_descs_if_loaded, try_handle_np  # noqa: E402
 
 @generate_storage
 class _DateTime:
-	seconds: u64
+	# signed so that dates before 1970 can be stored. It is the same 8 bytes as the
+	# ``u64`` it used to be for every value that could be stored before (0 <= v < 2**63)
+	seconds: i64
 	micros: u32
 	has_tz: bool
 	off_days: i32
@@ -569,6 +571,8 @@ class _DateTime:
 
 
 _dt_desc: TypeDesc[_DateTime] = _known_descs[_DateTime]
+
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
 
 
 class _DateTimeDesc(TypeDesc[datetime.datetime]):
@@ -580,18 +584,6 @@ class _DateTimeDesc(TypeDesc[datetime.datetime]):
 	def get(self, slot: Slot, off: int) -> datetime.datetime:
 		dt = _dt_desc.get(slot, off)
 
-		def make_date(dt_tuple: time.struct_time, tzinfo):
-			return datetime.datetime(
-				year=dt_tuple.tm_year,
-				month=dt_tuple.tm_mon,
-				day=dt_tuple.tm_mday,
-				hour=dt_tuple.tm_hour,
-				minute=dt_tuple.tm_min,
-				second=dt_tuple.tm_sec,
-				microsecond=dt.micros,
-				tzinfo=tzinfo,
-			)
-
 		if dt.has_tz:
 			tz = datetime.timezone(
 				datetime.timedelta(
@@ -600,18 +592,41 @@ class _DateTimeDesc(TypeDesc[datetime.datetime]):
 					microseconds=dt.off_micros,
 				)
 			)
-			return make_date(time.gmtime(dt.seconds), datetime.UTC).astimezone(tz)
-		return make_date(time.localtime(dt.seconds), tzinfo=None)
+			# plain arithmetic instead of ``time.gmtime``: it gives the same result for every
+			# value, and does not depend on how the platform handles negative timestamps
+			moment = _EPOCH + datetime.timedelta(seconds=dt.seconds, microseconds=dt.micros)
+			return moment.astimezone(tz)
+		t = time.localtime(dt.seconds)
+		return datetime.datetime(
+			year=t.tm_year,
+			month=t.tm_mon,
+			day=t.tm_mday,
+			hour=t.tm_hour,
+			minute=t.tm_min,
+			second=t.tm_sec,
+			microsecond=dt.micros,
+		)
 
 	def set(self, slot: Slot, off: int, val: datetime.datetime) -> None:
 		tz_off = None if val.tzinfo is None else val.utcoffset()
 		if val.tzinfo is not None and tz_off is None:
 			raise ValueError('datetime.utcoffset() returned None')
-		seconds = int(val.timestamp())
+		# ``val.timestamp()`` can not be used for the seconds: it is a float that already
+		# contains the microseconds, and from about the year 2514 a float can not hold
+		# ``.999999`` next to that many seconds, so it rounds up to the next second (and
+		# ``datetime.max`` ends up in the year 10000). ``int()`` also truncates towards
+		# zero instead of flooring. Seconds are whole and floored, microseconds are separate
+		if tz_off is None:
+			seconds = int(val.replace(microsecond=0).timestamp())
+			micros = val.microsecond
+		else:
+			delta = val - _EPOCH
+			seconds = delta.days * 86400 + delta.seconds
+			micros = delta.microseconds
 
 		dt = _dt_desc.get(slot, off)
 		dt.seconds = seconds
-		dt.micros = val.microsecond
+		dt.micros = micros
 		if val.tzinfo is None:
 			dt.has_tz = False
 			return
