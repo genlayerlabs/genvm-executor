@@ -170,6 +170,9 @@ class Event:
 
 	        class TransferOccurredEvent(gl.chain.Event):
 	          def __init__(self, sender: Address, to: Address, /, **blob): ...
+
+	Positional arguments are matched with the indexed fields in the order they are declared,
+	while the signature and the topics list the indexed fields **sorted** by name.
 	"""
 
 	# editorconfig-checker-enable
@@ -254,15 +257,19 @@ class Event:
 					case inspect.Parameter.POSITIONAL_ONLY:
 						indexed_args_lst.append(name)
 
+		# positional arguments are passed in declaration order, so they must be
+		# matched with names in that same order; ``indexed_args`` is sorted and
+		# is only used for the signature and the order of topics
+		declared_args = tuple(indexed_args_lst)
 		indexed_args = tuple(sorted(indexed_args_lst))
 
 		def __init__(self, *args, **kwargs):
-			if len(args) != len(indexed_args):
+			if len(args) != len(declared_args):
 				raise TypeError(
-					f'indexed fields mismatch, expected {indexed_args}, but got {len(args)} positional arguments'
+					f'indexed fields mismatch, expected {declared_args}, but got {len(args)} positional arguments'
 				)
 
-			for name, val in zip(indexed_args, args):
+			for name, val in zip(declared_args, args):
 				if name in kwargs:
 					raise TypeError(f'indexed field `{name}` must not be present in blob')
 				kwargs[name] = val
