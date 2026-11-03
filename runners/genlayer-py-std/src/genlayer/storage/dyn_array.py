@@ -5,7 +5,9 @@ import typing
 
 from ._internal.desc_base_types import _u32_desc
 from .core import (
+	ROOT_SLOT_ID,
 	ComplexCopyAction,
+	InmemManager,
 	Slot,
 	SpecialTypeDesc,
 	TypeDesc,
@@ -17,6 +19,16 @@ from .core import (
 class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 	"""
 	Represents exponentially growing array (:py:class:`list` in python terms) that can be persisted on the blockchain
+
+	.. admonition:: Views
+		:class: note
+
+		Indexing returns a *view* of the stored element for compound element types
+		(storage classes, :py:class:`DynArray`, :py:class:`TreeMap`), not a copy.
+		Because of that, swapping elements with ``a[i], a[j] = a[j], a[i]`` loses data:
+		both views are evaluated before the first write, and the first write overwrites
+		what the second view points at. Use :py:meth:`reverse`, or copy one element
+		out first, instead.
 	"""
 
 	_item_desc: TypeDesc
@@ -90,7 +102,7 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 			return
 		else:
 			start, stop, step = self._slice_to_idx(idx)
-			new_val = typing.cast(collections.abc.Sequence[T], val)
+			new_val = self._snapshot(typing.cast(collections.abc.Sequence[T], val))
 			left_in_new = len(new_val)
 			if isinstance(idx.step, int) and idx.step < 0:
 				new_val = reversed(new_val)
@@ -134,6 +146,43 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 			stop += 1
 		return start, stop, step
 
+	def _snapshot(self, values: collections.abc.Iterable[T]) -> list[T]:
+		"""
+		Returns a list of ``values`` that stays valid while this array is being modified.
+
+		Compound elements are views of somebody's storage, and when that is this very
+		array (``a[:] = a[::-1]``) writing one element changes what the others point at.
+		Such elements are copied to a temporary in-memory slot first.
+		"""
+		ret = list(values)
+		desc = self._item_desc
+		scratch = None
+		for i, val in enumerate(ret):
+			if hasattr(val, '_storage_slot'):
+				if scratch is None:
+					scratch = InmemManager().get_store_slot(ROOT_SLOT_ID)
+				desc.set(scratch, i * desc.size, val)
+				ret[i] = desc.get(scratch, i * desc.size)
+		return ret
+
+	def reverse(self) -> None:
+		"""
+		Reverse the array in place.
+
+		Unlike the generic :py:class:`collections.abc.MutableSequence` implementation,
+		this is safe for compound element types: they are returned as views of the
+		storage, so one of the swapped elements is copied out to a temporary in-memory
+		slot before it gets overwritten.
+		"""
+		desc = self._item_desc
+		n = len(self)
+		tmp = InmemManager().get_store_slot(ROOT_SLOT_ID)
+		for i in range(n // 2):
+			j = n - 1 - i
+			desc.set(tmp, 0, self[i])
+			self[i] = self[j]
+			self[j] = desc.get(tmp, 0)
+
 	@typing.overload
 	def __delitem__(self, idx: int) -> None: ...
 	@typing.overload
@@ -175,6 +224,7 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 
 			On error list becomes empty
 		"""
+		arr = self._snapshot(arr)
 		_u32_desc.set(self._storage_slot, self._off, 0)
 		for idx in range(len(arr)):
 			items_at = self._storage_slot.indirect(self._off)
