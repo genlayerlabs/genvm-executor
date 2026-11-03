@@ -58,7 +58,25 @@ def _populate_np_descs():
 			return np.frombuffer(dat, self._typ).reshape((1,))[0]
 
 		def set(self, slot: Slot, off: int, val):
-			slot.write(off, self._typ.tobytes(val))
+			# ``np.generic.tobytes`` serializes a value at *its own* width, so a value
+			# of another dtype used to write the wrong number of bytes and overwrite
+			# the neighbouring fields. Build the bytes from the declared dtype instead,
+			# which makes their length always equal to the size of the field.
+			if isinstance(val, np.generic):
+				# numpy casts between scalar dtypes silently (for example
+				# ``np.uint8(np.uint32(70000)) == 112``), do not store such values
+				if val.dtype != self._type:
+					raise TypeError(
+						f'expected a value of dtype {self._type}, got {val.dtype}, '
+						f'convert it explicitly: {self._typ.__name__}(value)'
+					)
+			elif isinstance(val, float) and self._type.kind != 'f':
+				# numpy truncates ``np.uint8(2.5)`` to ``2``
+				raise TypeError(
+					f'expected an integer for a field of dtype {self._type}, got {val!r}, '
+					f'convert it explicitly: {self._typ.__name__}(value)'
+				)
+			slot.write(off, self._typ(val).tobytes())
 
 	_all_np_types: list[type[np.number]] = [
 		np.uint8,
