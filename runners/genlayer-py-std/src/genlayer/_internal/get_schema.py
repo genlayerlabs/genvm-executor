@@ -16,6 +16,15 @@ from genlayer._internal.schema_attrs import (
 )
 from genlayer.types import Address
 
+_SPECIAL_METHODS: typing.Final = frozenset(
+	('__receive__', '__handle_undefined_method__')
+)
+"""
+Methods that the VM calls on its own (a plain transfer, a call to an unknown method,
+see ``_genlayer_bootloader``). They must be public, but they are not callable by name
+and so are not listed in the schema
+"""
+
 
 def _is_public(meth) -> bool:
 	if meth is None:
@@ -195,10 +204,16 @@ def get_schema(contract: type) -> typing.Any:
 	}
 
 	for k in meths:
-		if k.startswith('__'):
+		if k.startswith('__') and k not in _SPECIAL_METHODS:
 			raise TypeError(f'public method names should not start with `__`, `{k}`')
 
 	return {
 		'ctor': _get_params(ctor, is_ctor=True),
-		'methods': {k: _get_params(v, is_ctor=False) for k, v in meths.items()},
+		# special methods are public so that the VM may call them, but they are not
+		# part of the interface: the bootloader forbids calling `__*` methods by name
+		'methods': {
+			k: _get_params(v, is_ctor=False)
+			for k, v in meths.items()
+			if k not in _SPECIAL_METHODS
+		},
 	}
