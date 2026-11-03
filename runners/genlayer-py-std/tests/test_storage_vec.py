@@ -496,3 +496,62 @@ def test_delitem_out_of_range(idx: int):
 	lx.assign([str(x) for x in range(10)])
 	with pytest.raises(IndexError):
 		del lx[idx]
+
+
+def new_vec_of(item_type):
+	td = _storage_build(_BuilderCtx.empty(), DynArray[item_type])
+	man = InmemManager()
+	return td.get(man.get_store_slot(ROOT_SLOT_ID), 0)
+
+
+def test_append_rejected_value_leaves_array_unchanged():
+	vec = new_vec_of(u32)
+	vec.append(5)
+
+	with pytest.raises(OverflowError):
+		vec.append(-1)
+
+	assert len(vec) == 1
+	assert list(vec) == [5]
+
+
+def test_append_after_rejected_value_works():
+	vec = new_vec_of(u32)
+	vec.append(5)
+
+	with pytest.raises(OverflowError):
+		vec.append(-1)
+	vec.append(6)
+
+	assert list(vec) == [5, 6]
+
+
+def test_append_rejected_value_into_empty_array():
+	vec = new_vec_of(u32)
+
+	with pytest.raises(OverflowError):
+		vec.append(-1)
+
+	assert len(vec) == 0
+	assert list(vec) == []
+
+
+def test_append_rejected_nested_value_leaves_array_unchanged():
+	vec = new_vec_of(DynArray[u32])
+	vec.append([1, 2])
+
+	# the nested array is written element by element and fails on the second one
+	with pytest.raises(OverflowError):
+		vec.append([3, -1])
+
+	assert len(vec) == 1
+	assert [list(x) for x in vec] == [[1, 2]]
+
+	# what the failed attempt may have left in the unused slot must not leak
+	vec.append([7])
+	assert [list(x) for x in vec] == [[1, 2], [7]]
+
+
+def test_append_returns_none():
+	vec = new_vec_of(u32)
+	assert vec.append(1) is None
