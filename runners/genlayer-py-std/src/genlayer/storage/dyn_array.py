@@ -245,9 +245,11 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 		storage previously contained, or its zero-initialized value.
 		"""
 		le = len(self)
-		_u32_desc.set(self._storage_slot, self._off, le + 1)
 		items_at = self._storage_slot.indirect(self._off)
-		return self._item_desc.set(items_at, le * self._item_desc.size, value)
+		# write the element first: the location does not depend on the stored length,
+		# and if the descriptor rejects the value the array must stay as it was
+		self._item_desc.set(items_at, le * self._item_desc.size, value)
+		_u32_desc.set(self._storage_slot, self._off, le + 1)
 
 	def append_new_get(self) -> T:
 		"""
