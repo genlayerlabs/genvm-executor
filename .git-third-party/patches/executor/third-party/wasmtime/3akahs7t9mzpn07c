@@ -61,10 +61,10 @@ index dbe4e3f..266938b 100644
      }
  
 diff --git a/crates/cranelift/src/lib.rs b/crates/cranelift/src/lib.rs
-index 1511a65..5669ddb 100644
+index e2adddb..c90788d 100644
 --- a/crates/cranelift/src/lib.rs
 +++ b/crates/cranelift/src/lib.rs
-@@ -77,8 +77,8 @@ pub const TRAP_CAST_FAILURE: TrapCode =
+@@ -91,8 +91,8 @@ pub const TRAP_CAST_FAILURE: TrapCode =
      TrapCode::unwrap_user(Trap::CastFailure as u8 + TRAP_OFFSET);
  pub const TRAP_UNCAUGHT_EXCEPTION: TrapCode =
      TrapCode::unwrap_user(Trap::UncaughtException as u8 + TRAP_OFFSET);
@@ -76,10 +76,10 @@ index 1511a65..5669ddb 100644
  /// Creates a new cranelift `Signature` with no wasm params/results for the
  /// given calling convention.
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 0e12a52..d4c2afd 100644
+index 1c2bf0e..6537914 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -4765,6 +4765,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
+@@ -4777,6 +4777,6 @@ fn float_op_unreachable_check(environ: &mut FuncEnvironment<'_>, builder: &mut F
      if environ.are_floats_enabled() {
          return false;
      }

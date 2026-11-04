@@ -17,10 +17,10 @@ store after execution finishes.
  2 files changed, 59 insertions(+), 48 deletions(-)
 
 diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
-index ad9f759..94da452 100644
+index 86edc98..6eac669 100644
 --- a/crates/wasmtime/src/runtime/func.rs
 +++ b/crates/wasmtime/src/runtime/func.rs
-@@ -1462,7 +1462,9 @@ use std::collections::BTreeMap;
+@@ -1464,7 +1464,9 @@ use std::collections::BTreeMap;
  #[derive(Debug, Clone)]
  /// A fingerprint of the current state of the Wasm store, except backtrace
  pub struct Fingerprint {
@@ -31,7 +31,7 @@ index ad9f759..94da452 100644
      pub module_instances: BTreeMap<String, ModuleFingerprint>,
  }
  
-@@ -1472,6 +1474,59 @@ impl std::fmt::Display for Fingerprint {
+@@ -1474,6 +1476,59 @@ impl std::fmt::Display for Fingerprint {
      }
  }
  
@@ -91,7 +91,7 @@ index ad9f759..94da452 100644
  /// Prepares for entrance into WebAssembly.
  ///
  /// This function will set up context such that `closure` is allowed to call a
-@@ -1505,52 +1560,10 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
+@@ -1507,52 +1562,10 @@ pub(crate) fn invoke_wasm_and_catch_traps<T>(
      }
      core::mem::drop(previous_runtime_state);
      store.0.call_hook(CallHook::ReturningFromWasm)?;
@@ -148,7 +148,7 @@ index ad9f759..94da452 100644
  
  /// This type helps managing the state of the runtime when entering and exiting
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index 9911f9d..f7ab83b 100644
+index 7d80de0..2d6b64e 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
 @@ -703,8 +703,6 @@ enum StoreInstanceKind {

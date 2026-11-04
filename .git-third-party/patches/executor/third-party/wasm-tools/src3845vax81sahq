@@ -9,7 +9,7 @@ Subject: [PATCH] fix: expose method for fuzzing
  2 files changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/crates/wasm-smith/src/core.rs b/crates/wasm-smith/src/core.rs
-index b59fd588..ced65860 100644
+index b59fd58..ced6586 100644
 --- a/crates/wasm-smith/src/core.rs
 +++ b/crates/wasm-smith/src/core.rs
 @@ -2796,7 +2796,7 @@ impl Module {
@@ -22,7 +22,7 @@ index b59fd588..ced65860 100644
  
                  // If a function list is possible then build up a list of
 diff --git a/crates/wasm-smith/src/core/encode.rs b/crates/wasm-smith/src/core/encode.rs
-index d2ffd488..5b9b5514 100644
+index d2ffd48..5b9b551 100644
 --- a/crates/wasm-smith/src/core/encode.rs
 +++ b/crates/wasm-smith/src/core/encode.rs
 @@ -6,7 +6,8 @@ impl Module {
