@@ -13,6 +13,7 @@
   "pythonVersion": "3.13",
   "typeCheckingMode": "standard",
   "ignore": [
-    "runners/genlayer-py-std/src-emb/onnx"
+    "runners/genlayer-py-std/src-emb/onnx",
+    "runners/genlayer-py-std/src/genlayer/evm/generate.py"
   ]
 }
