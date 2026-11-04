@@ -22,11 +22,11 @@ fn registry_with_one_builtin() -> (std::path::PathBuf, runners::cache::Reader) {
     std::fs::create_dir_all(&runners_dir).unwrap();
     std::fs::write(
         root.join("all.json"),
-        format!(r#"{{"py-genlayer": ["{HASH}"]}}"#),
+        format!(r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{}}}}}}}}"#),
     )
     .unwrap();
 
-    let reader = runners::cache::Reader::new(&runners_dir, &root, false).unwrap();
+    let reader = runners::cache::Reader::new(&runners_dir, &root).unwrap();
     (root, reader)
 }
 

@@ -212,6 +212,7 @@ pub fn create_supervisor(
         emit_leader_public_data: named.emit_leader_public_data,
         multi_host,
         record_actions: named.record_actions,
+        transaction_timestamp: message.transaction_timestamp,
     };
 
     Ok(ExecutionContext {

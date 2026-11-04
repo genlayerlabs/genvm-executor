@@ -224,6 +224,12 @@ impl StrSymbol {
     }
 }
 
+impl std::fmt::Display for StrSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl std::borrow::Borrow<str> for StrSymbol {
     fn borrow(&self) -> &str {
         self.0.as_str()
@@ -265,8 +271,7 @@ pub struct Reader {
     cache: WeakCache,
     runners_data_path: std::path::PathBuf,
 
-    all: BTreeMap<StrSymbol, Vec<StrSymbol>>,
-    latest: BTreeMap<StrSymbol, StrSymbol>,
+    registry: Registry,
 }
 
 impl Drop for Reader {
@@ -281,7 +286,7 @@ impl Drop for Reader {
 pub fn validate_builtin_runner_hash(hash: &str) -> anyhow::Result<()> {
     if hash.len() != 52 {
         anyhow::bail!(
-            "runner hash must be 32 characters long, it is {} for `{hash}`",
+            "runner hash must be 52 characters long, it is {} for `{hash}`",
             hash.len()
         );
     }
@@ -315,56 +320,72 @@ pub fn validate_builtin_runner_name(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub trait RegistryPayload: serde::de::DeserializeOwned {
-    fn validate(&self) -> anyhow::Result<()>;
+/// `all.json`: every builtin runner id this executor ships, keyed by name.
+pub type Registry = BTreeMap<StrSymbol, RegistryEntry>;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryEntry {
+    /// The hash `:latest`/`:test` resolve to in debug mode.
+    pub latest: StrSymbol,
+    pub versions: BTreeMap<StrSymbol, RegistryVersion>,
 }
 
-impl RegistryPayload for String {
-    fn validate(&self) -> anyhow::Result<()> {
-        validate_builtin_runner_hash(self.as_ref())
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryVersion {
+    /// Transactions timestamped before this cannot resolve the runner.
+    #[serde(default)]
+    pub available_after: Option<chrono::DateTime<chrono::Utc>>,
+    /// The hash of the same id this one replaces.
+    #[serde(default)]
+    pub supersedes: Option<StrSymbol>,
+}
+
+impl RegistryVersion {
+    pub fn is_available_at(&self, timestamp: chrono::DateTime<chrono::Utc>) -> bool {
+        self.available_after.is_none_or(|after| after <= timestamp)
     }
 }
 
-impl RegistryPayload for StrSymbol {
-    fn validate(&self) -> anyhow::Result<()> {
-        validate_builtin_runner_hash(self.as_ref())
-    }
-}
-
-impl<T: RegistryPayload> RegistryPayload for Vec<T> {
-    fn validate(&self) -> anyhow::Result<()> {
-        for item in self {
-            item.validate()?;
+fn validate_registry_entry(name: StrSymbol, entry: &RegistryEntry) -> anyhow::Result<()> {
+    let name = name.as_str();
+    validate_builtin_runner_name(name)?;
+    for (hash, version) in &entry.versions {
+        let hash = hash.as_str();
+        validate_builtin_runner_hash(hash)?;
+        if let Some(old) = version.supersedes {
+            let old = old.as_str();
+            if old == hash {
+                anyhow::bail!("runner {name}:{hash} supersedes itself");
+            }
+            if !entry.versions.contains_key(old) {
+                anyhow::bail!("runner {name}:{hash} supersedes unlisted {old}");
+            }
         }
-        Ok(())
     }
+    let latest = entry.latest.as_str();
+    if !entry.versions.contains_key(latest) {
+        anyhow::bail!("latest runner {name}:{latest} is not listed in its versions");
+    }
+    Ok(())
 }
 
-pub fn read_registry<K: Ord + serde::de::DeserializeOwned + AsRef<str>, V: RegistryPayload>(
-    path: &std::path::Path,
-) -> anyhow::Result<BTreeMap<K, V>> {
-    let res: BTreeMap<K, V> = serde_json::from_reader(
+pub fn read_registry(path: &std::path::Path) -> anyhow::Result<Registry> {
+    let res: Registry = serde_json::from_reader(
         std::fs::File::open(path).with_ctx(|| format!("opening {path:?}"))?,
-    )?;
+    )
+    .with_context(|| format!("parsing {path:?}"))?;
 
-    (|| {
-        for (k, v) in &res {
-            validate_builtin_runner_name(k.as_ref())?;
-            v.validate()?;
-        }
-        Ok::<(), anyhow::Error>(())
-    })()
-    .with_context(|| format!("validating {path:?}"))?;
+    res.iter()
+        .try_for_each(|(name, entry)| validate_registry_entry(*name, entry))
+        .with_context(|| format!("validating {path:?}"))?;
 
     Ok(res)
 }
 
 impl Reader {
-    pub fn new(
-        path: &std::path::Path,
-        registry_path: &std::path::Path,
-        debug_mode: bool,
-    ) -> errors::Result<Self> {
+    pub fn new(path: &std::path::Path, registry_path: &std::path::Path) -> errors::Result<Self> {
         let runners_path = std::path::PathBuf::from(path);
         if !runners_path.exists() {
             return Err(errors::Error::internal(format!(
@@ -373,34 +394,26 @@ impl Reader {
             )));
         }
 
-        let mut all: BTreeMap<_, Vec<_>> = read_registry(&registry_path.join("all.json"))?;
-        for b in all.values_mut() {
-            b.sort();
-        }
-
-        let latest = if debug_mode {
-            read_registry(&registry_path.join("latest.json"))?
-        } else {
-            BTreeMap::new()
-        };
+        let registry = read_registry(&registry_path.join("all.json"))?;
 
         Ok(Self {
             cache: WeakCache::new(),
             runners_data_path: runners_path.clone(),
-            all,
-            latest,
+            registry,
         })
     }
 
     pub fn get_latest(&self, id: &str) -> Option<&str> {
-        self.latest.get(id).map(|s| s.as_str())
+        self.registry.get(id).map(|entry| entry.latest.as_str())
     }
 
+    pub fn get_version(&self, id: &str, hash: &str) -> Option<&RegistryVersion> {
+        self.registry.get(id)?.versions.get(hash)
+    }
+
+    /// Whether `id:hash` is shipped, regardless of when it becomes available.
     pub fn has_in_all(&self, id: &str, hash: &str) -> bool {
-        match self.all.get(id) {
-            Some(hashes) => hashes.binary_search_by(|h| h.as_str().cmp(hash)).is_ok(),
-            None => false,
-        }
+        self.get_version(id, hash).is_some()
     }
 
     pub fn runners_path(&self) -> &std::path::Path {

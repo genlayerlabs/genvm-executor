@@ -15,6 +15,17 @@ in
 rec {
   hashes = import ./versions/current.nix;
 
+  pinsById =
+    let
+      flatten = val: if val ? id then [ val ] else builtins.concatMap flatten (builtins.attrValues val);
+    in
+    builtins.listToAttrs (
+      builtins.map (pin: {
+        name = pin.id;
+        value = pin;
+      }) (flatten hashes)
+    );
+
   wasi-sdk = import ./tools/wasi-sdk.nix args;
 
   wasmPatchers = {
@@ -44,6 +55,7 @@ rec {
     }:
     {
       inherit id hash;
+      inherit (pinsById.${id}) available-after supersedes;
 
       uid = "${id}:${hashToIDHash hash}";
 

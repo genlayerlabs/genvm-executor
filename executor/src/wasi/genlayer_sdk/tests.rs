@@ -1037,12 +1037,41 @@ impl EmissionTestContext {
         fees: crate::config::FeesConfig,
         balance: U256,
     ) -> Self {
+        Self::build(
+            memory_limit,
+            fee_total,
+            fees,
+            balance,
+            "{}",
+            chrono::DateTime::UNIX_EPOCH,
+        )
+    }
+
+    fn with_registry(registry: &str, transaction_timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        Self::build(
+            u32::MAX,
+            100,
+            emission_fees(),
+            U256::MAX,
+            registry,
+            transaction_timestamp,
+        )
+    }
+
+    fn build(
+        memory_limit: u32,
+        fee_total: u64,
+        fees: crate::config::FeesConfig,
+        balance: U256,
+        registry: &str,
+        transaction_timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         let root = TestDir::new();
         let runners_dir = root.join("runners");
         let registry_dir = root.join("registry");
         std::fs::create_dir_all(&runners_dir).unwrap();
         std::fs::create_dir_all(&registry_dir).unwrap();
-        std::fs::write(registry_dir.join("all.json"), "{}").unwrap();
+        std::fs::write(registry_dir.join("all.json"), registry).unwrap();
 
         let shared_data = sync::DArc::new(rt::SharedData {
             allow_two_workers: true,
@@ -1122,6 +1151,7 @@ impl EmissionTestContext {
                 emit_leader_public_data: false,
                 multi_host: host::MultiHost::new(vec![host], Vec::new()),
                 record_actions: Vec::new(),
+                transaction_timestamp,
             },
         )
         .unwrap();
@@ -3597,4 +3627,71 @@ fn stripped_proposable_leader_errors_round_trip_through_acceptance() {
             .unwrap_or_else(|e| panic!("honest leader code {code:?} rejected as {e:?}"));
         assert_eq!(accepted.encode().into_bytes().as_ref(), data);
     }
+}
+
+fn runner_hash(byte: u8) -> String {
+    Bytes32Hash::from_bytes([byte; 32]).to_gvm32()
+}
+
+async fn resolve_gated(at: &str, hash: &str) -> anyhow::Result<crate::runners::Id> {
+    let (gated, open) = (runner_hash(1), runner_hash(2));
+    let test = EmissionTestContext::with_registry(
+        &format!(
+            r#"{{"py-genlayer": {{"latest": "{open}", "versions": {{
+                "{gated}": {{"available_after": "2026-12-01T00:00:00Z", "supersedes": "{open}"}},
+                "{open}": {{}}
+            }}}}}}"#
+        ),
+        at.parse().unwrap(),
+    );
+    let data = &test.context.data;
+    let got = rt::supervisor::actions::resolve_runner_id(
+        &data.supervisor,
+        &test.context.limiter,
+        &data.conf.execution.topmost_runner_id,
+        &format!("py-genlayer:{hash}"),
+    )
+    .await;
+    test.shutdown().await;
+    got
+}
+
+/// The VM code and the full message, which tells the two failure paths apart.
+fn vm_failure(error: anyhow::Error) -> (String, String) {
+    let message = format!("{error:#}");
+    match error.downcast::<rt::errors::Error>().unwrap().kind {
+        rt::errors::ErrorKind::Vm(code) => (code.0.into_owned(), message),
+        other => panic!("expected a VM error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn gated_runner_fails_like_an_uninstalled_one_before_its_time() {
+    let before = "2026-11-30T23:59:59Z";
+    let malformed = public_abi::VmError::invalid_contract()
+        .runner()
+        .malformed()
+        .0;
+
+    let (gated, gated_message) =
+        vm_failure(resolve_gated(before, &runner_hash(1)).await.unwrap_err());
+    let (unlisted, unlisted_message) =
+        vm_failure(resolve_gated(before, &runner_hash(3)).await.unwrap_err());
+    assert_eq!(gated, malformed);
+    assert_eq!(gated, unlisted);
+    assert!(
+        gated_message.contains("is not available at"),
+        "{gated_message}"
+    );
+    assert!(
+        unlisted_message.contains("is not installed"),
+        "{unlisted_message}"
+    );
+
+    resolve_gated("2026-12-01T00:00:00Z", &runner_hash(1))
+        .await
+        .expect("a gated runner resolves once available");
+    resolve_gated(before, &runner_hash(2))
+        .await
+        .expect("an ungated runner always resolves");
 }

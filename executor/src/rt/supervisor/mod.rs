@@ -108,6 +108,7 @@ pub struct Ctor {
     pub emit_leader_public_data: bool,
     pub multi_host: host::MultiHost,
     pub record_actions: Vec<String>,
+    pub transaction_timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug, genlayer_calldata::Encode)]
@@ -159,6 +160,8 @@ pub struct Supervisor {
     pub nondet_results: tokio::sync::Mutex<Vec<bytes::Bytes>>,
     pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
     pub emit_leader_public_data: bool,
+    /// Gates builtin runners on their `available_after`.
+    pub transaction_timestamp: chrono::DateTime<chrono::Utc>,
 
     queue: NondetQueue,
     runner_cache: runners::cache::Reader,
@@ -404,8 +407,6 @@ impl Supervisor {
 
         let (sender, receiver) = tokio_mpmc::channel(100);
 
-        let debug_mode = ctor.shared_data.debug_mode;
-
         let zelf = Arc::new(Self {
             shared_data: ctor.shared_data,
             modules: ctor.modules,
@@ -415,6 +416,7 @@ impl Supervisor {
             nondet_results: Default::default(),
             leader_nondet_results: ctor.leader_nondet_results,
             emit_leader_public_data: ctor.emit_leader_public_data,
+            transaction_timestamp: ctor.transaction_timestamp,
             queue: NondetQueue {
                 sender,
                 receiver,
@@ -426,7 +428,6 @@ impl Supervisor {
             runner_cache: runners::cache::Reader::new(
                 std::path::Path::new(&config.runners_dir),
                 std::path::Path::new(&config.registry_dir),
-                debug_mode.allows_latest_resolution(),
             )
             .context("creating runner cache reader")?,
             wasm_mod_cache: WasmModuleCache {

@@ -302,7 +302,7 @@ mod parse_runner_id_tests {
 
 /// The dev-mode magic builtin/custom runner hash. Its GVM32 form is the literal
 /// string `test` padded with `0`s to 52 chars (`test0000...`), which is what shows
-/// up on disk and in `all.json`/`latest.json`. The raw bytes below are exactly
+/// up on disk and in `all.json`. The raw bytes below are exactly
 /// `gvm32::decode("test0000...")`. Kept in sync with `hashToIDHash` in
 /// `runners/support/default.nix`.
 pub const TEST_RUNNER_HASH: Bytes32Hash = {

@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::Context as _;
 use genvm::{caching, config, runners, wasmtime_to_anyhow};
 
@@ -194,18 +192,14 @@ pub fn run(config: &config::Config) -> anyhow::Result<()> {
         Ok(())
     })?;
 
-    let all_json_path = registry_dir.join("all.json");
-    let all_json = std::fs::read_to_string(&all_json_path)
-        .with_context(|| format!("reading {all_json_path:?}"))?;
-    let all: BTreeMap<String, Vec<String>> =
-        serde_json::from_str(&all_json).with_context(|| format!("parsing {all_json_path:?}"))?;
+    let registry = runners::cache::read_registry(&registry_dir.join("all.json"))?;
 
     let runners_dir = std::path::Path::new(&config.runners_dir);
 
-    for (runner_id, hashes) in all {
-        for hash in hashes {
+    for (runner_id, entry) in &registry {
+        for hash in entry.versions.keys() {
             let mut runner_path = runners_dir.to_owned();
-            runners::append_runner_subpath(&runner_id, &hash, &mut runner_path);
+            runners::append_runner_subpath(runner_id.as_str(), hash.as_str(), &mut runner_path);
             runner_path.set_extension("zip");
 
             compile_single_file(&precompile_dir, &engines, runners_dir, &runner_path)

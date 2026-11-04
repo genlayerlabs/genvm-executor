@@ -32,8 +32,8 @@ def configure(line: 'genvm_tool_plugins.ninja.LineContext'):
 	Per-line build configuration for `genvm-tool configure`.
 
 	``line`` is a ``genvm_tool_plugins.ninja.LineContext`` the configure command
-	builds for this executor. This is a live line: its runner ``latest``/``all``
-	manifests are derived through the umbrella nix machinery (``nix_manifests``),
+	builds for this executor. This is a live line: its ``all.json`` runner
+	manifest is derived through the umbrella nix machinery (``nix_manifests``),
 	which imports every active line's runners.
 	"""
 	if not line.is_support_only:

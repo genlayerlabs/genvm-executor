@@ -19,11 +19,11 @@ let
   install-src =
     get-root-subtree [ "${exec-prefix}/executor/install" ] + "/${exec-prefix}/executor/install";
 
-  # Release manifests (latest.json/all.json) are produced by the umbrella's
-  # runner machinery, which owns the accumulate-and-build logic. This executor
-  # checkout is mounted at <umbrella>/executors/v0.3.x, so the umbrella root
-  # (and its ./runners) is three levels up. `all.json` carries every runner
-  # compatible up to our version; `latest.json` our own current runners.
+  # The release manifest (all.json) is produced by the umbrella's runner
+  # machinery, which owns the accumulate-and-build logic. This executor checkout
+  # is mounted at <umbrella>/executors/v0.3.x, so the umbrella root (and its
+  # ./runners) is three levels up. `all.json` carries every runner compatible up
+  # to our version, each id naming its own current runner as `latest`.
   manifests-data = import ../../../runners/views/release.nix (
     args // { executorVersion = build-config.executor-version; }
   );
@@ -83,7 +83,6 @@ let
         mkdir -p $out/executor/${build-config.executor-version}/bin
 
         mkdir -p $out/executor/${build-config.executor-version}/data
-        cp "${manifests-data.latest}" "$out/executor/${build-config.executor-version}/data/latest.json"
         cp "${manifests-data.all}" "$out/executor/${build-config.executor-version}/data/all.json"
 
         cp "${exe}" "$out/executor/${build-config.executor-version}/bin/genvm"

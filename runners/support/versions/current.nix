@@ -6,6 +6,10 @@ let
   # on-disk runner paths and `hashToIDHash` in ../default.nix.
   gvm32 = import ../gvm32.nix;
 
+  # A pin may also set `available-after` (RFC 3339 timestamp such as
+  # `2026-12-01T00:00:00Z`, transactions before it cannot resolve the runner)
+  # and `supersedes` (gvm32 hash of the same id it replaces); both default to
+  # null. hash-updater.py rewrites only `hash`, so they survive a re-pin.
   src = rec {
     __prefix = "";
 
@@ -175,6 +179,9 @@ let
         uid = "${id}:${hash32}";
 
         excludeFromBuild = hashHasSpecialDeps null val;
+
+        available-after = val.available-after or null;
+        supersedes = val.supersedes or null;
       }
   );
 in

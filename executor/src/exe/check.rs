@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::Context as _;
 use genvm::{config, runners};
 
@@ -21,27 +19,14 @@ pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
 
     log_info!(registry_dir:? = registry_dir, runners_dir:? = runners_dir; "checking install");
 
-    let all: BTreeMap<String, Vec<String>> =
-        genvm::runners::cache::read_registry(&registry_dir.join("all.json"))?;
-    let latest: BTreeMap<String, String> =
-        genvm::runners::cache::read_registry(&registry_dir.join("latest.json"))?;
+    let registry = genvm::runners::cache::read_registry(&registry_dir.join("all.json"))?;
 
-    // (a) every runner `latest` resolves to must also be listed in `all`.
-    for (id, hash) in &latest {
-        let present = all
-            .get(id)
-            .is_some_and(|hashes| hashes.iter().any(|h| h == hash));
-        if !present {
-            anyhow::bail!("latest runner {id}:{hash} is not present in all.json");
-        }
-    }
-
-    // (b) every runner in `all` exists on disk with the expected content hash.
+    // Every listed runner exists on disk with the expected content hash.
     let mut checked = 0usize;
-    for (id, hashes) in &all {
-        for hash in hashes {
+    for (id, entry) in &registry {
+        for hash in entry.versions.keys() {
             let mut runner_path = runners_dir.to_owned();
-            runners::append_runner_subpath(id, hash, &mut runner_path);
+            runners::append_runner_subpath(id.as_str(), hash.as_str(), &mut runner_path);
             runner_path.set_extension("zip");
 
             let data = std::fs::read(&runner_path)
@@ -51,7 +36,7 @@ pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
             let digest: [u8; 32] = sha2::Sha256::digest(&data).into();
             let got = genvm_common::Bytes32Hash::from_bytes(digest).to_gvm32();
 
-            if got != *hash {
+            if got != hash.as_str() {
                 anyhow::bail!(
                     "runner {id} at {runner_path:?} has wrong content hash: expected {hash}, got {got}"
                 );
