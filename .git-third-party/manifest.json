@@ -2,21 +2,21 @@
 	"repos": {
 		"executor/third-party/wasmtime": {
 			"url": "https://github.com/bytecodealliance/wasmtime.git",
-			"commit": "ebf20ab7cbf35fa3fbd8202562017fda6a541021",
+			"commit": "7b6c29ec3e9a49c97da231665cbd8eead9ccbda0",
 			"patches": [
-				"wyqzzn2hxndgbxbx",
-				"mgz066ws46rvhghv",
-				"x77t41kns34hzzhb",
-				"fvfcbfxe3ng3djg8",
-				"nwdw669v5p3aamta"
+				"502v4v1ajc7t4xxw",
+				"ypjcbtfcjfhyg8e7",
+				"vjpk415t4mrqsecz",
+				"3akahs7t9mzpn07c",
+				"kxr8chk502g5anar"
 			],
 			"submodules": []
 		},
 		"executor/third-party/wasm-tools": {
 			"url": "https://github.com/bytecodealliance/wasm-tools.git",
-			"commit": "bb58fdf919912e05c976a0b71aaa843f7d1938f9",
+			"commit": "371167389828d984aea88320ba7effa9143c7fa7",
 			"patches": [
-				"n359mz2sdabr2wsa"
+				"src3845vax81sahq"
 			]
 		}
 	}

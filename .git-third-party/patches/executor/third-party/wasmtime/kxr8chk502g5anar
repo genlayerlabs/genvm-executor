@@ -19,10 +19,10 @@ Subject: [PATCH] feat(genvm): configure wasm stack limits
  12 files changed, 479 insertions(+), 183 deletions(-)
 
 diff --git a/crates/cranelift/src/alias_region.rs b/crates/cranelift/src/alias_region.rs
-index 873f34b..b63e651 100644
+index 04ceea0..d1b57c5 100644
 --- a/crates/cranelift/src/alias_region.rs
 +++ b/crates/cranelift/src/alias_region.rs
-@@ -1440,6 +1440,92 @@ where
+@@ -1434,6 +1434,92 @@ where
          )
      }
  
@@ -317,10 +317,10 @@ index 266938b..dadf341 100644
  
      pub fn translate_cont_bind(
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index d4c2afd..fdff6a5 100644
+index 6537914..025ebf1 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -368,22 +368,17 @@ pub fn translate_operator(
+@@ -380,22 +380,17 @@ pub fn translate_operator(
          Operator::Else => {
              let i = environ.stacks.control_stack.len() - 1;
              let reachable = environ.is_reachable();
@@ -344,7 +344,7 @@ index d4c2afd..fdff6a5 100644
                      if head_is_reachable {
                          // We have a branch from the head of the `if` to the `else`.
                          environ.stacks.reachable = true;
-@@ -453,7 +448,7 @@ pub fn translate_operator(
+@@ -465,7 +460,7 @@ pub fn translate_operator(
              }
          }
          Operator::End => {
@@ -353,7 +353,7 @@ index d4c2afd..fdff6a5 100644
              let next_block = frame.following_code();
              let return_count = frame.num_return_values();
  
-@@ -1071,145 +1066,195 @@ pub fn translate_operator(
+@@ -1083,145 +1078,195 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().ireduce(I32, val));
          }
          Operator::F32Sqrt | Operator::F64Sqrt => {
@@ -574,7 +574,7 @@ index d4c2afd..fdff6a5 100644
              let val = environ.stacks.pop1();
              environ
                  .stacks
-@@ -1307,7 +1352,9 @@ pub fn translate_operator(
+@@ -1319,7 +1364,9 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().rotr(arg1, arg2));
          }
          Operator::F32Add | Operator::F64Add => {
@@ -585,7 +585,7 @@ index d4c2afd..fdff6a5 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fadd(arg1, arg2));
          }
-@@ -1316,7 +1363,9 @@ pub fn translate_operator(
+@@ -1328,7 +1375,9 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().isub(arg1, arg2));
          }
          Operator::F32Sub | Operator::F64Sub => {
@@ -596,7 +596,7 @@ index d4c2afd..fdff6a5 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fsub(arg1, arg2));
          }
-@@ -1325,12 +1374,16 @@ pub fn translate_operator(
+@@ -1337,12 +1386,16 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().imul(arg1, arg2));
          }
          Operator::F32Mul | Operator::F64Mul => {
@@ -615,7 +615,7 @@ index d4c2afd..fdff6a5 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fdiv(arg1, arg2));
          }
-@@ -1355,17 +1408,23 @@ pub fn translate_operator(
+@@ -1367,17 +1420,23 @@ pub fn translate_operator(
              environ.stacks.push1(result);
          }
          Operator::F32Min | Operator::F64Min => {
@@ -642,7 +642,7 @@ index d4c2afd..fdff6a5 100644
              let (arg1, arg2) = environ.stacks.pop2();
              environ.stacks.push1(builder.ins().fcopysign(arg1, arg2));
          }
-@@ -1797,13 +1856,11 @@ pub fn translate_operator(
+@@ -1809,13 +1868,11 @@ pub fn translate_operator(
              let splatted = builder.ins().splat(type_of(op), reduced);
              environ.stacks.push1(splatted)
          }
@@ -658,7 +658,7 @@ index d4c2afd..fdff6a5 100644
              // Lane duplication is a bit-exact copy (no rounding/NaN semantics),
              // so it stays allowed in deterministic mode.
              let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
-@@ -1885,15 +1942,13 @@ pub fn translate_operator(
+@@ -1897,15 +1954,13 @@ pub fn translate_operator(
              // uextend could be elided; for now, uextend is needed for Cranelift's type checks to
              // work.
          }
@@ -676,7 +676,7 @@ index d4c2afd..fdff6a5 100644
              // Bit-exact lane copy; allowed in deterministic mode.
              let vector = pop1_with_bitcast(environ, type_of(op), builder);
              environ
-@@ -1909,16 +1964,14 @@ pub fn translate_operator(
+@@ -1921,16 +1976,14 @@ pub fn translate_operator(
                  .stacks
                  .push1(builder.ins().insertlane(vector, reduced, *lane))
          }
@@ -695,7 +695,7 @@ index d4c2afd..fdff6a5 100644
              // Bit-exact lane copy; allowed in deterministic mode.
              let (vector, replacement) = environ.stacks.pop2();
              let vector = optionally_bitcast_vector(vector, type_of(op), builder);
-@@ -2127,37 +2180,51 @@ pub fn translate_operator(
+@@ -2139,37 +2192,51 @@ pub fn translate_operator(
              translate_vector_fcmp(FloatCC::GreaterThanOrEqual, type_of(op), builder, environ)
          }
          Operator::F32x4Add | Operator::F64x2Add => {
@@ -754,7 +754,7 @@ index d4c2afd..fdff6a5 100644
              // Note the careful ordering here with respect to `fcmp` and
              // `bitselect`. This matches the spec definition of:
              //
-@@ -2171,7 +2238,9 @@ pub fn translate_operator(
+@@ -2183,7 +2250,9 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().bitselect(cmp, b, a))
          }
          Operator::F32x4PMin | Operator::F64x2PMin => {
@@ -765,7 +765,7 @@ index d4c2afd..fdff6a5 100644
              // Note the careful ordering here which is similar to `pmax` above:
              //
              //  fpmin(z1, z2) =
-@@ -2184,32 +2253,44 @@ pub fn translate_operator(
+@@ -2196,32 +2265,44 @@ pub fn translate_operator(
              environ.stacks.push1(builder.ins().bitselect(cmp, b, a))
          }
          Operator::F32x4Sqrt | Operator::F64x2Sqrt => {
@@ -816,7 +816,7 @@ index d4c2afd..fdff6a5 100644
              let a = pop1_with_bitcast(environ, I32X4, builder);
              let widened_a = builder.ins().swiden_low(a);
              environ
-@@ -2217,7 +2298,9 @@ pub fn translate_operator(
+@@ -2229,7 +2310,9 @@ pub fn translate_operator(
                  .push1(builder.ins().fcvt_from_sint(F64X2, widened_a));
          }
          Operator::F64x2ConvertLowI32x4U => {
@@ -827,7 +827,7 @@ index d4c2afd..fdff6a5 100644
              let a = pop1_with_bitcast(environ, I32X4, builder);
              let widened_a = builder.ins().uwiden_low(a);
              environ
-@@ -2225,24 +2308,32 @@ pub fn translate_operator(
+@@ -2237,24 +2320,32 @@ pub fn translate_operator(
                  .push1(builder.ins().fcvt_from_uint(F64X2, widened_a));
          }
          Operator::F64x2PromoteLowF32x4 => {
@@ -864,7 +864,7 @@ index d4c2afd..fdff6a5 100644
              let a = pop1_with_bitcast(environ, F64X2, builder);
              let converted_a = builder.ins().fcvt_to_sint_sat(I64X2, a);
              let handle = builder.func.dfg.constants.insert(vec![0u8; 16].into());
-@@ -2265,14 +2356,18 @@ pub fn translate_operator(
+@@ -2277,14 +2368,18 @@ pub fn translate_operator(
          // perhaps for other backends too) should be added and the codegen for
          // the relaxed instruction should conditionally be different.
          Operator::I32x4RelaxedTruncF32x4U | Operator::I32x4TruncSatF32x4U => {
@@ -885,7 +885,7 @@ index d4c2afd..fdff6a5 100644
              let a = pop1_with_bitcast(environ, F64X2, builder);
              let zero_constant = builder.func.dfg.constants.insert(vec![0u8; 16].into());
              let result = if environ.is_x86() && !environ.isa().has_round() {
-@@ -2393,49 +2488,65 @@ pub fn translate_operator(
+@@ -2405,49 +2500,65 @@ pub fn translate_operator(
                  .push1(builder.ins().iadd_pairwise(widen_low, widen_high));
          }
          Operator::F32x4Ceil => {
@@ -959,7 +959,7 @@ index d4c2afd..fdff6a5 100644
              let arg = pop1_with_bitcast(environ, F64X2, builder);
              let result = environ.nearest_f64x2(builder, arg);
              environ.stacks.push1(result);
-@@ -2538,7 +2649,9 @@ pub fn translate_operator(
+@@ -2550,7 +2661,9 @@ pub fn translate_operator(
          }
  
          Operator::F32x4RelaxedMax | Operator::F64x2RelaxedMax => {
@@ -970,7 +970,7 @@ index d4c2afd..fdff6a5 100644
              let ty = type_of(op);
              let (a, b) = pop2_with_bitcast(environ, ty, builder);
              environ.stacks.push1(
-@@ -2558,7 +2671,9 @@ pub fn translate_operator(
+@@ -2570,7 +2683,9 @@ pub fn translate_operator(
          }
  
          Operator::F32x4RelaxedMin | Operator::F64x2RelaxedMin => {
@@ -981,7 +981,7 @@ index d4c2afd..fdff6a5 100644
              let ty = type_of(op);
              let (a, b) = pop2_with_bitcast(environ, ty, builder);
              environ.stacks.push1(
-@@ -2584,26 +2699,34 @@ pub fn translate_operator(
+@@ -2596,26 +2711,34 @@ pub fn translate_operator(
          }
  
          Operator::F32x4RelaxedMadd => {
@@ -1020,7 +1020,7 @@ index d4c2afd..fdff6a5 100644
              let (a, b, c) = pop3_with_bitcast(environ, type_of(op), builder);
              let a = builder.ins().fneg(a);
              let result = environ.fma_f64x2(builder, a, b, c);
-@@ -2633,7 +2756,9 @@ pub fn translate_operator(
+@@ -2645,7 +2768,9 @@ pub fn translate_operator(
          }
  
          Operator::I32x4RelaxedTruncF32x4S => {
@@ -1031,7 +1031,7 @@ index d4c2afd..fdff6a5 100644
              let a = pop1_with_bitcast(environ, F32X4, builder);
              environ.stacks.push1(
                  if environ.relaxed_simd_deterministic() || !environ.is_x86() {
-@@ -2646,7 +2771,9 @@ pub fn translate_operator(
+@@ -2658,7 +2783,9 @@ pub fn translate_operator(
              )
          }
          Operator::I32x4RelaxedTruncF64x2SZero => {
@@ -1042,7 +1042,7 @@ index d4c2afd..fdff6a5 100644
              let a = pop1_with_bitcast(environ, F64X2, builder);
              let converted_a = if environ.relaxed_simd_deterministic() || !environ.is_x86() {
                  // Deterministic semantics are to match the
-@@ -3558,16 +3685,13 @@ fn translate_unreachable_operator(
+@@ -3570,16 +3697,13 @@ fn translate_unreachable_operator(
          Operator::Else => {
              let i = environ.stacks.control_stack.len() - 1;
              let reachable = environ.is_reachable();
@@ -1060,7 +1060,7 @@ index d4c2afd..fdff6a5 100644
                      if head_is_reachable {
                          // We have a branch from the head of the `if` to the `else`.
                          environ.stacks.reachable = true;
-@@ -3615,7 +3739,7 @@ fn translate_unreachable_operator(
+@@ -3627,7 +3751,7 @@ fn translate_unreachable_operator(
              }
          }
          Operator::End => {
@@ -1069,7 +1069,7 @@ index d4c2afd..fdff6a5 100644
  
              frame.restore_catch_handlers(&mut environ.stacks.handlers, builder);
  
-@@ -4168,7 +4292,9 @@ fn translate_vector_icmp(
+@@ -4180,7 +4304,9 @@ fn translate_vector_icmp(
  }
  
  fn translate_fcmp(cc: FloatCC, builder: &mut FunctionBuilder, env: &mut FuncEnvironment<'_>) {
@@ -1080,7 +1080,7 @@ index d4c2afd..fdff6a5 100644
      let (arg0, arg1) = env.stacks.pop2();
      let val = builder.ins().fcmp(cc, arg0, arg1);
      env.stacks.push1(builder.ins().uextend(I32, val));
-@@ -4180,7 +4306,9 @@ fn translate_vector_fcmp(
+@@ -4192,7 +4318,9 @@ fn translate_vector_fcmp(
      builder: &mut FunctionBuilder,
      env: &mut FuncEnvironment<'_>,
  ) {
@@ -1091,7 +1091,7 @@ index d4c2afd..fdff6a5 100644
      let (a, b) = env.stacks.pop2();
      let bitcast_a = optionally_bitcast_vector(a, needed_type, builder);
      let bitcast_b = optionally_bitcast_vector(b, needed_type, builder);
-@@ -4721,6 +4849,7 @@ fn create_catch_block(
+@@ -4733,6 +4861,7 @@ fn create_catch_block(
      let exn_ref = builder.append_block_param(block, exn_payload_ty);
      builder.switch_to_block(block);
      environ.on_catch_block_entry(builder);
@@ -1099,7 +1099,7 @@ index d4c2afd..fdff6a5 100644
      debug_assert!(exn_ref_ty.bits() <= exn_payload_ty.bits());
      let exn_ref = if exn_ref_ty.bits() < exn_payload_ty.bits() {
          builder.ins().ireduce(exn_ref_ty, exn_ref)
-@@ -4761,7 +4890,10 @@ fn create_catch_block(
+@@ -4773,7 +4902,10 @@ fn create_catch_block(
      Ok(block)
  }
  
@@ -1281,10 +1281,10 @@ index bd8f42f..b90a75d 100644
              memory_init_cow,
              other.memory_init_cow,
 diff --git a/crates/wasmtime/src/runtime/func.rs b/crates/wasmtime/src/runtime/func.rs
-index 94da452..30f7016 100644
+index 6eac669..52df36c 100644
 --- a/crates/wasmtime/src/runtime/func.rs
 +++ b/crates/wasmtime/src/runtime/func.rs
-@@ -1509,7 +1509,10 @@ impl<'a, T: 'static> StoreContextMut<'a, T> {
+@@ -1511,7 +1511,10 @@ impl<'a, T: 'static> StoreContextMut<'a, T> {
                  duplicate += 1;
              }
  
@@ -1296,7 +1296,7 @@ index 94da452..30f7016 100644
                  let data = match &mem.1 {
                      crate::runtime::vm::ExportMemory::Unshared(m) => m.data(&store),
                      crate::runtime::vm::ExportMemory::Shared(_sm, _) => &[],
-@@ -1581,6 +1584,8 @@ pub(crate) struct EntryStoreContext {
+@@ -1583,6 +1586,8 @@ pub(crate) struct EntryStoreContext {
      pub last_wasm_entry_sp: usize,
      pub last_wasm_entry_trap_handler: usize,
      pub stack_chain: VMStackChain,
@@ -1305,7 +1305,7 @@ index 94da452..30f7016 100644
  
      /// We need a pointer to the runtime limits, so we can update them from
      /// `drop`/`exit_wasm`.
-@@ -1686,6 +1691,8 @@ impl EntryStoreContext {
+@@ -1688,6 +1693,8 @@ impl EntryStoreContext {
                      .last_wasm_entry_trap_handler
                      .get(),
                  stack_chain,
@@ -1314,7 +1314,7 @@ index 94da452..30f7016 100644
                  vm_store_context,
              }
          }
-@@ -1710,6 +1717,10 @@ impl EntryStoreContext {
+@@ -1712,6 +1719,10 @@ impl EntryStoreContext {
              *(*self.vm_store_context).last_wasm_entry_trap_handler.get() =
                  self.last_wasm_entry_trap_handler;
              *(*self.vm_store_context).stack_chain.get() = self.stack_chain.clone();
@@ -1326,7 +1326,7 @@ index 94da452..30f7016 100644
      }
  }
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index f7ab83b..cad9d79 100644
+index 2d6b64e..c1382a5 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
 @@ -737,7 +737,10 @@ impl<T> Store<T> {

@@ -16,10 +16,10 @@ place, so trapping on them broke real numpy code paths.
  1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/crates/cranelift/src/translate/code_translator.rs b/crates/cranelift/src/translate/code_translator.rs
-index 925a145..0e12a52 100644
+index 245dd3f..1c2bf0e 100644
 --- a/crates/cranelift/src/translate/code_translator.rs
 +++ b/crates/cranelift/src/translate/code_translator.rs
-@@ -1804,7 +1804,8 @@ pub fn translate_operator(
+@@ -1816,7 +1816,8 @@ pub fn translate_operator(
          }
          Operator::F32x4Splat
          | Operator::F64x2Splat => {
@@ -29,7 +29,7 @@ index 925a145..0e12a52 100644
              let splatted = builder.ins().splat(type_of(op), environ.stacks.pop1());
              environ.stacks.push1(splatted)
          }
-@@ -1893,7 +1894,7 @@ pub fn translate_operator(
+@@ -1905,7 +1906,7 @@ pub fn translate_operator(
          }
          Operator::F32x4ExtractLane { lane }
          | Operator::F64x2ExtractLane { lane } => {
@@ -38,7 +38,7 @@ index 925a145..0e12a52 100644
              let vector = pop1_with_bitcast(environ, type_of(op), builder);
              environ
                  .stacks
-@@ -1918,7 +1919,7 @@ pub fn translate_operator(
+@@ -1930,7 +1931,7 @@ pub fn translate_operator(
          }
          Operator::F32x4ReplaceLane { lane }
          | Operator::F64x2ReplaceLane { lane } => {

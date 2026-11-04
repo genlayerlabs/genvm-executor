@@ -108,7 +108,8 @@ impl AsyncCustomFD {
     /// Create a new AsyncCustomFD from an OwnedFd
     /// The fd should already be set to non-blocking mode
     pub fn new(fd: std::os::fd::OwnedFd) -> std::io::Result<Self> {
-        Ok(Self(tokio::io::unix::AsyncFd::new(fd)?))
+        // SAFETY: an `OwnedFd` keeps its descriptor open and unchanged until dropped
+        Ok(Self(unsafe { tokio::io::unix::AsyncFd::register(fd) }?))
     }
 
     /// Create a new AsyncCustomFD from a raw fd, taking ownership
