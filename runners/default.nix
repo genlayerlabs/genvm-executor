@@ -6,6 +6,7 @@
 #   derivation # zip file
 #   available-after # null or RFC 3339 timestamp
 #   supersedes # null or gvm32 hash of the same id
+#   archived # optional, true for a runner kept only for old contracts
 # }]
 # all args are optional
 {
@@ -52,4 +53,5 @@ in
 ++ (import ./softfloat args)
 ++ (import ./cpython args)
 ++ (import ./models args)
+++ (import ./archive args)
 ++ [ ]
