@@ -15,6 +15,14 @@ from genlayer._internal.schema_attrs import (
 from genlayer._internal.schema_attrs import (
 	READONLY_ATTR as _READONLY_ATTR,
 )
+from genlayer._internal.schema_attrs import public_name_error as _public_name_error
+
+
+def _make_public(f, *, readonly: bool) -> None:
+	if err := _public_name_error(getattr(f, '__name__', '')):
+		raise TypeError(err)
+	setattr(f, _PUBLIC_ATTR, True)
+	setattr(f, _READONLY_ATTR, readonly)
 
 
 def private[T](f: T, /) -> T:
@@ -42,8 +50,7 @@ class _min_gas(_payable):
 		self._validator = validator
 
 	def __call__[T](self, f: T) -> T:
-		setattr(f, _PUBLIC_ATTR, True)
-		setattr(f, _READONLY_ATTR, False)
+		_make_public(f, readonly=False)
 		setattr(f, _MIN_GAS_LEADER_ATTR, self._leader)
 		setattr(f, _MIN_GAS_VALIDATOR_ATTR, self._validator)
 		return f
@@ -54,8 +61,7 @@ class _write(_payable):
 		return _min_gas(leader, validator)
 
 	def __call__[T](self, f: T) -> T:
-		setattr(f, _PUBLIC_ATTR, True)
-		setattr(f, _READONLY_ATTR, False)
+		_make_public(f, readonly=False)
 		return f
 
 
@@ -65,8 +71,7 @@ class public:
 		"""
 		Decorator that marks a contract method as a public view
 		"""
-		setattr(f, _PUBLIC_ATTR, True)
-		setattr(f, _READONLY_ATTR, True)
+		_make_public(f, readonly=True)
 		return f
 
 	write = _write()

@@ -13,6 +13,7 @@ from genlayer._internal.schema_attrs import (
 	PAYABLE_ATTR,
 	PUBLIC_ATTR,
 	READONLY_ATTR,
+	public_name_error,
 )
 from genlayer.types import Address
 
@@ -197,8 +198,8 @@ def get_schema(contract: type) -> typing.Any:
 	}
 
 	for k in meths:
-		if k.startswith('__'):
-			raise TypeError(f'public method names should not start with `__`, `{k}`')
+		if err := public_name_error(k):
+			raise TypeError(err)
 
 	return {
 		'ctor': _get_params(ctor, is_ctor=True),

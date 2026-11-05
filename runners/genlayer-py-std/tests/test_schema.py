@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import genlayer._internal.get_schema as _get_schema
 import pytest
+from genlayer._internal.annotations import public as gl_public
 from genlayer._internal.get_schema import get_schema
 from genlayer.types import Address, u256
 
@@ -118,4 +119,56 @@ def test_public_method_requires_self(first_parameter):
 
 	Contract.broken = broken
 	with pytest.raises(TypeError, match='missing self'):
+		get_schema(Contract)
+
+
+_SPECIAL = [
+	'__receive__',
+	'__handle_undefined_method__',
+	'__handle_undefined_method_payable__',
+]
+
+
+@pytest.mark.parametrize('name', _SPECIAL)
+@pytest.mark.parametrize(
+	'decorate',
+	[
+		gl_public.view,
+		gl_public.write,
+		gl_public.write.payable,
+		gl_public.write.min_gas(leader=1, validator=1),
+	],
+)
+def test_special_method_cannot_be_public(name, decorate):
+	def meth(self): ...
+
+	meth.__name__ = name
+	with pytest.raises(TypeError, match=f'`{name}` is called by the VM only'):
+		decorate(meth)
+
+
+@pytest.mark.parametrize(
+	'name, match',
+	[
+		('__init__', 'constructor `__init__` must not be public'),
+		('__other__', 'must not start with `__`: `__other__`'),
+	],
+)
+def test_dunder_cannot_be_public(name, match):
+	def meth(self): ...
+
+	meth.__name__ = name
+	with pytest.raises(TypeError, match=match):
+		gl_public.write(meth)
+
+
+@pytest.mark.parametrize('name', _SPECIAL)
+def test_schema_rejects_public_special_method(name):
+	class Contract:
+		def __init__(self): ...
+
+	def meth(self): ...
+
+	setattr(Contract, name, public(meth))
+	with pytest.raises(TypeError, match=f'`{name}` is called by the VM only'):
 		get_schema(Contract)

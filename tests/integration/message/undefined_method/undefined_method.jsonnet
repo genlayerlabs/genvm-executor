@@ -28,4 +28,16 @@ local util = import 'templates/util.jsonnet';
 			{}
 		|||,
 	},
+	s {
+		code: null,
+		message: msg {
+			"value": 100,
+		},
+		"calldata": |||
+			{
+				"": "main",
+				"args": [],
+			}
+		|||,
+	},
 ])])}
