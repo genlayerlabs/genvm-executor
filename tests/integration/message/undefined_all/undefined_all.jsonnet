@@ -40,4 +40,11 @@ local util = import 'templates/util.jsonnet';
 			}
 		|||,
 	},
+	s {
+		code: null,
+		message: msg,
+		"calldata": |||
+			{}
+		|||,
+	},
 ])])}

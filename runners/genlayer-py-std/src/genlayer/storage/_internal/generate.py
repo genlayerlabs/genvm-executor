@@ -560,8 +560,7 @@ from .numpy import populate_np_descs_if_loaded, try_handle_np  # noqa: E402
 
 @generate_storage
 class _DateTime:
-	# signed so that dates before 1970 can be stored. It is the same 8 bytes as the
-	# ``u64`` it used to be for every value that could be stored before (0 <= v < 2**63)
+	# negative before 1970; non-negative values are laid out as a u64 would be
 	seconds: i64
 	micros: u32
 	has_tz: bool
@@ -585,17 +584,15 @@ class _DateTimeDesc(TypeDesc[datetime.datetime]):
 		dt = _dt_desc.get(slot, off)
 
 		if dt.has_tz:
-			tz = datetime.timezone(
-				datetime.timedelta(
-					days=dt.off_days,
-					seconds=dt.off_seconds,
-					microseconds=dt.off_micros,
-				)
+			tz_off = datetime.timedelta(
+				days=dt.off_days,
+				seconds=dt.off_seconds,
+				microseconds=dt.off_micros,
 			)
-			# plain arithmetic instead of ``time.gmtime``: it gives the same result for every
-			# value, and does not depend on how the platform handles negative timestamps
-			moment = _EPOCH + datetime.timedelta(seconds=dt.seconds, microseconds=dt.micros)
-			return moment.astimezone(tz)
+			since_epoch = datetime.timedelta(seconds=dt.seconds, microseconds=dt.micros)
+			# offset first: near the ends of the range only the local time is representable
+			local = _EPOCH + (since_epoch + tz_off)
+			return local.replace(tzinfo=datetime.timezone(tz_off))
 		t = time.localtime(dt.seconds)
 		return datetime.datetime(
 			year=t.tm_year,
@@ -611,11 +608,8 @@ class _DateTimeDesc(TypeDesc[datetime.datetime]):
 		tz_off = None if val.tzinfo is None else val.utcoffset()
 		if val.tzinfo is not None and tz_off is None:
 			raise ValueError('datetime.utcoffset() returned None')
-		# ``val.timestamp()`` can not be used for the seconds: it is a float that already
-		# contains the microseconds, and from about the year 2514 a float can not hold
-		# ``.999999`` next to that many seconds, so it rounds up to the next second (and
-		# ``datetime.max`` ends up in the year 10000). ``int()`` also truncates towards
-		# zero instead of flooring. Seconds are whole and floored, microseconds are separate
+		# not ``int(val.timestamp())``: the float rounds microseconds up into the next
+		# second for late dates, and ``int`` truncates negative values instead of flooring
 		if tz_off is None:
 			seconds = int(val.replace(microsecond=0).timestamp())
 			micros = val.microsecond

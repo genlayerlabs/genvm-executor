@@ -171,8 +171,8 @@ class Event:
 	        class TransferOccurredEvent(gl.chain.Event):
 	          def __init__(self, sender: Address, to: Address, /, **blob): ...
 
-	Positional arguments are matched with the indexed fields in the order they are declared,
-	while the signature and the topics list the indexed fields **sorted** by name.
+	Positional arguments bind to the indexed fields in declaration order, while the
+	signature and the topics list the indexed fields **sorted** by name.
 	"""
 
 	# editorconfig-checker-enable
@@ -257,9 +257,6 @@ class Event:
 					case inspect.Parameter.POSITIONAL_ONLY:
 						indexed_args_lst.append(name)
 
-		# positional arguments are passed in declaration order, so they must be
-		# matched with names in that same order; ``indexed_args`` is sorted and
-		# is only used for the signature and the order of topics
 		declared_args = tuple(indexed_args_lst)
 		indexed_args = tuple(sorted(indexed_args_lst))
 

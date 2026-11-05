@@ -516,7 +516,7 @@ def run_nondet_default[T: calldata.Decoded](
 	:param compare_vm_errors: Function to compare VMError instances for equality; the default compares only the public code (the part before the first `` # `` detail suffix), ignoring implementation-specific diagnostics
 	:param custom_runners: ``custom:<hash>`` ids visible to the block; ``None`` grants this VM's entire set, a list grants exactly that subset of it
 	:param catch_vm_error: return the block's VM error instead of re-raising it; a fatal one is never caught
-	:return: The leader's value itself, not a :py:data:`Result` (or the ``VMError`` with ``catch_vm_error``)
+	:return: The leader's value itself, not a :py:data:`Result` (or the ``VMError`` with ``catch_vm_error``); a leader's user error is re-raised
 
 	Error handling:
 	- If leader and validator both succeed: returns leader result

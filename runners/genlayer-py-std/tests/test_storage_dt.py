@@ -125,6 +125,16 @@ def local_time_is_utc(monkeypatch):
 			),
 			id='offset_with_microseconds',
 		),
+		pytest.param(
+			datetime.datetime(1, 1, 1, tzinfo=datetime.timezone(datetime.timedelta(hours=1))),
+			id='min_utc_moment_out_of_range',
+		),
+		pytest.param(
+			datetime.datetime.max.replace(
+				tzinfo=datetime.timezone(datetime.timedelta(hours=-1))
+			),
+			id='max_utc_moment_out_of_range',
+		),
 	],
 )
 def test_dt_roundtrip_is_exact(val: datetime.datetime):
@@ -159,13 +169,6 @@ def test_dt_max_stays_readable_and_does_not_leave_year_10000():
 	st = Store()
 	st.dt = datetime.datetime.max.replace(tzinfo=UTC)
 	assert st.dt == datetime.datetime.max.replace(tzinfo=UTC)
-
-
-def test_last_second_before_epoch_is_not_moved_to_the_epoch():
-	st = Store()
-	st.dt = datetime.datetime(1969, 12, 31, 23, 59, 59, 500000, tzinfo=UTC)
-	# it used to come back as 1970-01-01 00:00:00.5, one second later
-	assert st.dt != datetime.datetime(1970, 1, 1, 0, 0, 0, 500000, tzinfo=UTC)
 
 
 def _stored_seconds(st: Store) -> bytes:

@@ -1,8 +1,11 @@
 """
 A numpy scalar storage field must always occupy exactly the size of its declared
-dtype: a value of another dtype may be converted or rejected, but it must never
-change the neighbouring fields.
+dtype: a value of another dtype is rejected and never changes the neighbouring
+fields.
 """
+
+import decimal
+import fractions
 
 import numpy as np
 import pytest
@@ -113,9 +116,7 @@ def test_array_append_of_another_dtype_is_rejected():
 	with pytest.raises(TypeError):
 		b.scores.append(np.float64(2.0))
 
-	# the element stored before is intact. The length after a rejected append is
-	# deliberately not checked: ``DynArray.append`` grows the array before it writes
-	# the element, for every element type, which is unrelated to numpy
+	assert len(b.scores) == 1
 	assert b.scores[0] == np.float32(1.5)
 
 
@@ -172,6 +173,20 @@ def test_python_float_into_integer_field_is_rejected_instead_of_truncated(
 	p = new_player()
 
 	with pytest.raises(TypeError, match='expected an integer'):
+		setattr(p, field, value)
+
+	assert_untouched(p)
+
+
+@pytest.mark.parametrize('field', ['level', 'ratio'])
+@pytest.mark.parametrize(
+	'value',
+	['5', b'1', fractions.Fraction(5, 2), decimal.Decimal('2.5'), True, np.True_, None],
+)
+def test_non_number_is_rejected_instead_of_converted(field: str, value):
+	p = new_player()
+
+	with pytest.raises(TypeError, match='expected'):
 		setattr(p, field, value)
 
 	assert_untouched(p)

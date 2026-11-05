@@ -24,7 +24,7 @@ Handles standard contract method calls and initialization.
 
 * Loads user ``contract`` module and resolves the target method of a declared ``Contract`` class
 * Validates method access permissions (public/private, payable)
-* Handles special methods: ``__receive__``, ``__handle_undefined_method__``
+* Handles special methods: ``__receive__`` and the 2 fallbacks, see :ref:`method-dispatch`
 * Routes initialization calls to ``__init__`` method
 * Enforces security restrictions on dunder methods
 

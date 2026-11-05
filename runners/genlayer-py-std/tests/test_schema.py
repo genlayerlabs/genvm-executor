@@ -137,6 +137,7 @@ _SPECIAL = [
 		gl_public.write,
 		gl_public.write.payable,
 		gl_public.write.min_gas(leader=1, validator=1),
+		gl_public.write.min_gas(leader=1, validator=1).payable,
 	],
 )
 def test_special_method_cannot_be_public(name, decorate):
