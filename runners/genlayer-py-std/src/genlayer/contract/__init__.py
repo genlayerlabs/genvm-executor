@@ -245,7 +245,7 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 	) -> None:
 		"""
 		Emit a simple value transfer without calling any method. Receiver may catch it with
-		:py:meth:`Contract.__receive__` method, so users may need to supply non-zero gas
+		:py:meth:`Contract.__receive__` (see :ref:`method-dispatch`), so users may need to supply non-zero gas
 
 		:param value: Amount of native tokens to transfer
 		:param on: When transaction message should be emitted to consensus
@@ -658,46 +658,54 @@ class Contract(IAccount):
 		self, method_name: str, args: list[typing.Any], kwargs: dict[str, typing.Any]
 	):
 		"""
-		Handle calls to undefined methods.
+		Handle a call without value to a method the contract does not define.
 
-		This method is called when a message is sent to the contract with a method
-		name that doesn't exist. If it is overridden, it must be either a ``gl.public.write``
-		or ``gl.public.write.payable`` method.
+		Defaults to :py:meth:`__handle_undefined_method_payable__`. Like every special
+		method it is called by the VM only, so it must not be decorated with ``gl.public``.
+		See :ref:`method-dispatch`
 
 		:param method_name: Name of the method that was called
 		:param args: Positional arguments passed to the method
 		:param kwargs: Keyword arguments passed to the method
-		:raises NotImplementedError: Must be implemented by subclasses if used
 
 		Example:
 			>>> class MyContract(gl.contract.Contract):
-			>>>     @gl.public.write
 			>>>     def __handle_undefined_method__(self, method_name: str, args: list, kwargs: dict):
 			>>>         if method_name == "fallback_method":
 			>>>             self.handle_fallback(args, kwargs)
 			>>>         else:
 			>>>             raise ValueError(f"Unknown method: {method_name}")
 		"""
+		return self.__handle_undefined_method_payable__(method_name, args, kwargs)
+
+	def __handle_undefined_method_payable__(
+		self, method_name: str, args: list[typing.Any], kwargs: dict[str, typing.Any]
+	):
+		"""
+		Handle a call to a method the contract does not define, with or without value.
+
+		Without an override, a call with value to an undefined method is refused.
+		It also receives a plain transfer if the contract does not define
+		:py:meth:`__receive__`, with ``method_name`` set to ``''``.
+		See :ref:`method-dispatch`
+
+		:param method_name: Name of the method that was called
+		:param args: Positional arguments passed to the method
+		:param kwargs: Keyword arguments passed to the method
+		"""
 		raise NotImplementedError()
 
 	def __receive__(self):
 		"""
-		Handle plain value transfers to this contract.
+		Handle a plain value transfer to this contract.
 
-		This method is called when native tokens are sent to the contract
-		without calling any specific method. It must be implemented as a
-		public payable write method.
-
-		:raises NotImplementedError: Must be implemented by subclasses if used
+		It is always payable and must not be decorated with ``gl.public``.
+		See :ref:`method-dispatch`
 
 		Example:
 			>>> class MyContract(gl.contract.Contract):
-			>>>     @gl.public.write.payable
 			>>>     def __receive__(self):
-			>>> # Handle incoming transfers
-			>>>         sender = gl.message.sender
-			>>>         value = gl.message.value
-			>>>         self.total_received += value
+			>>>         self.total_received += gl.message.value
 		"""
 		raise NotImplementedError()
 
@@ -723,6 +731,7 @@ class Contract(IAccount):
 
 
 Contract.__handle_undefined_method__.__isabstractmethod__ = True  # type: ignore
+Contract.__handle_undefined_method_payable__.__isabstractmethod__ = True  # type: ignore
 Contract.__receive__.__isabstractmethod__ = True  # type: ignore
 
 __known_contract__: type[Contract] | None = None

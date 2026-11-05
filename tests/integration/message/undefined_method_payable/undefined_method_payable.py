@@ -6,13 +6,12 @@ import genlayer as gl
 
 
 class Contract(gl.contract.Contract):
-	@gl.public.write.payable
-	def __handle_undefined_method__(
+	def __handle_undefined_method_payable__(
 		self, method_name: str, args: list[typing.Any], kwargs: dict[str, typing.Any]
 	):
 		print(
 			{
-				'me': '__handle_undefined_method__',
+				'me': '__handle_undefined_method_payable__',
 				'method_name': method_name,
 				'args': args,
 				'kwargs': kwargs,
@@ -20,6 +19,5 @@ class Contract(gl.contract.Contract):
 			}
 		)
 
-	@gl.public.write.payable
 	def __receive__(self):
 		print({'me': '__receive__', 'value': gl.message.value})

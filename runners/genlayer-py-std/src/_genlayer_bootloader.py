@@ -80,14 +80,33 @@ def _handle_main() -> typing.NoReturn:
 		msg: gl_message.MessageRawType
 		contract_type: type[Contract]
 
+	def is_abstract(meth: typing.Callable) -> bool:
+		return getattr(meth, '__isabstractmethod__', False)
+
 	def check_abstracts(ctx: MethodResolverInfo, meth: typing.Callable) -> str | None:
-		if getattr(meth, '__isabstractmethod__', False):
+		if is_abstract(meth):
 			return f'method is abstract `{meth}`'
 		if not _get_schema._is_public(meth):
 			return f'call to private method `{meth}`'
 		if ctx.msg['value'] > 0 and not getattr(meth, _get_schema.PAYABLE_ATTR, False):
 			return f'called non-payable method `{meth}` with non-zero value'
 		return None
+
+	def call_fallback(ctx: MethodResolverInfo) -> typing.NoReturn:
+		cls = ctx.contract_type
+		payable = cls.__handle_undefined_method_payable__
+		handler = payable if ctx.msg['value'] > 0 else cls.__handle_undefined_method__
+		if is_abstract(handler):
+			handler = payable
+		if is_abstract(handler):
+			if ctx.msg['value'] > 0:
+				raise ValueError(
+					f'call to undefined method `{ctx.selector}` with non-zero value: '
+					'define `__handle_undefined_method_payable__` to accept it'
+				)
+			raise ValueError(f'call to undefined method `{ctx.selector}`')
+		contract = root_slot.get_contract_instance(cls)
+		_give_result(lambda: handler(contract, ctx.selector, ctx.args, ctx.kwargs))
 
 	def resolve_method(ctx) -> typing.Callable:
 		if ctx.msg['is_init']:
@@ -103,20 +122,9 @@ def _handle_main() -> typing.NoReturn:
 			case ABI.SpecialMethod.GET_SCHEMA:
 				_give_result(ctx.contract_type.__get_schema__)
 			case '':
-				if err := check_abstracts(ctx, ctx.contract_type.__receive__):
-					if err2 := check_abstracts(
-						ctx, ctx.contract_type.__handle_undefined_method__
-					):
-						exc = ValueError(err2)
-						exc.add_note(err)
-						raise exc
-					else:
-						contract = root_slot.get_contract_instance(ctx.contract_type)
-						_give_result(
-							lambda: contract.__handle_undefined_method__('', ctx.args, ctx.kwargs)
-						)
-				else:
-					return ctx.contract_type.__receive__
+				if is_abstract(ctx.contract_type.__receive__):
+					call_fallback(ctx)
+				return ctx.contract_type.__receive__
 			case x:
 				if x.startswith('__'):
 					raise ValueError('calls to methods that start with __ is forbidden')
@@ -127,14 +135,7 @@ def _handle_main() -> typing.NoReturn:
 					if err := check_abstracts(ctx, meth):
 						raise ValueError(err)
 					return meth
-				if err := check_abstracts(ctx, ctx.contract_type.__handle_undefined_method__):
-					raise ValueError(err)
-				contract = root_slot.get_contract_instance(ctx.contract_type)
-				_give_result(
-					lambda: contract.__handle_undefined_method__(
-						ctx.selector, ctx.args, ctx.kwargs
-					)
-				)
+				call_fallback(ctx)
 
 	# load contract, it should set __known_contact__
 	import contract as _user_contract_module  # noqa # pyright: ignore[reportMissingImports]

@@ -43,7 +43,7 @@ For MAIN entry kind, the bootloader implements comprehensive method resolution:
 
 * **Initialization**: Routes to private ``__init__`` method during contract deployment
 * **Named Methods**: Resolves public method calls by name with validation
-* **Special Handling**: Supports ``__receive__`` for direct calls and ``__handle_undefined_method__`` for undefined method calls
+* **Special Handling**: Routes plain transfers to ``__receive__`` and calls to undefined methods to the fallbacks, see :ref:`method-dispatch`
 * **Security**: Blocks calls to methods starting with ``__`` and unknown special methods starting with ``#``
 
 Error Handling

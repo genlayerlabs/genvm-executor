@@ -106,6 +106,22 @@ A ``catch_vm_error`` flag makes the callee's VM error a value instead of a re-ra
 
     res = gl.contract.get_at(addr).view(catch_vm_error=True).balance_of(owner)
 
+``gl.vm.unpack_result`` now raises ``TypeError`` on anything but a ``Result``, such as the value ``run_nondet`` already returns, instead of an ``AttributeError``
+
+Special Methods Are Not Public
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``__receive__`` and the fallbacks are called by the VM only and must not be decorated; a ``gl.public`` decorator on them, or on any other ``__*`` method, raises ``TypeError``. ``__receive__`` is always payable, and a payable fallback is now a method of its own, see :ref:`method-dispatch`:
+
+.. code-block:: python
+
+    # before
+    @gl.public.write.payable
+    def __handle_undefined_method__(self, method_name, args, kwargs): ...
+
+    # now
+    def __handle_undefined_method_payable__(self, method_name, args, kwargs): ...
+
 Calldata
 ~~~~~~~~
 
@@ -287,7 +303,7 @@ Write-call and deploy APIs now take an ``on`` keyword controlling when the messa
     contract.emit(value=100, on='finalized').transfer(to, amount)
     gl.contract.deploy(code=source, value=1000, on='finalized', salt_nonce=42)
 
-A new ``emit_transfer`` helper sends a plain value transfer without a method call. The receiver may catch it via ``Contract.__receive__`` (must be ``@gl.public.write.payable``):
+A new ``emit_transfer`` helper sends a plain value transfer without a method call. The receiver may catch it via ``Contract.__receive__``, see :ref:`method-dispatch`:
 
 .. code-block:: python
 
