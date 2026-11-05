@@ -407,10 +407,7 @@ class TupleCodec[*T](Codec[tuple[*T]]):
 			der = state.derived()
 		else:
 			der = state
-		# members must be written right here, in order: for a static tuple ``der`` is
-		# the state shared with the surrounding head, so a member queued as a tail
-		# would end up after every head value that follows the tuple. Members that are
-		# dynamic queue their own tails in ``encode``
+		# a static tuple shares the enclosing head, so its members go in place, not as tails
 		for p, a in zip(self.elem_encoders, val):
 			p.encode(der, a)
 		if self._is_dynamic:

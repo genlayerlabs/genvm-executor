@@ -14,7 +14,7 @@ PAYABLE_ATTR = '__gl_payable__'
 
 def public_name_error(name: str) -> str | None:
 	"""
-	Why a method called ``name`` cannot be public, if it cannot
+	Error message if a method called ``name`` cannot be public
 	"""
 	if name == '__init__':
 		return (

@@ -21,9 +21,13 @@ def integration():
 		``save-hashes`` — track committed ``.hash`` goldens for this executor
 		line. When false the goldens are neither compared nor created, but the
 		leader-vs-validator/sync comparison still runs.
+		``transaction-timestamp`` — default ``transaction_timestamp`` of every
+		case message. It must not precede any runner's ``available-after``, or
+		``:test`` resolves that runner as malformed.
 	"""
 	return {
 		'save-hashes': True,
+		'transaction-timestamp': '2026-12-01T06:42:42.424242Z',
 	}
 
 

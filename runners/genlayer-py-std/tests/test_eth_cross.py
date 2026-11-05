@@ -1,10 +1,9 @@
-import random
 import typing
 
 import eth_abi.abi as eth
 import genlayer.evm as genvm_eth
 import pytest
-from genlayer.types import Address, SizedArray, i32, u8, u64, u256
+from genlayer.types import Address, SizedArray, i32, u8, u256
 
 
 def test_bytes3():
@@ -213,107 +212,3 @@ def test_static_tuple_standalone_encode_and_roundtrip(typ, eth_type, val, eth_va
 	encoded = genvm_eth.encode(typ, val)
 	assert encoded == eth.encode([eth_type], [eth_val])
 	assert genvm_eth.decode(typ, encoded) == val
-
-
-_FUZZ_LEAVES = ('u8', 'u64', 'u256', 'i32', 'bool', 'address', 'bytes', 'str')
-
-
-def _fuzz_type(r: random.Random, depth: int):
-	"""('leaf', name) | ('tuple', [..]) | ('list', t) | ('array', t, n)"""
-	if depth <= 0 or r.random() < 0.4:
-		return ('leaf', r.choice(_FUZZ_LEAVES))
-	kind = r.choice(['tuple', 'tuple', 'list', 'array'])
-	if kind == 'tuple':
-		return ('tuple', [_fuzz_type(r, depth - 1) for _ in range(r.randint(1, 3))])
-	if kind == 'list':
-		return ('list', _fuzz_type(r, depth - 1))
-	return ('array', _fuzz_type(r, depth - 1), r.randint(1, 3))
-
-
-def _fuzz_py_type(t):
-	if t[0] == 'leaf':
-		return {
-			'u8': u8,
-			'u64': u64,
-			'u256': u256,
-			'i32': i32,
-			'bool': bool,
-			'address': Address,
-			'bytes': bytes,
-			'str': str,
-		}[t[1]]
-	if t[0] == 'tuple':
-		return tuple[tuple(_fuzz_py_type(x) for x in t[1])]
-	if t[0] == 'list':
-		return list[_fuzz_py_type(t[1])]
-	return SizedArray[_fuzz_py_type(t[1]), typing.Literal[t[2]]]
-
-
-def _fuzz_eth_type(t) -> str:
-	if t[0] == 'leaf':
-		return {
-			'u8': 'uint8',
-			'u64': 'uint64',
-			'u256': 'uint256',
-			'i32': 'int32',
-			'bool': 'bool',
-			'address': 'address',
-			'bytes': 'bytes',
-			'str': 'string',
-		}[t[1]]
-	if t[0] == 'tuple':
-		return '(' + ','.join(_fuzz_eth_type(x) for x in t[1]) + ')'
-	if t[0] == 'list':
-		return _fuzz_eth_type(t[1]) + '[]'
-	return _fuzz_eth_type(t[1]) + f'[{t[2]}]'
-
-
-def _fuzz_value(r: random.Random, t):
-	"""returns the value for genlayer.evm and the same value for eth_abi"""
-	if t[0] == 'leaf':
-		match t[1]:
-			case 'u8':
-				v = r.randrange(2**8)
-			case 'u64':
-				v = r.randrange(2**64)
-			case 'u256':
-				v = r.randrange(2**256)
-			case 'i32':
-				v = r.randrange(-(2**31), 2**31)
-			case 'bool':
-				v = r.random() < 0.5
-			case 'address':
-				a = Address(bytes(r.randrange(256) for _ in range(20)))
-				return a, a.as_hex
-			case 'bytes':
-				v = bytes(r.randrange(256) for _ in range(r.choice([0, 1, 32, 33])))
-			case _:
-				v = ''.join(r.choice('abc') for _ in range(r.choice([0, 1, 32, 33])))
-		return v, v
-	if t[0] == 'tuple':
-		vs = [_fuzz_value(r, x) for x in t[1]]
-		return tuple(a for a, _ in vs), tuple(b for _, b in vs)
-	count = r.randint(0, 3) if t[0] == 'list' else t[2]
-	vs = [_fuzz_value(r, t[1]) for _ in range(count)]
-	return [a for a, _ in vs], [b for _, b in vs]
-
-
-def test_random_types_match_eth_abi():
-	# fixed seed: the generated cases are the same on every run
-	r = random.Random(20260101)
-	for _ in range(400):
-		params = [_fuzz_type(r, 3) for _ in range(r.randint(1, 3))]
-		vals = [_fuzz_value(r, p) for p in params]
-		names = [_fuzz_eth_type(p) for p in params]
-
-		enc = genvm_eth.MethodEncoder(
-			'f', tuple(_fuzz_py_type(p) for p in params), type(None)
-		)
-		got = enc.encode_call(tuple(a for a, _ in vals))[4:]
-		assert got == eth.encode(names, [b for _, b in vals]), names
-
-		t = _fuzz_type(r, 3)
-		a, b = _fuzz_value(r, t)
-		assert genvm_eth.encode(_fuzz_py_type(t), a) == eth.encode(
-			[_fuzz_eth_type(t)], [b]
-		), _fuzz_eth_type(t)

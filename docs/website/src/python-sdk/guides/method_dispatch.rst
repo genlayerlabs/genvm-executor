@@ -96,7 +96,7 @@ Dispatch
       Name -- "empty" --> HasRecv{"__receive__ defined?"}
       HasRecv -- yes --> Recv["__receive__"]
       HasRecv -- no --> Value
-      Name -- "starts with __" --> Refuse["Refused"]
+      Name -- "starts with __, or an unknown #" --> Refuse["Refused"]
       Name -- "other" --> Defined{"Method defined?"}
       Defined -- yes --> Check{"Public, and payable if value is non-zero?"}
       Check -- yes --> Meth["The method"]

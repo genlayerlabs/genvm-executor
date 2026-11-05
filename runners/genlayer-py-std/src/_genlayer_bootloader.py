@@ -83,7 +83,7 @@ def _handle_main() -> typing.NoReturn:
 	def is_abstract(meth: typing.Callable) -> bool:
 		return getattr(meth, '__isabstractmethod__', False)
 
-	def check_abstracts(ctx: MethodResolverInfo, meth: typing.Callable) -> str | None:
+	def check_callable(ctx: MethodResolverInfo, meth: typing.Callable) -> str | None:
 		if is_abstract(meth):
 			return f'method is abstract `{meth}`'
 		if not _get_schema._is_public(meth):
@@ -99,6 +99,10 @@ def _handle_main() -> typing.NoReturn:
 		if is_abstract(handler):
 			handler = payable
 		if is_abstract(handler):
+			if ctx.selector == '':
+				raise ValueError(
+					'plain transfer: define `__receive__` or `__handle_undefined_method_payable__` to accept it'
+				)
 			if ctx.msg['value'] > 0:
 				raise ValueError(
 					f'call to undefined method `{ctx.selector}` with non-zero value: '
@@ -132,7 +136,7 @@ def _handle_main() -> typing.NoReturn:
 					raise ValueError(f'unknown special method {x}')
 				meth = getattr(ctx.contract_type, x, None)
 				if meth is not None:
-					if err := check_abstracts(ctx, meth):
+					if err := check_callable(ctx, meth):
 						raise ValueError(err)
 					return meth
 				call_fallback(ctx)

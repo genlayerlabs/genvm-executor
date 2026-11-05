@@ -53,7 +53,9 @@ let
       };
 
       genlayer-std = {
-        hash = "sha256-+d+0LvZ2pD5WTUZqXJevvtw8fRWmrkrbjxXbuuSn/KE=";
+        hash = "sha256-PksnxuFxyJ5pMoisrXko6z9xeIeeHTRMxPxoJMiO0HY=";
+        available-after = "2026-12-01T00:00:00Z";
+        supersedes = "z7fv8bqpetj3wnjd8sn5s5xfqve3rz8nmtq4npwf2qdvns57zjgg";
         depends = [
           top
         ];
@@ -87,7 +89,9 @@ let
     wrappers = {
       __prefix = "";
       py-genlayer = {
-        hash = "sha256-WpfLJ0M8uJgSQlsZCoSQN0/U5C87c0id1N/OMtvk/1Q=";
+        hash = "sha256-GIcaWExUo/cmpIKNIsSZKq7YeEe/GfcCxrRn9kCr7lk=";
+        available-after = "2026-12-01T00:00:00Z";
+        supersedes = "babwp9t37jw9g4j2bccgn14g6x7x9s1f7dsmh7emvz735pz4zxa0";
         depends = [
           cpython
           pyLibs.cloudpickle
@@ -95,7 +99,9 @@ let
         ];
       };
       py-genlayer-multi = {
-        hash = "sha256-E83q9vT/4BbRmVSLQUwrCuFnB8NBQePuNEUE53GbgEY=";
+        hash = "sha256-zkeQjXwF16fI+1JyAA56sv/wh2IvGoZZqXcrG1HJ5rQ=";
+        available-after = "2026-12-01T00:00:00Z";
+        supersedes = "2f6ynxqmzzg1dmcsaj5m2k1b1bgpe1y3850y7vhm8m2eewcvg130";
         depends = [
           cpython
           pyLibs.cloudpickle

@@ -56,6 +56,7 @@ class ContractDeclaration[TView, TWrite](typing.Protocol):
 	Interface for declaring interfaces of external contracts
 	"""
 
+	__qualname__: str
 	View: type[TView]
 	Write: type[TWrite]
 

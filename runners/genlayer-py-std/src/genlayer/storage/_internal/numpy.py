@@ -47,7 +47,7 @@ def _populate_np_descs():
 	class _NumpyDesc(TypeDesc):
 		__slots__ = ('_typ', '_type')
 
-		def __init__(self, typ: np.number):
+		def __init__(self, typ: type[np.number]):
 			numpy_type = np.dtype(typ)
 			TypeDesc.__init__(self, numpy_type.itemsize, [numpy_type.itemsize])
 			self._type = numpy_type
@@ -58,25 +58,22 @@ def _populate_np_descs():
 			return np.frombuffer(dat, self._typ).reshape((1,))[0]
 
 		def set(self, slot: Slot, off: int, val):
-			# ``np.generic.tobytes`` serializes a value at *its own* width, so a value
-			# of another dtype used to write the wrong number of bytes and overwrite
-			# the neighbouring fields. Build the bytes from the declared dtype instead,
-			# which makes their length always equal to the size of the field.
+			# numpy would cast anything else silently: ``np.uint8(np.uint32(70000)) == 112``,
+			# ``np.uint8(2.5) == 2``, ``np.uint8('5') == 5``
 			if isinstance(val, np.generic):
-				# numpy casts between scalar dtypes silently (for example
-				# ``np.uint8(np.uint32(70000)) == 112``), do not store such values
 				if val.dtype != self._type:
 					raise TypeError(
 						f'expected a value of dtype {self._type}, got {val.dtype}, '
 						f'convert it explicitly: {self._typ.__name__}(value)'
 					)
-			elif isinstance(val, float) and self._type.kind != 'f':
-				# numpy truncates ``np.uint8(2.5)`` to ``2``
+			elif isinstance(val, bool) or not (
+				isinstance(val, int) or (isinstance(val, float) and self._type.kind == 'f')
+			):
+				expected = 'a number' if self._type.kind == 'f' else 'an integer'
 				raise TypeError(
-					f'expected an integer for a field of dtype {self._type}, got {val!r}, '
-					f'convert it explicitly: {self._typ.__name__}(value)'
+					f'expected {expected} for a field of dtype {self._type}, got {val!r}'
 				)
-			slot.write(off, self._typ(val).tobytes())
+			slot.write(off, np.asarray(val, dtype=self._type).tobytes())
 
 	_all_np_types: list[type[np.number]] = [
 		np.uint8,

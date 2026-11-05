@@ -240,14 +240,12 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 
 		:param value: value to append
 
-		The length is increased before the value is written. If writing the
-		value fails, the new element remains visible with whatever data its
-		storage previously contained, or its zero-initialized value.
+		The value is written before the length is increased, so a failed write
+		leaves the length unchanged. Bytes it wrote past the end stay in storage;
+		later growth can expose them again, as after :py:meth:`clear`.
 		"""
 		le = len(self)
 		items_at = self._storage_slot.indirect(self._off)
-		# write the element first: the location does not depend on the stored length,
-		# and if the descriptor rejects the value the array must stay as it was
 		self._item_desc.set(items_at, le * self._item_desc.size, value)
 		_u32_desc.set(self._storage_slot, self._off, le + 1)
 

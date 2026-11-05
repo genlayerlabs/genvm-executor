@@ -428,16 +428,6 @@ def test_popped_non_last_storage_value_tracks_shifted_slot():
 	assert popped.value == 2
 
 
-def test_failed_append_exposes_new_element():
-	lx = new_typed_vec(u8)
-	lx.append(1)
-
-	with pytest.raises(OverflowError):
-		lx.append(256)
-
-	assert list(lx) == [1, 0]
-
-
 def test_failed_assign_leaves_array_empty():
 	lx = new_typed_vec(u8)
 	lx.assign([3, 4])
@@ -498,14 +488,8 @@ def test_delitem_out_of_range(idx: int):
 		del lx[idx]
 
 
-def new_vec_of(item_type):
-	td = _storage_build(_BuilderCtx.empty(), DynArray[item_type])
-	man = InmemManager()
-	return td.get(man.get_store_slot(ROOT_SLOT_ID), 0)
-
-
 def test_append_rejected_value_leaves_array_unchanged():
-	vec = new_vec_of(u32)
+	vec = new_typed_vec(u32)
 	vec.append(5)
 
 	with pytest.raises(OverflowError):
@@ -516,7 +500,7 @@ def test_append_rejected_value_leaves_array_unchanged():
 
 
 def test_append_after_rejected_value_works():
-	vec = new_vec_of(u32)
+	vec = new_typed_vec(u32)
 	vec.append(5)
 
 	with pytest.raises(OverflowError):
@@ -527,7 +511,7 @@ def test_append_after_rejected_value_works():
 
 
 def test_append_rejected_value_into_empty_array():
-	vec = new_vec_of(u32)
+	vec = new_typed_vec(u32)
 
 	with pytest.raises(OverflowError):
 		vec.append(-1)
@@ -537,7 +521,7 @@ def test_append_rejected_value_into_empty_array():
 
 
 def test_append_rejected_nested_value_leaves_array_unchanged():
-	vec = new_vec_of(DynArray[u32])
+	vec = new_typed_vec(DynArray[u32])
 	vec.append([1, 2])
 
 	# the nested array is written element by element and fails on the second one
@@ -553,5 +537,5 @@ def test_append_rejected_nested_value_leaves_array_unchanged():
 
 
 def test_append_returns_none():
-	vec = new_vec_of(u32)
+	vec = new_typed_vec(u32)
 	assert vec.append(1) is None

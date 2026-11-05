@@ -660,7 +660,8 @@ class Contract(IAccount):
 		"""
 		Handle a call without value to a method the contract does not define.
 
-		Defaults to :py:meth:`__handle_undefined_method_payable__`. Like every special
+		It also receives a plain transfer without value if the contract does not define
+		:py:meth:`__receive__`, with ``method_name`` set to ``''``. Defaults to :py:meth:`__handle_undefined_method_payable__`. Like every special
 		method it is called by the VM only, so it must not be decorated with ``gl.public``.
 		See :ref:`method-dispatch`
 
