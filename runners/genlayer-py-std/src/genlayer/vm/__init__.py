@@ -213,20 +213,27 @@ def unpack_result[T: calldata.Decoded](res: Result[T], /) -> T:
 	"""
 	Extracts the successful result from a VM operation result.
 
-	:param res: The result from a VM operation
+	:param res: A :py:data:`Result`, as :py:func:`spawn_sandbox` returns or ``validator_fn`` receives
 	:return: The actual return value if successful
 	:raises UserError: If the result represents a user error
 	:raises UserError: If the result represents a ``VMError`` (rewrapped as user error)
+	:raises TypeError: If ``res`` is not a :py:data:`Result`, e.g. the value
+		:py:func:`run_nondet` already unwrapped
 
 	Example:
 		>>> result = gl.vm.spawn_sandbox(lambda: 42)
 		>>> value = unpack_result(result)  # Returns 42 or re-raises on error
 	"""
+	if isinstance(res, Return):
+		return res.calldata
 	if isinstance(res, UserError):
 		raise res
 	if isinstance(res, VMError):
 		raise UserError('vm error: ' + res.message)
-	return res.calldata
+	raise TypeError(
+		f'unpack_result expects a `Return`, `VMError` or `UserError`, got `{type(res).__name__}`; '
+		'`run_nondet` and `run_nondet_default` already return the unwrapped value'
+	)
 
 
 def _decode_sub_vm_result(
@@ -397,10 +404,10 @@ def run_nondet[T: calldata.Decoded](
 	runs as is, and each validator checks the result.
 
 	:param leader_fn: Function executed by the leader node (must be serializable)
-	:param validator_fn: Function that validates the leader's result and returns bool
+	:param validator_fn: Function that receives the leader's :py:data:`Result` and returns whether it agrees
 	:param custom_runners: ``custom:<hash>`` ids visible to the block; ``None`` grants this VM's entire set, a list grants exactly that subset of it
 	:param catch_vm_error: return the block's VM error instead of re-raising it; a fatal one is never caught
-	:return: The result from the leader (iff validation passes, otherwise VM will be terminated)
+	:return: The leader's value itself, not a :py:data:`Result` (or the ``VMError`` with ``catch_vm_error``); a leader's user error is re-raised. If validators disagree, the VM is terminated
 
 	.. warning::
 		This function does not use extra sandbox for catching validator errors.
@@ -504,12 +511,12 @@ def run_nondet_default[T: calldata.Decoded](
 	in a sandbox and handling validator errors with provided functions with sensible defaults.
 
 	:param leader_fn: Function executed by the leader node
-	:param validator_fn: Function that validates the leader's result and runs in a sandbox
+	:param validator_fn: Function that receives the leader's :py:data:`Result`, runs in a sandbox and returns whether it agrees
 	:param compare_user_errors: Function to compare UserError instances for equality
 	:param compare_vm_errors: Function to compare VMError instances for equality; the default compares only the public code (the part before the first `` # `` detail suffix), ignoring implementation-specific diagnostics
 	:param custom_runners: ``custom:<hash>`` ids visible to the block; ``None`` grants this VM's entire set, a list grants exactly that subset of it
 	:param catch_vm_error: return the block's VM error instead of re-raising it; a fatal one is never caught
-	:return: The result from the leader if validation passes
+	:return: The leader's value itself, not a :py:data:`Result` (or the ``VMError`` with ``catch_vm_error``)
 
 	Error handling:
 	- If leader and validator both succeed: returns leader result
