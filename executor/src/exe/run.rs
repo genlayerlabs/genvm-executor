@@ -84,6 +84,12 @@ pub struct Args {
         help = "r?w?s?c?n?u?, read/write/send messages/call contracts/spawn nondet/register runners"
     )]
     permissions: String,
+    #[arg(
+        long,
+        help = "active forks; accepted for the manager's sake and ignored"
+    )]
+    #[allow(dead_code)]
+    forks: Option<String>,
     #[clap(long, help = "override LLM module address from config")]
     module_llm: Option<String>,
     #[clap(long, help = "override web module address from config")]

@@ -13,6 +13,12 @@ pub struct Args {
         help = "after verification, precompile all runners into the on-disk cache"
     )]
     precompile: bool,
+    #[arg(
+        long,
+        help = "forks the manager's schedule defines; accepted for the manager's sake and ignored"
+    )]
+    #[allow(dead_code)]
+    defined_forks: Option<String>,
 }
 
 fn read_registry<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> anyhow::Result<T> {
