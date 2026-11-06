@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use genlayer_sdk::abi;
 use genvm_common::internal_constants;
@@ -155,6 +155,74 @@ fn check_local_header_agrees(
     Ok(())
 }
 
+const ZIP_LOCAL_FLAGS_OFFSET: u64 = 6;
+const ZIP_CENTRAL_FLAGS_OFFSET: u64 = 8;
+
+/// Both headers were bounds-checked before, the local one here and the central
+/// one by the zip crate.
+fn flags_at(bytes: &[u8], header: u64, offset: u64) -> u16 {
+    let start: usize = (header + offset).into_int_comptime();
+    u16::from_le_bytes([bytes[start], bytes[start + 1]])
+}
+
+/// An entry's local header through the end of its data.
+struct Record {
+    index: usize,
+    header_start: u64,
+    central_header_start: u64,
+    end: u64,
+}
+
+/// Rejections no known writer triggers; they run last, so earlier errors win.
+fn check_layout<'a>(
+    bytes: &[u8],
+    mut records: Vec<Record>,
+    names: impl Iterator<Item = &'a str>,
+    files: &BTreeMap<String, bytes::Bytes>,
+) -> errors::Result<()> {
+    for record in &records {
+        let local = flags_at(bytes, record.header_start, ZIP_LOCAL_FLAGS_OFFSET);
+        let central = flags_at(bytes, record.central_header_start, ZIP_CENTRAL_FLAGS_OFFSET);
+        if local != central {
+            return Err(malformed_runner(format!(
+                "ZIP entry {} local flags {local:#06x} contradict the central {central:#06x}",
+                record.index
+            )));
+        }
+    }
+
+    // The zip crate's own overlap check skips empty entries and ignores headers.
+    records.sort_by_key(|record| record.header_start);
+    if records
+        .windows(2)
+        .any(|pair| pair[0].end > pair[1].header_start)
+    {
+        return Err(malformed_runner("ZIP entries overlap"));
+    }
+
+    let names: BTreeSet<&str> = names.collect();
+    let mut directory = String::new();
+    for name in files.keys() {
+        directory.clear();
+        directory.push_str(name);
+        directory.push('/');
+        if let Some(child) = names
+            .range::<str, _>((
+                std::ops::Bound::Included(directory.as_str()),
+                std::ops::Bound::Unbounded,
+            ))
+            .next()
+            .filter(|child| child.starts_with(directory.as_str()))
+        {
+            return Err(malformed_runner(format!(
+                "file {name} is also a directory of {child}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 impl Archive {
     /// Open `bytes` as a zip and read it. Entry offsets are resolved against the
     /// very buffer the central directory was read from, which is why the caller
@@ -175,6 +243,7 @@ impl Archive {
     ) -> errors::Result<Self> {
         let mut res = BTreeMap::new();
         let mut meta_size = 0u32;
+        let mut records = Vec::new();
 
         for i in 0..zip.len() {
             let file = zip
@@ -200,6 +269,12 @@ impl Archive {
 
             let start_index = file.data_start();
             let compressed_size = file.compressed_size();
+            let record = |end| Record {
+                index: i,
+                header_start: file.header_start(),
+                central_header_start: file.central_header_start(),
+                end,
+            };
             // A stored entry is copied verbatim, so both sizes describe the same
             // bytes; disagreeing ones mean the archive lies about at least one.
             if compressed_size != file.size() {
@@ -219,6 +294,7 @@ impl Archive {
                         file.crc32()
                     )));
                 }
+                records.push(record(start_index));
                 continue;
             }
             let end_index = start_index.checked_add(compressed_size).ok_or_else(|| {
@@ -262,19 +338,19 @@ impl Archive {
                 ));
             }
 
+            records.push(record(end_index));
             // Last entry of a repeated name wins. The zip crate already collapses
             // duplicates by decoded name, so this only matters if that changes.
             res.insert(String::from(file.name()), buf);
         }
 
-        let res = Self {
+        check_layout(bytes.as_ref(), records, zip.file_names(), &res)?;
+
+        Ok(Self {
             data: res,
             total_size: bytes.len().into_int_downcast_panicking(),
             meta_size,
-        };
-        // The sum of entry lengths may exceed `total_size`: a crafted zip can point
-        // several entries at overlapping data ranges. That is attacker input, not a bug.
-        Ok(res)
+        })
     }
 
     pub fn from_file_and_runner(

@@ -181,18 +181,17 @@ pub(crate) async fn resolve_runner_id(
             let hash_gvm32 = hash.to_gvm32();
             // A contract picks this pair, so an uninstalled one must reach it
             // as a canonical error rather than as an internal abort. A runner
-            // that is not available yet fails identically, as on an executor
-            // that does not ship it.
+            // none of whose forks is active fails identically, as on an
+            // executor that does not ship it.
             match supervisor.runner_cache.get_version(&name, &hash_gvm32) {
                 None => {
                     return Err(make_malformed_runner_error(&format!(
                         "runner `{name}:{hash_gvm32}` is not installed"
                     )));
                 }
-                Some(version) if !version.is_available_at(supervisor.transaction_timestamp) => {
+                Some(version) if !version.is_visible_in(&supervisor.forks) => {
                     return Err(make_malformed_runner_error(&format!(
-                        "runner `{name}:{hash_gvm32}` is not available at {}",
-                        supervisor.transaction_timestamp
+                        "runner `{name}:{hash_gvm32}` is not available on this network"
                     )));
                 }
                 Some(_) => {}

@@ -22,7 +22,7 @@ fn registry_with_one_builtin() -> (std::path::PathBuf, runners::cache::Reader) {
     std::fs::create_dir_all(&runners_dir).unwrap();
     std::fs::write(
         root.join("all.json"),
-        format!(r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{}}}}}}}}"#),
+        format!(r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{"forks": "genvm/executor/v0.3"}}}}}}}}"#),
     )
     .unwrap();
 

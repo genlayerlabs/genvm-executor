@@ -11,6 +11,11 @@ pub struct Args {
         help = "after verification, precompile all runners into the on-disk cache"
     )]
     precompile: bool,
+    #[arg(
+        long,
+        help = "forks the manager's schedule defines, comma-separated; every runner must name only these"
+    )]
+    defined_forks: Option<String>,
 }
 
 pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
@@ -20,6 +25,21 @@ pub fn handle(args: Args, config: config::Config) -> anyhow::Result<()> {
     log_info!(registry_dir:? = registry_dir, runners_dir:? = runners_dir; "checking install");
 
     let registry = genvm::runners::cache::read_registry(&registry_dir.join("all.json"))?;
+
+    if let Some(defined) = &args.defined_forks {
+        let defined = if defined.is_empty() {
+            runners::cache::Forks::new()
+        } else {
+            runners::cache::parse_forks(defined, ',').context("parsing --defined-forks")?
+        };
+        for (id, entry) in &registry {
+            for (hash, version) in &entry.versions {
+                if let Some(fork) = version.forks.difference(&defined).next() {
+                    anyhow::bail!("runner {id}:{hash} names fork `{fork}`, which the schedule does not define");
+                }
+            }
+        }
+    }
 
     // Every listed runner exists on disk with the expected content hash.
     let mut checked = 0usize;

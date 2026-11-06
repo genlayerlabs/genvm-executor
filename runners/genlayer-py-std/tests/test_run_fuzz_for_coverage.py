@@ -1,4 +1,8 @@
+import itertools
 from pathlib import Path
+
+# Before any target imports genlayer: `inmem_allocate` sees numpy types only if it was loaded first
+import numpy  # noqa: F401
 
 src_dir = Path(__file__).parent.parent.joinpath('fuzz', 'src')
 
@@ -13,14 +17,22 @@ for test in sorted(src_dir.glob('*.py')):
 	exec(src_compile, new_globs)
 	fun = new_globs[name]
 
-	for testcase in src_dir.parent.joinpath('inputs', name).glob('**/*'):
-		if not testcase.is_file():
+	inputs_dir = src_dir.parent.joinpath('inputs')
+	for testcase in itertools.chain(
+		inputs_dir.joinpath(name).glob('**/*'),
+		inputs_dir.joinpath(f'{name}-curated').glob('*'),
+	):
+		if (
+			not testcase.is_file()
+			or testcase.name == 'README.txt'
+			or testcase.name.startswith('.')
+		):
 			continue
 
-		def cur_test(testcase=testcase):
+		def cur_test(testcase=testcase, fun=fun):
 			fun(testcase.read_bytes())
 
-		testname = 'test_' + name + '_' + testcase.name.replace('.', '_')
+		testname = 'test_' + name + '_' + testcase.name.replace('.', '_').replace('-', '_')
 
 		cur_test.__name__ = testname
 

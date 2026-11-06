@@ -282,3 +282,107 @@ fn local_size_cannot_contradict_the_central_directory() {
         "unexpected error: {actual}"
     );
 }
+
+fn assert_malformed_with(archive: Vec<u8>, message: &str) {
+    let actual = error_of(archive);
+    assert_malformed_runner(&actual);
+    assert!(
+        actual.to_string().contains(message),
+        "expected {message:?}, got: {actual}"
+    );
+}
+
+#[test]
+fn local_flags_cannot_contradict_the_central_directory() {
+    let mut archive = zip_with(b"payload contents", zip::CompressionMethod::Stored);
+    archive[6..8].copy_from_slice(&(1_u16 << 11).to_le_bytes());
+
+    assert_malformed_with(archive, "local flags");
+}
+
+/// The flags check is new, so it must not take over an error the archive
+/// already had: here the second entry's CRC-32.
+#[test]
+fn layout_checks_run_after_the_existing_ones() {
+    let mut archive = stored_zip_with_entries(&[("a", b"first"), ("b", b"second")]);
+    archive[6..8].copy_from_slice(&(1_u16 << 11).to_le_bytes());
+    let second_data = archive
+        .windows(6)
+        .position(|window| window == b"second")
+        .unwrap();
+    archive[second_data] ^= 1;
+
+    assert_malformed_with(archive, "CRC");
+}
+
+#[test]
+fn overlapping_entries_are_rejected() {
+    let inner = stored_zip_with_entries(&[("b", b"inner")]);
+    let inner_record = &inner[..central_header_start(&inner)];
+    let mut archive = stored_zip_with_entries(&[("a", inner_record), ("b", b"inner")]);
+
+    // Point `b`'s central entry at the copy of its record inside `a`'s data.
+    let b_central = central_header_start(&archive)
+        + archive[central_header_start(&archive) + 4..]
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .unwrap()
+        + 4;
+    let a_data_start = local_data_start(&archive) as u32;
+    archive[b_central + 42..b_central + 46].copy_from_slice(&a_data_start.to_le_bytes());
+
+    assert_malformed_with(archive, "overlap");
+}
+
+#[test]
+fn file_that_is_also_a_directory_is_rejected() {
+    let cases: [&[(&str, &[u8])]; 5] = [
+        &[("a", b"x"), ("a/b", b"y")],
+        &[("a/b/c", b"x"), ("a", b"y")],
+        &[("a", b"x"), ("a!b", b"y"), ("a/b", b"z")],
+        &[("a", b"x"), ("a/", b"")],
+        &[("a", b"x"), ("a/b/", b"")],
+    ];
+    for entries in cases {
+        assert_malformed_with(stored_zip_with_entries(entries), "is also a directory");
+    }
+}
+
+#[test]
+fn file_name_prefixes_are_not_directories() {
+    let archive =
+        stored_zip_with_entries(&[("a", b"x"), ("a!b", b"y"), ("ab", b"z"), ("a.b/c", b"w")]);
+    let actual = genvm::runners::parse(archive.into(), u32::MAX).unwrap();
+    assert_eq!(
+        actual.data.len(),
+        4,
+        "unexpected entries: {:?}",
+        actual.data.keys()
+    );
+}
+
+#[test]
+fn out_of_memory_precedes_layout_checks() {
+    let archive = stored_zip_with_entries(&[("a", b"x"), ("a/b", b"y")]);
+    let actual = match genvm::runners::parse(archive.into(), 1) {
+        Ok(_) => panic!("archive was accepted"),
+        Err(err) => err,
+    };
+    let expected = genlayer_sdk::abi::consts::VmError::out_of().memory().val();
+    assert!(
+        matches!(&actual.kind, genvm::rt::errors::ErrorKind::Vm(code) if code == &expected),
+        "unexpected error: {actual}"
+    );
+}
+
+#[test]
+fn data_before_the_archive_is_accepted() {
+    let mut archive = vec![0_u8; 16];
+    archive.extend(stored_zip_with_entries(&[("dir/", b""), ("dir/a", b"x")]));
+    let actual = genvm::runners::parse(archive.into(), u32::MAX).unwrap();
+    assert!(
+        actual.data.len() == 1 && actual.data.contains_key("dir/a"),
+        "unexpected entries: {:?}",
+        actual.data.keys()
+    );
+}

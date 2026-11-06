@@ -203,13 +203,11 @@
           shellHook = pre-commit-check.shellHook;
         };
         devShells.gen-docs = pkgs.mkShell {
-          # Standalone sphinx toolchain for this line's docs sub-site (mmdc
-          # backs the sphinxcontrib.mermaid svg output). The text→api.txt merge
-          # is plain python (docs/website/merge_txts.py), run by the manager
-          # pipeline, so no ruby here.
+          # Standalone sphinx toolchain for this line's docs sub-site. The
+          # text→api.txt merge is plain python (docs/website/merge_txts.py), run
+          # by the manager pipeline, so no ruby here.
           packages = [
             docs-python
-            pkgs.mermaid-cli
           ];
         };
       }

@@ -91,6 +91,7 @@ pub struct CreateSupervisorNamedArgs {
     /// was granted. Slot locks bound what a run may write, so this -- not the
     /// route the run arrived by -- decides whether they are read.
     pub can_write_storage: bool,
+    pub forks: runners::cache::Forks,
 }
 
 pub struct ExecutionContext {
@@ -212,7 +213,7 @@ pub fn create_supervisor(
         emit_leader_public_data: named.emit_leader_public_data,
         multi_host,
         record_actions: named.record_actions,
-        transaction_timestamp: message.transaction_timestamp,
+        forks: named.forks,
     };
 
     Ok(ExecutionContext {

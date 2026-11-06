@@ -2,6 +2,12 @@ use genvm::runners::cache::read_registry;
 
 const HASH: &str = "cnn3rjeozkptmzmzt4ymzznvkqfdedcvpapscmyt6r6cyzjrzsgq";
 const OTHER_HASH: &str = "cnn3rjeozkptmzmzt4ymzznvkqfdedcvpapscmyt6r6cyzjrzsga";
+const LINE: &str = "genvm/executor/v0.3";
+const NEXT_LINE: &str = "genvm/executor/v0.4";
+
+fn fork_names(forks: &genvm::runners::cache::Forks) -> Vec<&str> {
+    forks.iter().map(|fork| fork.as_str()).collect()
+}
 
 fn write_registry(label: &str, contents: &str) -> std::path::PathBuf {
     let suffix = std::time::SystemTime::now()
@@ -29,8 +35,8 @@ fn registry_reads_entry_with_all_fields() {
         "full",
         &format!(
             r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{
-                "{OTHER_HASH}": {{"available_after": null, "supersedes": null}},
-                "{HASH}": {{"available_after": "2026-12-01T00:00:00Z", "supersedes": "{OTHER_HASH}"}}
+                "{OTHER_HASH}": {{"forks": "{LINE}", "supersedes": null}},
+                "{HASH}": {{"forks": "{LINE}|{NEXT_LINE}", "supersedes": "{OTHER_HASH}"}}
             }}}}}}"#
         ),
     )
@@ -39,15 +45,12 @@ fn registry_reads_entry_with_all_fields() {
     let entry = &got["py-genlayer"];
     assert_eq!(entry.latest.as_str(), HASH);
     let new = &entry.versions[HASH];
-    assert_eq!(
-        new.available_after,
-        Some("2026-12-01T00:00:00Z".parse().unwrap())
-    );
+    assert_eq!(fork_names(&new.forks), [LINE, NEXT_LINE]);
     assert_eq!(
         new.supersedes.as_ref().map(|s| s.as_str()),
         Some(OTHER_HASH)
     );
-    assert_eq!(entry.versions[OTHER_HASH].available_after, None);
+    assert_eq!(fork_names(&entry.versions[OTHER_HASH].forks), [LINE]);
 }
 
 /// A registry name is joined into `runners_dir` as a path component, so a `..`
@@ -56,7 +59,9 @@ fn registry_reads_entry_with_all_fields() {
 fn registry_rejects_runner_name_that_escapes_runners_directory() {
     let got = read(
         "name-traversal",
-        &format!(r#"{{"../outside": {{"latest": "{HASH}", "versions": {{"{HASH}": {{}}}}}}}}"#),
+        &format!(
+            r#"{{"../outside": {{"latest": "{HASH}", "versions": {{"{HASH}": {{"forks": "{LINE}"}}}}}}}}"#
+        ),
     );
 
     assert!(
@@ -70,7 +75,7 @@ fn registry_rejects_latest_outside_versions() {
     let got = read(
         "latest-unlisted",
         &format!(
-            r#"{{"py-genlayer": {{"latest": "{OTHER_HASH}", "versions": {{"{HASH}": {{}}}}}}}}"#
+            r#"{{"py-genlayer": {{"latest": "{OTHER_HASH}", "versions": {{"{HASH}": {{"forks": "{LINE}"}}}}}}}}"#
         ),
     );
 
@@ -82,7 +87,7 @@ fn registry_rejects_superseding_unlisted_hash() {
     let got = read(
         "supersedes-unlisted",
         &format!(
-            r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{"supersedes": "{OTHER_HASH}"}}}}}}}}"#
+            r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{"forks": "{LINE}", "supersedes": "{OTHER_HASH}"}}}}}}}}"#
         ),
     );
 
@@ -94,7 +99,7 @@ fn registry_rejects_unknown_version_field() {
     let got = read(
         "unknown-field",
         &format!(
-            r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{"availabe_after": null}}}}}}}}"#
+            r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{"forks": "{LINE}", "fork": "{LINE}"}}}}}}}}"#
         ),
     );
 
@@ -115,25 +120,53 @@ fn registry_rejects_previous_list_format() {
 }
 
 #[test]
-fn runner_becomes_available_at_its_available_after() {
+fn runner_is_visible_iff_one_of_its_forks_is_active() {
     let got = read(
-        "available-after",
+        "forks",
         &format!(
             r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{
-                "{HASH}": {{"available_after": "2026-12-01T00:00:00Z"}},
-                "{OTHER_HASH}": {{}}
+                "{HASH}": {{"forks": "{LINE}|{NEXT_LINE}"}}
             }}}}}}"#
         ),
     )
     .unwrap();
-    let versions = &got["py-genlayer"].versions;
-    let at = |s: &str| s.parse::<chrono::DateTime<chrono::Utc>>().unwrap();
+    let version = &got["py-genlayer"].versions[HASH];
+    let active = |list: &str| genvm::runners::cache::parse_forks(list, ',').unwrap();
 
-    let gated = &versions[HASH];
-    assert!(!gated.is_available_at(at("2026-11-30T23:59:59Z")));
-    assert!(gated.is_available_at(at("2026-12-01T00:00:00Z")));
-    assert!(gated.is_available_at(at("2027-01-01T00:00:00Z")));
+    assert!(version.is_visible_in(&active(LINE)));
+    assert!(version.is_visible_in(&active(NEXT_LINE)));
+    assert!(!version.is_visible_in(&active("genvm/executor/v0.2")));
+    assert!(!version.is_visible_in(&genvm::runners::cache::Forks::new()));
+}
 
-    let ungated = &versions[OTHER_HASH];
-    assert!(ungated.is_available_at(chrono::DateTime::UNIX_EPOCH));
+#[test]
+fn registry_rejects_malformed_forks() {
+    for forks in [
+        "",
+        "|",
+        "genvm/executor/v0.3|",
+        "genvm//v0.3",
+        "/genvm",
+        "Genvm",
+        "genvm executor",
+        "genvm,executor",
+    ] {
+        let got = read(
+            "malformed-forks",
+            &format!(
+                r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{"forks": "{forks}"}}}}}}}}"#
+            ),
+        );
+        assert!(got.is_err(), "forks `{forks}` must be rejected");
+    }
+}
+
+#[test]
+fn registry_rejects_missing_forks() {
+    let got = read(
+        "missing-forks",
+        &format!(r#"{{"py-genlayer": {{"latest": "{HASH}", "versions": {{"{HASH}": {{}}}}}}}}"#),
+    );
+
+    assert!(got.is_err(), "every version must name its forks");
 }

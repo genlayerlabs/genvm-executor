@@ -6,7 +6,7 @@
 # `import "${exec-src}" (release-args // { inherit compiled-libs; })` per line.
 #
 # This line's manifest.json is the source of truth for its executor-version (and
-# available-after); we read it here as `build-config` rather than having the
+# fork); we read it here as `build-config` rather than having the
 # umbrella thread one in, so the version always tracks the checkout.
 #
 # Returns the executor package set: { executor, executor-amd64-linux, ... }.
