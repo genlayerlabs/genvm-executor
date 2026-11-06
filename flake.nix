@@ -170,11 +170,9 @@
           shellHook = pre-commit-check.shellHook;
         };
         devShells.gen-docs = pkgs.mkShell {
-          # Standalone sphinx toolchain for this line's docs sub-site (mmdc
-          # backs the sphinxcontrib.mermaid svg output).
+          # Standalone sphinx toolchain for this line's docs sub-site
           packages = [
             docs-python
-            pkgs.mermaid-cli
           ];
         };
       }
