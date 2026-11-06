@@ -1,4 +1,4 @@
 {
-  "executor-version": "v0.3.0-rc10",
-  "available-after": "2024-09-01T00:00:00Z"
+  "executor-version": "v0.3.0-rc11",
+  "fork": "genvm/executor/v0.3"
 }

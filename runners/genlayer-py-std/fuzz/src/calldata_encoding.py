@@ -25,7 +25,7 @@ def calldata_encoding(buf):
 		if kind == 4:
 			return builder.fetch(builder.fetch(1)[0])
 		if kind == 5:
-			builder.fetch_str()
+			return builder.fetch_str()
 
 	def create_any(depth):
 		if depth == 0:
@@ -39,7 +39,7 @@ def calldata_encoding(buf):
 			for i in range(le):
 				lst.append(create_any(depth - 1))
 			return lst
-		if kind == 1:
+		if kind == 2:
 			le = builder.fetch(1)[0]
 			lst = {}
 			for i in range(le):

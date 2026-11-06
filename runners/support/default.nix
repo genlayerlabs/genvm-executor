@@ -55,7 +55,7 @@ rec {
     }:
     {
       inherit id hash;
-      inherit (pinsById.${id}) available-after supersedes;
+      inherit (pinsById.${id}) fork supersedes;
 
       uid = "${id}:${hashToIDHash hash}";
 

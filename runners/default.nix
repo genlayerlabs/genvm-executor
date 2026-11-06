@@ -4,7 +4,7 @@
 #   hash
 #   uid
 #   derivation # zip file
-#   available-after # null or RFC 3339 timestamp
+#   fork # null (the declaring line's fork) or a fork of install/data/genvm-chainforks.json
 #   supersedes # null or gvm32 hash of the same id
 # }]
 # all args are optional

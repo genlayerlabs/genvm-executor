@@ -90,6 +90,11 @@ pub struct Args {
         help = "record auditable actions: runner_load,vm_spawn"
     )]
     record_actions: Vec<String>,
+    #[arg(
+        long,
+        help = "active forks, comma-separated; a builtin runner resolves only if it names one"
+    )]
+    forks: String,
     #[clap(long, help = "override LLM module address from config")]
     module_llm: Option<String>,
     #[clap(long, help = "override web module address from config")]
@@ -97,6 +102,12 @@ pub struct Args {
 }
 
 pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
+    let forks = if args.forks.is_empty() {
+        genvm::runners::cache::Forks::new()
+    } else {
+        genvm::runners::cache::parse_forks(&args.forks, ',').context("parsing --forks")?
+    };
+
     // Apply CLI overrides for module addresses
     if let Some(llm_addr) = &args.module_llm {
         config.modules.llm.address = llm_addr.clone();
@@ -391,6 +402,7 @@ pub fn handle(args: Args, mut config: config::Config) -> Result<()> {
             record_actions: execution_data.record_actions.clone(),
             memory_limit: execution_data.nested.as_ref().map(|n| n.memory_limit),
             can_write_storage,
+            forks,
         },
         host_data,
         shared_data,

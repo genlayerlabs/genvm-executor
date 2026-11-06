@@ -334,18 +334,51 @@ pub struct RegistryEntry {
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryVersion {
-    /// Transactions timestamped before this cannot resolve the runner.
-    #[serde(default)]
-    pub available_after: Option<chrono::DateTime<chrono::Utc>>,
+    /// The runner resolves only while at least one of these forks is active.
+    #[serde(deserialize_with = "deserialize_registry_forks")]
+    pub forks: Forks,
     /// The hash of the same id this one replaces.
     #[serde(default)]
     pub supersedes: Option<StrSymbol>,
 }
 
 impl RegistryVersion {
-    pub fn is_available_at(&self, timestamp: chrono::DateTime<chrono::Utc>) -> bool {
-        self.available_after.is_none_or(|after| after <= timestamp)
+    pub fn is_visible_in(&self, active: &Forks) -> bool {
+        self.forks.iter().any(|fork| active.contains(fork))
     }
+}
+
+pub type Forks = std::collections::BTreeSet<StrSymbol>;
+
+/// `/`-separated segments of `[a-z0-9._-]`, the grammar the manager's schedule enforces.
+pub fn validate_fork_name(name: &str) -> anyhow::Result<()> {
+    let valid = name.split('/').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+    });
+    if !valid {
+        anyhow::bail!("malformed fork name `{name}`");
+    }
+    Ok(())
+}
+
+/// Splits a non-empty `separator`-joined list of fork names.
+pub fn parse_forks(list: &str, separator: char) -> anyhow::Result<Forks> {
+    list.split(separator)
+        .map(|name| {
+            validate_fork_name(name)?;
+            Ok(StrSymbol(symbol_table::GlobalSymbol::from(name)))
+        })
+        .collect()
+}
+
+fn deserialize_registry_forks<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Forks, D::Error> {
+    let list = <String as serde::Deserialize>::deserialize(deserializer)?;
+    parse_forks(&list, '|').map_err(serde::de::Error::custom)
 }
 
 fn validate_registry_entry(name: StrSymbol, entry: &RegistryEntry) -> anyhow::Result<()> {
@@ -411,7 +444,7 @@ impl Reader {
         self.registry.get(id)?.versions.get(hash)
     }
 
-    /// Whether `id:hash` is shipped, regardless of when it becomes available.
+    /// Whether `id:hash` is shipped, whether or not any of its forks is active.
     pub fn has_in_all(&self, id: &str, hash: &str) -> bool {
         self.get_version(id, hash).is_some()
     }

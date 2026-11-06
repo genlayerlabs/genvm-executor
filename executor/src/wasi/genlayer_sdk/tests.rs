@@ -1043,18 +1043,18 @@ impl EmissionTestContext {
             fees,
             balance,
             "{}",
-            chrono::DateTime::UNIX_EPOCH,
+            crate::runners::cache::Forks::new(),
         )
     }
 
-    fn with_registry(registry: &str, transaction_timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+    fn with_registry(registry: &str, forks: &str) -> Self {
         Self::build(
             u32::MAX,
             100,
             emission_fees(),
             U256::MAX,
             registry,
-            transaction_timestamp,
+            crate::runners::cache::parse_forks(forks, ',').unwrap(),
         )
     }
 
@@ -1064,7 +1064,7 @@ impl EmissionTestContext {
         fees: crate::config::FeesConfig,
         balance: U256,
         registry: &str,
-        transaction_timestamp: chrono::DateTime<chrono::Utc>,
+        forks: crate::runners::cache::Forks,
     ) -> Self {
         let root = TestDir::new();
         let runners_dir = root.join("runners");
@@ -1151,7 +1151,7 @@ impl EmissionTestContext {
                 emit_leader_public_data: false,
                 multi_host: host::MultiHost::new(vec![host], Vec::new()),
                 record_actions: Vec::new(),
-                transaction_timestamp,
+                forks,
             },
         )
         .unwrap();
@@ -3633,16 +3633,19 @@ fn runner_hash(byte: u8) -> String {
     Bytes32Hash::from_bytes([byte; 32]).to_gvm32()
 }
 
-async fn resolve_gated(at: &str, hash: &str) -> anyhow::Result<crate::runners::Id> {
+const LINE_FORK: &str = "genvm/executor/v0.3";
+const GATED_FORK: &str = "genvm/executor/v0.3/runners-test";
+
+async fn resolve_gated(active: &str, hash: &str) -> anyhow::Result<crate::runners::Id> {
     let (gated, open) = (runner_hash(1), runner_hash(2));
     let test = EmissionTestContext::with_registry(
         &format!(
             r#"{{"py-genlayer": {{"latest": "{open}", "versions": {{
-                "{gated}": {{"available_after": "2026-12-01T00:00:00Z", "supersedes": "{open}"}},
-                "{open}": {{}}
+                "{gated}": {{"forks": "{GATED_FORK}", "supersedes": "{open}"}},
+                "{open}": {{"forks": "{LINE_FORK}"}}
             }}}}}}"#
         ),
-        at.parse().unwrap(),
+        active,
     );
     let data = &test.context.data;
     let got = rt::supervisor::actions::resolve_runner_id(
@@ -3666,21 +3669,20 @@ fn vm_failure(error: anyhow::Error) -> (String, String) {
 }
 
 #[tokio::test]
-async fn gated_runner_fails_like_an_uninstalled_one_before_its_time() {
-    let before = "2026-11-30T23:59:59Z";
+async fn gated_runner_fails_like_an_uninstalled_one_while_its_fork_is_inactive() {
     let malformed = public_abi::VmError::invalid_contract()
         .runner()
         .malformed()
         .0;
 
     let (gated, gated_message) =
-        vm_failure(resolve_gated(before, &runner_hash(1)).await.unwrap_err());
+        vm_failure(resolve_gated(LINE_FORK, &runner_hash(1)).await.unwrap_err());
     let (unlisted, unlisted_message) =
-        vm_failure(resolve_gated(before, &runner_hash(3)).await.unwrap_err());
+        vm_failure(resolve_gated(LINE_FORK, &runner_hash(3)).await.unwrap_err());
     assert_eq!(gated, malformed);
     assert_eq!(gated, unlisted);
     assert!(
-        gated_message.contains("is not available at"),
+        gated_message.contains("is not available on this network"),
         "{gated_message}"
     );
     assert!(
@@ -3688,10 +3690,15 @@ async fn gated_runner_fails_like_an_uninstalled_one_before_its_time() {
         "{unlisted_message}"
     );
 
-    resolve_gated("2026-12-01T00:00:00Z", &runner_hash(1))
+    resolve_gated(&format!("{LINE_FORK},{GATED_FORK}"), &runner_hash(1))
         .await
-        .expect("a gated runner resolves once available");
-    resolve_gated(before, &runner_hash(2))
+        .expect("a gated runner resolves once its fork is active");
+    resolve_gated(LINE_FORK, &runner_hash(2))
         .await
-        .expect("an ungated runner always resolves");
+        .expect("a runner of an active line resolves");
+    vm_failure(
+        resolve_gated(GATED_FORK, &runner_hash(2))
+            .await
+            .unwrap_err(),
+    );
 }
