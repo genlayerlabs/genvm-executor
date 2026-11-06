@@ -15,7 +15,12 @@ pub struct Archive {
 
 use super::malformed_runner_error as malformed_runner;
 
-fn validate_entry_name(name: &str, is_directory: bool) -> errors::Result<()> {
+const ZIP_VERSION_NEEDED: u16 = 20;
+const DOS_ATTRIBUTES_MASK: u32 = 0xffff;
+const UNIX_FILE_TYPE_MASK: u32 = 0o170000 << 16;
+const UNIX_REGULAR_FILE: u32 = 0o100000 << 16;
+
+fn validate_entry_name(name: &str) -> errors::Result<()> {
     if name.is_empty() {
         return Err(malformed_runner("entry name is empty"));
     }
@@ -30,17 +35,7 @@ fn validate_entry_name(name: &str, is_directory: bool) -> errors::Result<()> {
         )));
     }
 
-    let name_without_directory_slash = if is_directory {
-        name.strip_suffix('/').unwrap_or(name)
-    } else {
-        if name.ends_with('/') {
-            return Err(malformed_runner(format!(
-                "file entry name {name:?} has a trailing slash"
-            )));
-        }
-        name
-    };
-    if name_without_directory_slash
+    if name
         .split('/')
         .any(|component| component.is_empty() || component == "." || component == "..")
     {
@@ -52,299 +47,255 @@ fn validate_entry_name(name: &str, is_directory: bool) -> errors::Result<()> {
     Ok(())
 }
 
-/// Zip's `Stored` method, as it appears in a local file header.
-const ZIP_STORED_METHOD: u16 = 0;
-const ZIP_LOCAL_HEADER_LEN: usize = 30;
-/// General-purpose flag bit 0: the entry is encrypted.
-const ZIP_FLAG_ENCRYPTED: u16 = 1 << 0;
-/// General-purpose flag bit 3: sizes and CRC-32 trail the data in a descriptor,
-/// and the local header carries zeroes instead.
-const ZIP_FLAG_DATA_DESCRIPTOR: u16 = 1 << 3;
-
-/// The zip crate reports what the *central directory* says, and reads the local
-/// header only to learn where the data begins. An archive whose two copies
-/// disagree therefore means different things to different readers: genvm follows
-/// the central directory, a streaming reader follows the local header, and a
-/// third tool may reject the file outright. Runner ids are content hashes, so
-/// that divergence is consensus-visible -- require the two to agree.
-///
-/// `crc32` and `size` come from the central directory. They are only compared
-/// when the entry has no data descriptor: with flag bit 3 set the local header
-/// legitimately carries zeroes and the real values trail the data.
+/// Genvm follows the central directory, a streaming reader follows the local
+/// header, and a third tool may reject the file outright. Runner ids are content
+/// hashes, so an archive whose two copies disagree is consensus-visible --
+/// require them to agree.
 fn check_local_header_agrees(
-    bytes: &[u8],
     name: &str,
-    header_start: u64,
-    crc32: u32,
-    size: u64,
+    central: &genvm_stored_zip::Entry<'_>,
+    local: &genvm_stored_zip::LocalHeader<'_>,
 ) -> errors::Result<()> {
-    let header_start: usize = header_start.into_int_comptime();
-    let header = header_start
-        .checked_add(ZIP_LOCAL_HEADER_LEN)
-        .and_then(|end| bytes.get(header_start..end))
-        .ok_or_else(|| {
-            malformed_runner(format!(
-                "file {name} local header at {header_start} is out of bounds"
-            ))
-        })?;
-
-    if header[0..4] != *b"PK\x03\x04" {
+    if local.method != genvm_stored_zip::STORED {
         return Err(malformed_runner(format!(
-            "file {name} has no local header at {header_start}"
+            "file {name} local compression method {} contradicts the central directory",
+            local.method
         )));
     }
 
-    let flags = u16::from_le_bytes([header[6], header[7]]);
-    if flags & ZIP_FLAG_ENCRYPTED != 0 {
-        return Err(malformed_runner(format!("file {name} is encrypted")));
-    }
-
-    let method = u16::from_le_bytes([header[8], header[9]]);
-    if method != ZIP_STORED_METHOD {
+    if local.version_needed != central.version_needed {
         return Err(malformed_runner(format!(
-            "file {name} local compression method {method} contradicts the central directory"
+            "file {name} local version {} contradicts the central {}",
+            local.version_needed, central.version_needed
         )));
     }
 
-    // The name is compared as raw bytes rather than after decoding: the crate
-    // decodes lossily, so two different byte strings can both arrive as U+FFFD
-    // and compare equal. Requiring the local bytes to be valid UTF-8 *and* equal
-    // to the central name rejects both a genuine mismatch and a name no two
-    // readers would decode alike.
-    let name_len: usize = u16::from_le_bytes([header[26], header[27]]).into();
-    let local_name = header_start
-        .checked_add(ZIP_LOCAL_HEADER_LEN)
-        .and_then(|start| Some(start..start.checked_add(name_len)?))
-        .and_then(|range| bytes.get(range))
-        .ok_or_else(|| {
-            malformed_runner(format!(
-                "file {name} local name at {header_start} is out of bounds"
-            ))
-        })?;
-    if std::str::from_utf8(local_name) != Ok(name) {
+    if local.time != central.time {
+        return Err(malformed_runner(format!(
+            "file {name} local time {:#06x} contradicts the central {:#06x}",
+            local.time, central.time
+        )));
+    }
+
+    if local.date != central.date {
+        return Err(malformed_runner(format!(
+            "file {name} local date {:#06x} contradicts the central {:#06x}",
+            local.date, central.date
+        )));
+    }
+
+    if local.flags != central.flags {
+        return Err(malformed_runner(format!(
+            "file {name} local flags {:#06x} contradict the central {:#06x}",
+            local.flags, central.flags
+        )));
+    }
+
+    if local.name != central.name {
         return Err(malformed_runner(format!(
             "file {name} local name contradicts the central directory"
         )));
     }
 
-    if flags & ZIP_FLAG_DATA_DESCRIPTOR == 0 {
-        let local_crc32 = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
-        if local_crc32 != crc32 {
-            return Err(malformed_runner(format!(
-                "file {name} local CRC-32 {local_crc32:#010x} contradicts the central {crc32:#010x}"
-            )));
-        }
+    if local.crc32 != central.crc32 {
+        return Err(malformed_runner(format!(
+            "file {name} local CRC-32 {:#010x} contradicts the central {:#010x}",
+            local.crc32, central.crc32
+        )));
+    }
 
-        let local_compressed = u32::from_le_bytes([header[18], header[19], header[20], header[21]]);
-        let local_size = u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
-        // Zip64 moves the real values into an extra field and leaves 0xffffffff
-        // here; the crate has already resolved them centrally, so a saturated
-        // local field carries no information to compare against.
-        if u64::from(local_size) != size && local_size != u32::MAX {
-            return Err(malformed_runner(format!(
-                "file {name} local size {local_size} contradicts the central {size}"
-            )));
-        }
-        if local_compressed != local_size {
-            return Err(malformed_runner(format!(
-                "file {name} local compressed size {local_compressed} differs from size {local_size}"
-            )));
-        }
+    if local.size != central.size {
+        return Err(malformed_runner(format!(
+            "file {name} local size {} contradicts the central {}",
+            local.size, central.size
+        )));
+    }
+    if local.compressed_size != local.size {
+        return Err(malformed_runner(format!(
+            "file {name} local compressed size {} differs from size {}",
+            local.compressed_size, local.size
+        )));
     }
 
     Ok(())
 }
 
-const ZIP_LOCAL_FLAGS_OFFSET: u64 = 6;
-const ZIP_CENTRAL_FLAGS_OFFSET: u64 = 8;
-
-/// Both headers were bounds-checked before, the local one here and the central
-/// one by the zip crate.
-fn flags_at(bytes: &[u8], header: u64, offset: u64) -> u16 {
-    let start: usize = (header + offset).into_int_comptime();
-    u16::from_le_bytes([bytes[start], bytes[start + 1]])
-}
-
-/// An entry's local header through the end of its data.
-struct Record {
-    index: usize,
-    header_start: u64,
-    central_header_start: u64,
-    end: u64,
-}
-
-/// Rejections no known writer triggers; they run last, so earlier errors win.
-fn check_layout<'a>(
-    bytes: &[u8],
-    mut records: Vec<Record>,
-    names: impl Iterator<Item = &'a str>,
-    files: &BTreeMap<String, bytes::Bytes>,
-) -> errors::Result<()> {
-    for record in &records {
-        let local = flags_at(bytes, record.header_start, ZIP_LOCAL_FLAGS_OFFSET);
-        let central = flags_at(bytes, record.central_header_start, ZIP_CENTRAL_FLAGS_OFFSET);
-        if local != central {
-            return Err(malformed_runner(format!(
-                "ZIP entry {} local flags {local:#06x} contradict the central {central:#06x}",
-                record.index
-            )));
-        }
+/// Version made by and permission bits stay free. File type bits may be absent:
+/// `zipfile.writestr` sets only the permissions.
+fn check_entry_fields(name: &str, entry: &genvm_stored_zip::Entry<'_>) -> errors::Result<()> {
+    if entry.version_needed != ZIP_VERSION_NEEDED {
+        return Err(malformed_runner(format!(
+            "file {name} needs version {}",
+            entry.version_needed
+        )));
+    }
+    if entry.disk_start != 0 {
+        return Err(malformed_runner(format!(
+            "file {name} starts on disk {}",
+            entry.disk_start
+        )));
+    }
+    if entry.internal_attributes != 0 {
+        return Err(malformed_runner(format!(
+            "file {name} has internal attributes {:#06x}",
+            entry.internal_attributes
+        )));
     }
 
-    // The zip crate's own overlap check skips empty entries and ignores headers.
-    records.sort_by_key(|record| record.header_start);
-    if records
-        .windows(2)
-        .any(|pair| pair[0].end > pair[1].header_start)
-    {
-        return Err(malformed_runner("ZIP entries overlap"));
-    }
-
-    let names: BTreeSet<&str> = names.collect();
-    let mut directory = String::new();
-    for name in files.keys() {
-        directory.clear();
-        directory.push_str(name);
-        directory.push('/');
-        if let Some(child) = names
-            .range::<str, _>((
-                std::ops::Bound::Included(directory.as_str()),
-                std::ops::Bound::Unbounded,
-            ))
-            .next()
-            .filter(|child| child.starts_with(directory.as_str()))
-        {
-            return Err(malformed_runner(format!(
-                "file {name} is also a directory of {child}"
-            )));
-        }
+    let attributes = entry.external_attributes;
+    let file_type = attributes & UNIX_FILE_TYPE_MASK;
+    if attributes & DOS_ATTRIBUTES_MASK != 0 || (file_type != 0 && file_type != UNIX_REGULAR_FILE) {
+        return Err(malformed_runner(format!(
+            "file {name} has external attributes {attributes:#010x}"
+        )));
     }
 
     Ok(())
 }
 
 impl Archive {
-    /// Open `bytes` as a zip and read it. Entry offsets are resolved against the
-    /// very buffer the central directory was read from, which is why the caller
-    /// never gets to supply the two separately.
+    /// Open `bytes` as a zip and read it.
     pub fn from_zip_bytes(bytes: bytes::Bytes, max_meta_size: u32) -> errors::Result<Self> {
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone()))
-            .map_err(|e| malformed_runner(format!("cannot open ZIP archive: {e}")))?;
-        Self::from_zip(&mut zip, bytes, max_meta_size)
+        Self::try_from_zip(&bytes, max_meta_size)
+            .map_err(|e| malformed_runner(format!("cannot open ZIP archive: {e}")))?
     }
 
-    /// Only for callers that already opened the zip to decide *whether* it is
-    /// one; `bytes` must be the buffer `zip` reads from. Everyone else wants
-    /// [`Archive::from_zip_bytes`].
-    pub(super) fn from_zip<R: std::io::Read + std::io::Seek>(
-        zip: &mut zip::ZipArchive<R>,
-        bytes: bytes::Bytes,
+    /// The outer error means `bytes` is not a zip at all, the inner one that it
+    /// is a malformed one.
+    pub(super) fn try_from_zip(
+        bytes: &bytes::Bytes,
+        max_meta_size: u32,
+    ) -> Result<errors::Result<Self>, genvm_stored_zip::Error> {
+        let zip = genvm_stored_zip::Archive::new(bytes)?;
+        Ok(Self::from_zip(&zip, bytes, max_meta_size))
+    }
+
+    /// `bytes` must be the buffer `zip` was opened on.
+    fn from_zip(
+        zip: &genvm_stored_zip::Archive<'_>,
+        bytes: &bytes::Bytes,
         max_meta_size: u32,
     ) -> errors::Result<Self> {
-        let mut res = BTreeMap::new();
-        let mut meta_size = 0u32;
-        let mut records = Vec::new();
-
-        for i in 0..zip.len() {
-            let file = zip
-                .by_index(i)
-                .map_err(|e| malformed_runner(format!("cannot read ZIP entry {i}: {e}")))?;
-
-            if file.compression() != zip::CompressionMethod::Stored {
-                return Err(malformed_runner(format!(
-                    "unsupported compression method: {:?}",
-                    file.compression()
-                )));
-            }
-
-            check_local_header_agrees(
-                bytes.as_ref(),
-                file.name(),
-                file.header_start(),
-                file.crc32(),
-                file.size(),
-            )?;
-            let is_directory = file.name().ends_with('/');
-            validate_entry_name(file.name(), is_directory)?;
-
-            let start_index = file.data_start();
-            let compressed_size = file.compressed_size();
-            let record = |end| Record {
-                index: i,
-                header_start: file.header_start(),
-                central_header_start: file.central_header_start(),
-                end,
-            };
-            // A stored entry is copied verbatim, so both sizes describe the same
-            // bytes; disagreeing ones mean the archive lies about at least one.
-            if compressed_size != file.size() {
-                return Err(malformed_runner(format!(
-                    "stored file {} compressed_size={} differs from size={}",
-                    file.name(),
-                    compressed_size,
-                    file.size()
-                )));
-            }
-            if is_directory {
-                if file.size() != 0 || file.crc32() != 0 {
-                    return Err(malformed_runner(format!(
-                        "directory entry {} has size {} and CRC-32 {:#010x}",
-                        file.name(),
-                        file.size(),
-                        file.crc32()
-                    )));
-                }
-                records.push(record(start_index));
-                continue;
-            }
-            let end_index = start_index.checked_add(compressed_size).ok_or_else(|| {
-                malformed_runner(format!(
-                    "file {} data_start={} compressed_size={} overflow",
-                    file.name(),
-                    start_index,
-                    compressed_size
-                ))
-            })?;
-            if end_index > usize_into_u64(bytes.len())
-                || start_index > usize_into_u64(bytes.len())
-                || end_index < start_index
-            {
-                return Err(malformed_runner(format!(
-                    "file {} data_start={} compressed_size={} end_index={} bytes_len={}",
-                    file.name(),
-                    start_index,
-                    compressed_size,
-                    end_index,
-                    bytes.len()
-                )));
-            }
-            let buf = bytes.slice(start_index.into_int_comptime()..end_index.into_int_comptime());
-            let actual_crc = crc32fast::hash(&buf);
-            if actual_crc != file.crc32() {
-                return Err(malformed_runner(format!(
-                    "file {} CRC-32 {actual_crc:#010x} differs from declared {:#010x}",
-                    file.name(),
-                    file.crc32()
-                )));
-            }
-
-            meta_size = meta_size
-                .saturating_add(file.name().len().try_into().unwrap_or(u32::MAX))
-                .saturating_add(internal_constants::memory_limiter_consts::ZIP_FILE_COST);
-
-            if meta_size > max_meta_size {
-                return Err(errors::Error::vm(
-                    abi::consts::VmError::out_of().memory().val(),
-                ));
-            }
-
-            records.push(record(end_index));
-            // Last entry of a repeated name wins. The zip crate already collapses
-            // duplicates by decoded name, so this only matters if that changes.
-            res.insert(String::from(file.name()), buf);
+        if !zip.comment().is_empty() {
+            return Err(malformed_runner("ZIP archive has a comment"));
         }
 
-        check_layout(bytes.as_ref(), records, zip.file_names(), &res)?;
+        // The whole directory is charged before any entry is checked, so an
+        // archive over budget is out of memory whatever is wrong with its entries.
+        let meta_size = zip.entries().fold(0u32, |acc, entry| {
+            acc.saturating_add(entry.name.len().try_into().unwrap_or(u32::MAX))
+                .saturating_add(internal_constants::memory_limiter_consts::ZIP_FILE_COST)
+        });
+        if meta_size > max_meta_size {
+            return Err(errors::Error::vm(
+                abi::consts::VmError::out_of().memory().val(),
+            ));
+        }
+
+        let mut names = BTreeSet::new();
+        let mut files = Vec::new();
+        // Entries tile everything before the directory in directory order, so a
+        // streaming reader sees the same files and the bytes hashed below are
+        // bounded by the archive size.
+        let mut next_offset = 0usize;
+
+        for (i, entry) in zip.entries().enumerate() {
+            let name = std::str::from_utf8(entry.name)
+                .ok()
+                .filter(|name| name.bytes().all(|b| matches!(b, b' '..=b'~')))
+                .ok_or_else(|| {
+                    malformed_runner(format!(
+                        "ZIP entry {i} name \"{}\" is not printable ASCII",
+                        entry.name.escape_ascii()
+                    ))
+                })?;
+
+            if entry.method != genvm_stored_zip::STORED {
+                return Err(malformed_runner(format!(
+                    "unsupported compression method: {}",
+                    entry.method
+                )));
+            }
+
+            let offset: usize = entry.header_offset.into_int_comptime();
+            if offset != next_offset {
+                return Err(malformed_runner(format!(
+                    "file {name} starts at {offset}, not at {next_offset}"
+                )));
+            }
+
+            let local = zip
+                .local_header(&entry)
+                .map_err(|e| malformed_runner(format!("file {name}: {e}")))?;
+            check_local_header_agrees(name, &entry, &local)?;
+            check_entry_fields(name, &entry)?;
+            if entry.flags != 0 {
+                return Err(malformed_runner(format!(
+                    "file {name} has unsupported flags {:#06x}",
+                    entry.flags
+                )));
+            }
+            if !entry.comment.is_empty() {
+                return Err(malformed_runner(format!("file {name} has a comment")));
+            }
+
+            // A stored entry is copied verbatim, so both sizes describe the same
+            // bytes; disagreeing ones mean the archive lies about at least one.
+            if entry.compressed_size != entry.size {
+                return Err(malformed_runner(format!(
+                    "stored file {name} compressed_size={} differs from size={}",
+                    entry.compressed_size, entry.size
+                )));
+            }
+            next_offset = local.data.end;
+
+            if name.ends_with('/') {
+                return Err(malformed_runner(format!(
+                    "directory entry {name} is not allowed"
+                )));
+            }
+
+            validate_entry_name(name)?;
+            if !names.insert(name) {
+                return Err(malformed_runner(format!("file {name} is repeated")));
+            }
+            files.push((name, local.data, entry.crc32));
+        }
+
+        if next_offset != zip.directory_start() {
+            return Err(malformed_runner(format!(
+                "ZIP has bytes from {next_offset} before the central directory at {}",
+                zip.directory_start()
+            )));
+        }
+
+        let mut directory = String::new();
+        for name in &names {
+            directory.clear();
+            directory.push_str(name);
+            directory.push('/');
+            if let Some(child) = names
+                .range(directory.as_str()..)
+                .next()
+                .filter(|child| child.starts_with(directory.as_str()))
+            {
+                return Err(malformed_runner(format!(
+                    "file {name} is also a directory of {child}"
+                )));
+            }
+        }
+
+        let mut res = BTreeMap::new();
+        for (name, data, crc32) in files {
+            let buf = bytes.slice(data);
+            let actual_crc = crc32fast::hash(&buf);
+            if actual_crc != crc32 {
+                return Err(malformed_runner(format!(
+                    "file {name} CRC-32 {actual_crc:#010x} differs from declared {crc32:#010x}"
+                )));
+            }
+            res.insert(String::from(name), buf);
+        }
 
         Ok(Self {
             data: res,

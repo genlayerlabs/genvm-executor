@@ -36,11 +36,10 @@ def add_compiled(name: str, py_src: bytes):
 def check_entry_name(name: str):
 	"""
 	The executor's entry-name rules, enforced here so a rejected name is a build
-	failure rather than a malformed-runner error at load time. Names are also
-	required to be ASCII: the emitted flags claim CP437, not UTF-8.
+	failure rather than a malformed-runner error at load time.
 	"""
-	if not name.isascii():
-		raise Exception(f'entry name {name!r} is not ASCII')
+	if not (name.isascii() and name.isprintable()):
+		raise Exception(f'entry name {name!r} is not printable ASCII')
 	if name.startswith('/') or '\\' in name:
 		raise Exception(f'entry name {name!r} has a leading slash or a backslash')
 	if any(part in ('', '.', '..') for part in name.split('/')):

@@ -103,6 +103,8 @@ wiggle = { path = "third-party/wasmtime/crates/wiggle", default-features = false
 ] }
 
 genvm-common = { path = "crates/common" }
+# Decides which contract code parses as an archive: change only with an executor version bump
+genvm-stored-zip = { path = "crates/stored-zip" }
 # NOTE: path dependency that climbs UP into the genvm-manager umbrella repo.
 # This executor is checked out at <manager>/executors/v0.4.x/ , so
 # ../../../crates/modules-interfaces resolves to <manager>/crates/modules-interfaces .
@@ -169,14 +171,13 @@ tokio = { version = "1.54.0", features = [
 tokio-mpmc = "0.2.4"
 tokio-tungstenite = "0.26.2"
 tracing = "0.1.41"
-# Decides which contract code parses as an archive: bump only with an executor version bump
-zip = "=4.3.0"
 
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
 anyhow = { version = "1.0.97", default-features = false }
 genvm-common = { path = "crates/common" }
 genvm-fuzzing = { path = "../../../crates/fuzzing" }
+genvm-stored-zip = { path = "crates/stored-zip", features = ["write"] }
 libc = "0.2.162"
 primitive-types = { version = "0.13.1", default-features = false, features = [
     "impl-serde",

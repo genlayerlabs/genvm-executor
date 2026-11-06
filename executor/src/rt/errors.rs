@@ -412,7 +412,6 @@ internal_from!(
     std::str::Utf8Error,
     std::string::FromUtf8Error,
     std::num::TryFromIntError,
-    zip::result::ZipError,
     wasmparser::BinaryReaderError,
 );
 

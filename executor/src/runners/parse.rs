@@ -39,9 +39,8 @@ fn describe_wasm(code: &[u8]) -> rt::errors::Result<WasmSelfDescription> {
 }
 
 pub fn parse(code: bytes::Bytes, max_meta_size: u32) -> rt::errors::Result<super::Archive> {
-    if let Ok(mut as_zip) = zip::ZipArchive::new(std::io::Cursor::new(code.clone())) {
-        return super::Archive::from_zip(&mut as_zip, code, max_meta_size)
-            .ctx("parsing zip archive");
+    if let Ok(archive) = super::Archive::try_from_zip(&code, max_meta_size) {
+        return archive.ctx("parsing zip archive");
     }
 
     if wasmparser::Parser::is_core_wasm(code.as_ref()) {

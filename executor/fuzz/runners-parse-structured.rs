@@ -41,17 +41,11 @@ fn wasm_bytes(version: Option<&[u8]>, runner_json: Option<&[u8]>) -> Vec<u8> {
 }
 
 fn zip_bytes(entries: &[(String, Vec<u8>)]) -> Option<Vec<u8>> {
-    use std::io::Write as _;
-
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-
-    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut writer = genvm_stored_zip::Writer::new();
     for (name, data) in entries {
-        writer.start_file(name.as_str(), options).ok()?;
-        writer.write_all(data).ok()?;
+        writer.add(name, genvm_stored_zip::STORED, data).ok()?;
     }
-    Some(writer.finish().ok()?.into_inner())
+    writer.finish().ok()
 }
 
 fn code_from(input: &Input) -> Option<Vec<u8>> {
