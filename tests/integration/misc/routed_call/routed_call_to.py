@@ -1,4 +1,4 @@
-# { "Depends": "py-genlayer:@RUNNER_LATEST_v0.3_py-genlayer@" }
+# { "Depends": "py-genlayer:@RUNNER_LATEST_v0.4_py-genlayer@" }
 import genlayer as gl
 
 
