@@ -1,6 +1,6 @@
 [package]
 name = "genvm"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 # Wasm compilation (`genvm precompile`, and the first run of any contract) is
@@ -104,7 +104,7 @@ wiggle = { path = "third-party/wasmtime/crates/wiggle", default-features = false
 
 genvm-common = { path = "crates/common" }
 # NOTE: path dependency that climbs UP into the genvm-manager umbrella repo.
-# This executor is checked out at <manager>/executors/v0.3.x/ , so
+# This executor is checked out at <manager>/executors/v0.4.x/ , so
 # ../../../crates/modules-interfaces resolves to <manager>/crates/modules-interfaces .
 # The host<->executor interface lives in the manager (many executors depend on
 # it). The executor is intentionally NOT standalone-buildable on its own.

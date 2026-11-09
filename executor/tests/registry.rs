@@ -2,8 +2,8 @@ use genvm::runners::cache::read_registry;
 
 const HASH: &str = "cnn3rjeozkptmzmzt4ymzznvkqfdedcvpapscmyt6r6cyzjrzsgq";
 const OTHER_HASH: &str = "cnn3rjeozkptmzmzt4ymzznvkqfdedcvpapscmyt6r6cyzjrzsga";
-const LINE: &str = "genvm/executor/v0.3";
-const NEXT_LINE: &str = "genvm/executor/v0.4";
+const LINE: &str = "genvm/executor/v0.4";
+const NEXT_LINE: &str = "genvm/executor/v0.5";
 
 fn fork_names(forks: &genvm::runners::cache::Forks) -> Vec<&str> {
     forks.iter().map(|fork| fork.as_str()).collect()
@@ -144,8 +144,8 @@ fn registry_rejects_malformed_forks() {
     for forks in [
         "",
         "|",
-        "genvm/executor/v0.3|",
-        "genvm//v0.3",
+        "genvm/executor/v0.4|",
+        "genvm//v0.4",
         "/genvm",
         "Genvm",
         "genvm executor",

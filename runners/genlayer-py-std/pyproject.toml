@@ -1,5 +1,5 @@
 # Dependency management for the genlayer-py-std unit tests moved to nix:
-# executors/v0.3.x/support/nix/py-test/flake.nix provides the pytest interpreter
+# executors/v0.4.x/support/nix/py-test/flake.nix provides the pytest interpreter
 # (was [tool.poetry.group.dev.dependencies]), and the genlayer / genlayer_embeddings
 # / onnx packages under test are imported from src/ + src-emb/ via PYTHONPATH
 # (was the [tool.poetry] packages editable install). See

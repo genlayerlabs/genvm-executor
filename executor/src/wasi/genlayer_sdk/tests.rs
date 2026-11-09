@@ -3633,8 +3633,8 @@ fn runner_hash(byte: u8) -> String {
     Bytes32Hash::from_bytes([byte; 32]).to_gvm32()
 }
 
-const LINE_FORK: &str = "genvm/executor/v0.3";
-const GATED_FORK: &str = "genvm/executor/v0.3/runners-test";
+const LINE_FORK: &str = "genvm/executor/v0.4";
+const GATED_FORK: &str = "genvm/executor/v0.4/runners-test";
 
 async fn resolve_gated(active: &str, hash: &str) -> anyhow::Result<crate::runners::Id> {
     let (gated, open) = (runner_hash(1), runner_hash(2));

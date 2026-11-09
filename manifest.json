@@ -1,4 +1,4 @@
 {
-  "executor-version": "v0.3.0",
-  "fork": "genvm/executor/v0.3"
+  "executor-version": "v0.4.0-rc1",
+  "fork": "genvm/executor/v0.4"
 }

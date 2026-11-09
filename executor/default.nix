@@ -11,8 +11,8 @@
   compiled-libs,
   # Mount prefix of this executor checkout inside the manager full-src tree.
   # The executor is built by the genvm-manager umbrella, which mounts it at
-  # executors/v0.3.x ; get-root-subtree paths must be prefixed accordingly.
-  exec-prefix ? "executors/v0.3.x",
+  # executors/v0.4.x ; get-root-subtree paths must be prefixed accordingly.
+  exec-prefix ? "executors/v0.4.x",
   ...
 }@args:
 let
@@ -21,7 +21,7 @@ let
 
   # The release manifest (all.json) is produced by the umbrella's runner
   # machinery, which owns the accumulate-and-build logic. This executor checkout
-  # is mounted at <umbrella>/executors/v0.3.x, so the umbrella root (and its
+  # is mounted at <umbrella>/executors/v0.4.x, so the umbrella root (and its
   # ./runners) is three levels up. `all.json` carries every runner compatible up
   # to our version, each id naming its own current runner as `latest`.
   manifests-data = import ../../../runners/views/release.nix (

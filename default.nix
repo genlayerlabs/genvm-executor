@@ -1,4 +1,4 @@
-# Package entry for this executor version line (v0.3.x).
+# Package entry for this executor version line (v0.4.x).
 #
 # Replaces the old root flake.nix. The executor is intentionally NOT standalone:
 # the genvm-manager umbrella imports this with its build arguments (compile-rust,
