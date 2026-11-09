@@ -188,6 +188,18 @@ pub(super) fn next_message_is_first(emissions: &[domain::ExecutionEmission]) -> 
         .all(|emission| matches!(emission, domain::ExecutionEmission::Event { .. }))
 }
 
+/// Messages and events share one execution-wide cap.
+fn ensure_emission_slot(
+    emissions: &[domain::ExecutionEmission],
+) -> Result<(), generated::types::Error> {
+    if emissions.len() >= top_limits::EMISSIONS.into_int_comptime() {
+        return Err(internal_trap(rt::errors::Error::vm(
+            abi::consts::VmError::out_of().emissions(),
+        )));
+    }
+    Ok(())
+}
+
 fn convert_internal_message_params_to_sdk(
     params: &genvm_modules_interfaces::fees::InternalMessageParams,
 ) -> abi::fees::InternalMessageParams {
@@ -590,6 +602,7 @@ impl ContextVFS<'_> {
         if !self.context.data.conf.permissions.send_messages {
             return Err(generated::types::Errno::Forbidden.into());
         }
+        ensure_emission_slot(&self.context.data.accumulator.emissions)?;
 
         if !value.is_zero() {
             let my_balance = self
@@ -751,6 +764,7 @@ impl ContextVFS<'_> {
 
             return Err(generated::types::Errno::Forbidden.into());
         }
+        ensure_emission_slot(&self.context.data.accumulator.emissions)?;
 
         if topics.len() > public_abi::EVENT_MAX_TOPICS.into_int_comptime() {
             log_warn!(@user, cnt = topics.len(), max = public_abi::EVENT_MAX_TOPICS; "too many topics");
@@ -848,6 +862,7 @@ impl ContextVFS<'_> {
             log_debug!("EmitInternalMessage rejected: can_send_messages=false (Forbidden)");
             return Err(generated::types::Errno::Forbidden.into());
         }
+        ensure_emission_slot(&self.context.data.accumulator.emissions)?;
 
         let balance_params = validate_balance_fee(
             self.context
@@ -1077,6 +1092,7 @@ impl ContextVFS<'_> {
         if !self.context.data.conf.permissions.send_messages {
             return Err(generated::types::Errno::Forbidden.into());
         }
+        ensure_emission_slot(&self.context.data.accumulator.emissions)?;
 
         let balance_params = validate_balance_fee(
             self.context

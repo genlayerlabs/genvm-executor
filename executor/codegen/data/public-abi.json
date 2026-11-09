@@ -157,6 +157,7 @@
           },
           "subvm_recursion",
           "nondet_blocks",
+          "emissions",
           "locked_slots",
           "upgraders",
           "fds"

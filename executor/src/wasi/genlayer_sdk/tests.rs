@@ -971,7 +971,7 @@ impl Drop for TestDir {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum MessageEmission {
     External,
     InternalAllocation,
@@ -2452,6 +2452,37 @@ async fn descendant_budget_overflow_has_no_emission_reservation_or_fee_effect() 
     assert_eq!(consumed.message_receipt, U256::zero());
 
     test.shutdown().await;
+}
+
+#[tokio::test]
+async fn emissions_of_every_kind_share_one_cap() {
+    let filler = domain::ExecutionEmission::Event {
+        topics: Vec::new(),
+        blob: calldata::Map::new().into(),
+        storage_fee: U256::zero(),
+    };
+    let cap: usize = top_limits::EMISSIONS.into_int_comptime();
+    for emission in MessageEmission::ALL.map(Some).into_iter().chain([None]) {
+        let mut test = EmissionTestContext::new(u32::MAX, 100);
+        test.context.data.accumulator.emissions = vec![filler.clone(); cap - 1];
+
+        let mut emit = async |test: &mut EmissionTestContext| match emission {
+            Some(emission) => test.emit_message(emission).await,
+            None => {
+                test.wasi()
+                    .gl_call_emit_event(Vec::new(), calldata::Map::new().into())
+                    .await
+            }
+        };
+        emit(&mut test).await.unwrap();
+        let memory = test.context.limiter.get_remaining_memory();
+        let error = trap_message(emit(&mut test).await.unwrap_err());
+
+        assert!(error.contains("out_of emissions"), "{emission:?}: {error}");
+        assert_eq!(test.context.data.accumulator.emissions.len(), cap);
+        assert_eq!(test.context.limiter.get_remaining_memory(), memory);
+        test.shutdown().await;
+    }
 }
 
 #[tokio::test]
