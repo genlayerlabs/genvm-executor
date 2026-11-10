@@ -90,6 +90,20 @@ pub struct MainDeployData {
     pub kwargs: Option<calldata::unparsed::Maybe<calldata::Map<Value>>>,
 }
 
+/// Settlement-chain constants that salted deploy addresses derive from
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, calldata::Encode, calldata::Decode,
+)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
+pub struct Create2Data {
+    pub deployer: Address,
+    #[calldata(
+        serialize_with = calldata::codec::as_bytes::serialize,
+        deserialize_with = calldata::codec::as_bytes::deserialize,
+    )]
+    pub code_hash: [u8; 32],
+}
+
 /// Core message data that represents the transaction context.
 /// This is the minimal set of information needed to process a contract call.
 #[derive(Debug, Clone, Serialize, Deserialize, calldata::Encode, calldata::Decode)]
@@ -117,6 +131,7 @@ pub struct MessageData {
     )]
     #[calldata(default = default_datetime)]
     pub datetime: chrono::DateTime<chrono::Utc>,
+    pub create2: Create2Data,
 }
 
 #[cfg(feature = "fuzzing")]
@@ -151,6 +166,7 @@ impl<'a> arbitrary::Arbitrary<'a> for MessageData {
             ),
             is_init: bool::arbitrary(u)?,
             datetime,
+            create2: Arbitrary::arbitrary(u)?,
         })
     }
 }
@@ -176,6 +192,7 @@ pub struct ExtendedMessageFlat {
     )]
     #[calldata(default = default_datetime)]
     pub datetime: chrono::DateTime<chrono::Utc>,
+    pub create2: Create2Data,
 
     // ExtendedMessage-specific fields
     #[calldata(
@@ -200,6 +217,7 @@ impl From<ExtendedMessageFlat> for ExtendedMessage {
                 value: flat.value,
                 is_init: flat.is_init,
                 datetime: flat.datetime,
+                create2: flat.create2,
             },
             entry_kind: flat.entry_kind,
             entry_data: flat.entry_data,
@@ -220,6 +238,7 @@ impl From<ExtendedMessage> for ExtendedMessageFlat {
             value: msg.message.value,
             is_init: msg.message.is_init,
             datetime: msg.message.datetime,
+            create2: msg.message.create2,
             entry_kind: msg.entry_kind,
             entry_data: msg.entry_data,
             entry_stage_data: msg.entry_stage_data,

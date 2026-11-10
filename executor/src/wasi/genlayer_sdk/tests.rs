@@ -1202,6 +1202,10 @@ impl EmissionTestContext {
                 value: num_bigint::BigInt::from(0),
                 is_init: false,
                 datetime: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                create2: abi::entry::Create2Data {
+                    deployer: address,
+                    code_hash: [0; 32],
+                },
             },
             entry_kind: public_abi::EntryKind::Main,
             entry_data: bytes::Bytes::new(),

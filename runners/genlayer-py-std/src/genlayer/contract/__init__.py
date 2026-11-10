@@ -11,6 +11,7 @@ This module provides functionality for:
 __all__ = (
 	'interface',
 	'deploy',
+	'Salted',
 	'Contract',
 	'get_at',
 	'Proxy',
@@ -482,6 +483,59 @@ def interface[TView, TWrite](
 from genlayer.types import u256  # noqa: E402
 
 
+class Salted:
+	"""
+	Requests a deterministic deploy address from :py:func:`deploy`
+
+	The address is
+	``keccak256(0xff ++ deployer ++ keccak256(contract_address ++ salt_nonce) ++ code_hash)[12:]``,
+	where ``contract_address`` is the deploying contract and ``salt_nonce`` is 32 bytes big-endian
+	"""
+
+	salt_nonce: u256
+	deployer: Address | None
+	code_hash: bytes | None
+
+	def __init__(
+		self,
+		salt_nonce: u256,
+		*,
+		deployer: Address | None = None,
+		code_hash: bytes | None = None,
+	):
+		"""
+		:param salt_nonce: Nonzero salt, unique per deploying contract
+		:param deployer: Settlement-chain contract that performs the ``CREATE2``
+		:param code_hash: 32-byte ``keccak256`` of the init code the deployer passes to ``CREATE2``
+
+		Where the address comes from:
+
+		- neither ``deployer`` nor ``code_hash``: computed from :py:data:`genlayer.message.create2`
+		- both: computed from them, without a call
+		- ``deployer`` only: ``deployer.predictGhostAddress(salt_nonce, contract_address)``, an EVM view call
+
+		:raises ValueError: if ``salt_nonce`` is 0 or out of range, if ``code_hash`` is given without ``deployer``, or if ``code_hash`` is not 32 bytes
+		"""
+		if isinstance(salt_nonce, bool) or not isinstance(salt_nonce, int):
+			raise TypeError('salt_nonce must be int')
+		if not 0 < salt_nonce < 2**256:
+			raise ValueError('salt_nonce must be in [1, 2**256)')
+		if deployer is None and code_hash is not None:
+			raise ValueError('code_hash requires deployer')
+		if deployer is not None and not isinstance(deployer, Address):
+			raise TypeError('deployer must be Address')
+		if code_hash is not None and (
+			not isinstance(code_hash, bytes) or len(code_hash) != 32
+		):
+			raise ValueError('code_hash must be 32 bytes')
+		self.salt_nonce = salt_nonce
+		self.deployer = deployer
+		self.code_hash = code_hash
+
+	def __repr__(self) -> str:
+		return f'Salted({self.salt_nonce}, deployer={self.deployer!r}, code_hash={self.code_hash!r})'
+
+
 @typing.overload
 def deploy(
 	use_balance: UseBalanceParams | None = None,
@@ -489,7 +543,7 @@ def deploy(
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
 	kwargs: collections.abc.Mapping[str, calldata.Encodable] = {},
-	salt_nonce: typing.Literal[0] = 0,
+	salted: None = None,
 	value: u256 = 0,
 	on: ON = 'finalized',
 ) -> None: ...
@@ -502,10 +556,10 @@ def deploy(
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
 	kwargs: collections.abc.Mapping[str, calldata.Encodable] = {},
-	salt_nonce: u256,
+	salted: Salted,
 	value: u256 = 0,
 	on: ON = 'finalized',
-) -> Address | None: ...
+) -> Address: ...
 
 
 def deploy(
@@ -514,7 +568,7 @@ def deploy(
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
 	kwargs: collections.abc.Mapping[str, calldata.Encodable] = {},
-	salt_nonce: u256 | typing.Literal[0] = 0,
+	salted: Salted | None = None,
 	value: u256 = 0,
 	on: ON = 'finalized',
 ) -> Address | None:
@@ -522,17 +576,18 @@ def deploy(
 	Deploy a new GenVM contract to the blockchain.
 
 	This function deploys a new contract using the provided ``code`` and
-	constructor arguments. The deployment address can be deterministic (with a salt)
+	constructor arguments. The deployment address can be deterministic (with ``salted``)
 	or non-deterministic.
 
 	:param code: Source code of the contract to deploy. It can be regular Python code. See :ref:`runners-reference` for more information
 	:param args: Positional arguments for the contract constructor
 	:param kwargs: Keyword arguments for the contract constructor
-	:param salt_nonce: Salt for deterministic deployment. Use 0 for non-deterministic.
+	:param salted: Deploy at a deterministic address; see :py:class:`Salted`
 	:param value: Amount of native tokens to send to the contract during deployment
 	:param on: When to execute the deployment ('decided' or 'finalized')
 	:param use_balance: Fund the deploy message fee from this contract's balance; see :py:meth:`Proxy.emit`
-	:returns: Contract address if salt_nonce != 0, None otherwise
+	:returns: The contract address if ``salted`` is given, None otherwise
+	:raises ValueError: if ``predictGhostAddress`` returns the zero address; nothing is emitted then
 
 	Example:
 		>>> # Non-deterministic deployment
@@ -546,21 +601,41 @@ def deploy(
 		>>> address = deploy(
 		>>>     code=contract_source_zip_as_bytes,
 		>>>     args=[initial_supply],
-		>>>     salt_nonce=12345,
+		>>>     salted=Salted(12345),
 		>>>     value=1000  # Send 1000 native tokens
 		>>> )
 		>>> print(f'Contract deployed at: {address}')
 
 	.. note::
-		- For deterministic deployments (salt_nonce != 0), the contract address
-			is computed using CREATE2 and is returned immediately
-		- For non-deterministic deployments (salt_nonce == 0), the address is
+		- For non-deterministic deployments, the address is
 			assigned by the consensus and not returned. Considering asynchronous nature
 			of GenLayer consensus the address should not be predicted
 		- The contract's constructor will be called with the provided ``args`` and ``kwargs``
-		- Refer to consensus documentation for CREATE2 address derivation process and
-			details about transaction ordering
 	"""
+
+	import genlayer.message as _message
+
+	address: Address | None = None
+	salt_nonce: u256 = 0
+	if salted is not None:
+		if not isinstance(salted, Salted):
+			raise TypeError('salted must be Salted or None')
+		salt_nonce = salted.salt_nonce
+		deployer, code_hash = salted.deployer, salted.code_hash
+		if deployer is None:
+			create2 = _message.create2
+			deployer, code_hash = create2['deployer'], create2['code_hash']
+
+		if code_hash is None:
+			from genlayer._internal import predict_ghost_address
+
+			address = predict_ghost_address(deployer, salt_nonce, _message.contract_address)
+		else:
+			from genlayer._internal import create2_address
+
+			address = create2_address(
+				deployer, code_hash, _message.contract_address, salt_nonce
+			)
 
 	message: dict[str, calldata.Encodable] = {
 		'calldata': _make_calldata_obj(None, args, kwargs),
@@ -572,13 +647,7 @@ def deploy(
 	message.update(_balance_fields(use_balance))
 	wasi.gl_call(calldata.encode({'EmitInternalDeployMessage': message}))
 
-	if salt_nonce == 0:
-		return None
-
-	import genlayer.message as _message
-	from genlayer._internal import create2_address
-
-	return create2_address(_message.contract_address, salt_nonce, _message.chain_id)
+	return address
 
 
 class Contract(IAccount):

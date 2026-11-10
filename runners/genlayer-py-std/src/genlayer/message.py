@@ -8,6 +8,8 @@ __all__ = (
 	'stack',
 	'value',
 	'chain_id',
+	'create2',
+	'Create2RawType',
 	'is_init',
 	'entry_kind',
 	'entry_data',
@@ -20,6 +22,18 @@ import typing
 import genlayer.calldata as calldata
 from genlayer import IS_IN_VM as _IS_IN_VM
 from genlayer.types import Address, u256
+
+
+class Create2RawType(typing.TypedDict):
+	deployer: Address
+	"""
+	Settlement-chain contract that performs the ``CREATE2``
+	"""
+
+	code_hash: bytes
+	"""
+	``keccak256`` of the init code the deployer passes to ``CREATE2``
+	"""
 
 
 class MessageRawType(typing.TypedDict):
@@ -65,6 +79,11 @@ class MessageRawType(typing.TypedDict):
 	Current chain ID
 	"""
 
+	create2: Create2RawType
+	"""
+	Settlement-chain inputs of salted deploy addresses
+	"""
+
 	entry_kind: int
 	"""
 	One of:
@@ -98,6 +117,9 @@ value: u256 = ...  # type: ignore
 
 chain_id: u256 = ...  # type: ignore
 """Current chain ID"""
+
+create2: Create2RawType = ...  # type: ignore
+"""Settlement-chain inputs of salted deploy addresses"""
 
 is_init: bool = ...  # type: ignore
 """``True`` *iff* it is a deployment"""

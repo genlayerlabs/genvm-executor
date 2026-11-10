@@ -530,6 +530,7 @@ impl ContextVFS<'_> {
                     datetime: my_data.message.datetime,
                     chain_id: my_data.message.chain_id,
                     stack: my_data.message.stack,
+                    create2: my_data.message.create2,
                 },
                 entry_kind: my_data.entry_kind,
                 entry_data: my_data.entry_data,

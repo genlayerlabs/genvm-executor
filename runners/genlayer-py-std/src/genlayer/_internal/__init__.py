@@ -1,4 +1,4 @@
-__all__ = ('create2_address',)
+__all__ = ('create2_address', 'predict_ghost_address')
 
 import os
 import typing
@@ -50,11 +50,33 @@ def _lazy_api[T, **R](fn: typing.Callable[R, Lazy[T]]) -> LazyApi[T, R]:
 
 
 def create2_address(
-	contract_address: Address, salt_nonce: u256, chain_id: u256, /
+	deployer: Address, code_hash: bytes, parent: Address, salt_nonce: u256, /
 ) -> Address:
-	hasher = Keccak256()
-	hasher.update(b'\x01')  # CREATE 2 code
-	hasher.update(contract_address.as_bytes)
-	hasher.update(salt_nonce.to_bytes(32, 'big', signed=False))
-	hasher.update(chain_id.to_bytes(32, 'big', signed=False))
-	return Address(hasher.digest()[:20])
+	hasher = Keccak256(b'\xff')
+	hasher.update(deployer.as_bytes)
+	hasher.update(
+		Keccak256(parent.as_bytes + salt_nonce.to_bytes(32, 'big', signed=False)).digest()
+	)
+	hasher.update(code_hash)
+	return Address(hasher.digest()[12:])
+
+
+def predict_ghost_address(
+	deployer: Address, salt_nonce: u256, sender: Address, /
+) -> Address:
+	import genlayer.evm as evm
+
+	@evm.contract_interface
+	class GhostFactory:
+		class View:
+			def predictGhostAddress(
+				self, salt_nonce: u256, sender: Address, /
+			) -> Address: ...
+
+		class Write:
+			pass
+
+	address = GhostFactory(deployer).view().predictGhostAddress(salt_nonce, sender)
+	if address == Address(bytes(20)):
+		raise ValueError('predictGhostAddress returned the zero address')
+	return address

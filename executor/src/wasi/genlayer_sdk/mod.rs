@@ -100,6 +100,7 @@ impl ExtendedMessageExt for ExtendedMessage {
                 value: self.message.value.clone(),
                 is_init: false,
                 datetime: self.message.datetime,
+                create2: self.message.create2.clone(),
             },
             entry_kind,
             entry_data,

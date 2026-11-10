@@ -1,12 +1,38 @@
 Migration Guide
 ===============
 
-This page covers 2 migrations:
+This page covers 3 migrations:
 
+* :ref:`py-sdk-v03-to-v04` — a contract written for v0.3
 * :ref:`py-sdk-v03-rc` — a contract that already targets an earlier v0.3 release candidate
 * :ref:`py-sdk-v02-to-v03` — a contract written for v0.2
 
-The first is a subset of the second: a contract coming from v0.2 gets all of it as part of the move
+The second is a subset of the third: a contract coming from v0.2 gets all of it as part of the move
+
+.. _py-sdk-v03-to-v04:
+
+From v0.3 to v0.4
+-----------------
+
+Salted Deploys
+~~~~~~~~~~~~~~
+
+The ``salt_nonce`` argument of ``deploy`` moves into ``salted``, which takes a
+:py:class:`genlayer.contract.Salted`. A ``salt_nonce`` of 0 raises instead of meaning "not salted";
+omit ``salted`` for that. The returned address now matches the
+address the settlement chain assigns, so it differs from what v0.3 returned:
+
+.. code-block:: python
+
+    # v0.3
+    address = gl.contract.deploy(code=source, salt_nonce=42)
+
+    # v0.4
+    address = gl.contract.deploy(code=source, salted=gl.contract.Salted(42))
+
+By default the address derives from :py:data:`genlayer.message.create2`. ``deployer`` and
+``code_hash`` passed to ``Salted`` override it; with ``deployer`` alone, the address comes from
+its ``predictGhostAddress`` view call
 
 .. _py-sdk-v03-rc:
 

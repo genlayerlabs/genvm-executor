@@ -226,6 +226,7 @@ pub fn create_supervisor(
 fn convert_message_data(
     message: genvm_modules_interfaces::MessageData,
     stack: Vec<calldata::Address>,
+    create2: genvm_modules_interfaces::Create2Data,
 ) -> genlayer_sdk::abi::entry::MessageData {
     genlayer_sdk::abi::entry::MessageData {
         contract_address: message.contract_address,
@@ -237,6 +238,10 @@ fn convert_message_data(
         value: message.value,
         is_init: message.is_init,
         datetime: message.transaction_timestamp,
+        create2: genlayer_sdk::abi::entry::Create2Data {
+            deployer: create2.deployer,
+            code_hash: create2.code_hash,
+        },
     }
 }
 
@@ -495,7 +500,7 @@ pub async fn run_with_impl(
             },
         },
         message_data: ExtendedMessage {
-            message: convert_message_data(entry_data.message, stack),
+            message: convert_message_data(entry_data.message, stack, entry_data.create2),
             entry_kind: public_abi::EntryKind::Main,
             entry_data: entry_data.calldata,
             entry_stage_data: calldata::Value::Null,
