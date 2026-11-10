@@ -4,6 +4,7 @@ import collections.abc
 import typing
 
 from ..types import SizedArray
+from ._internal.reorder import _Reorderable
 from .core import (
 	CopyAction,
 	Slot,
@@ -16,7 +17,7 @@ from .core import (
 
 
 class Array[T, S: int](
-	_WithStorageSlotAndTD, collections.abc.Sequence, SizedArray[T, S]
+	_WithStorageSlotAndTD, _Reorderable[T], collections.abc.Sequence, SizedArray[T, S]
 ):
 	"""
 	Constantly sized array that can be persisted on the blockchain
@@ -47,13 +48,8 @@ class Array[T, S: int](
 		slf._off = off
 		return slf
 
-	def _map_index(self, idx: int) -> int:
-		le = len(self)
-		if idx < 0:
-			idx += le
-		if idx < 0 or idx >= le:
-			raise IndexError(f'index out of range {idx} not in 0..<{le}')
-		return idx
+	def _items_at(self) -> tuple[Slot, int]:
+		return self._storage_slot, self._off
 
 	@typing.overload
 	def __getitem__(self, idx: typing.SupportsIndex) -> T: ...

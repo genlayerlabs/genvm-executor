@@ -5,6 +5,7 @@ import operator
 import typing
 
 from ._internal.desc_base_types import _u32_desc
+from ._internal.reorder import _Reorderable
 from .core import (
 	ComplexCopyAction,
 	Slot,
@@ -15,7 +16,9 @@ from .core import (
 )
 
 
-class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
+class DynArray[T](
+	_WithStorageSlotAndTD, _Reorderable[T], collections.abc.MutableSequence[T]
+):
 	"""
 	Represents exponentially growing array (:py:class:`list` in python terms) that can be persisted on the blockchain
 	"""
@@ -35,13 +38,8 @@ class DynArray[T](_WithStorageSlotAndTD, collections.abc.MutableSequence[T]):
 	def __len__(self) -> int:
 		return _u32_desc.get(self._storage_slot, self._off)
 
-	def _map_index(self, idx: int) -> int:
-		le = len(self)
-		if idx < 0:
-			idx += le
-		if idx < 0 or idx >= le:
-			raise IndexError(f'index out of range {idx} not in 0..<{le}')
-		return idx
+	def _items_at(self) -> tuple[Slot, int]:
+		return self._storage_slot.indirect(self._off), 0
 
 	@typing.overload
 	def __getitem__(self, idx: typing.SupportsIndex) -> T: ...
