@@ -20,6 +20,8 @@ pub mod top_limits {
     pub const NONDET_BLOCKS: u32 = 4096;
     pub const EMISSIONS: u32 = 65535;
     pub const DEFAULT_ALLOCATION_TREE_DEPTH: u32 = 5;
+    pub const DESCENDANT_GRANT_NODES: u32 = 24;
+    pub const DESCENDANT_GRANT_FEE_PARAMS_BYTES: u32 = 1024;
     pub const LOCKED_SLOTS: u32 = 256;
     pub const UPGRADERS: u32 = 32;
     pub const VM_RECURSION: u32 = 512;

@@ -11,11 +11,14 @@ const DOMAIN: [u8; 32] = [
 ];
 
 pub(super) const ROOT_PARENT: U256 = U256::MAX;
-const MAX_NODES: usize = 24;
-const MAX_FEE_PARAMS_BYTES: usize = 1_024;
+const MAX_NODES: usize =
+    genvm_common::internal_constants::top_limits::DESCENDANT_GRANT_NODES as usize;
+const MAX_FEE_PARAMS_BYTES: usize =
+    genvm_common::internal_constants::top_limits::DESCENDANT_GRANT_FEE_PARAMS_BYTES as usize;
 const INTERNAL_FEE_PARAMS_BASE_BYTES: usize = 320;
 const MAX_INTERNAL_ROTATIONS: usize = (MAX_FEE_PARAMS_BYTES - INTERNAL_FEE_PARAMS_BASE_BYTES) / 32;
-const MAX_GRANT_BYTES: usize = 31_712;
+const MAX_GRANT_BYTES: usize =
+    7 * 32 + MAX_NODES * (9 * 32 + MAX_FEE_PARAMS_BYTES.next_multiple_of(32));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GrantPolicy {

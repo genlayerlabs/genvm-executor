@@ -25,6 +25,8 @@
       "nondet_blocks": 4096,
       "emissions": 65535,
       "default_allocation_tree_depth": 5,
+      "descendant_grant_nodes": 24,
+      "descendant_grant_fee_params_bytes": 1024,
       "locked_slots": 256,
       "upgraders": 32,
       "vm_recursion": 512,
