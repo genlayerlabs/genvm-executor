@@ -42,9 +42,9 @@ fn reserve_permanent(
     allocation: &'static str,
 ) -> Result<rt::memlimiter::PermanentAllocation, generated::types::Error> {
     limiter.reserve_permanent(amount).ok_or_else(|| {
-        internal_trap(rt::errors::Error::wrap(
+        internal_trap(rt::errors::vm_error!(
             abi::consts::VmError::out_of().memory().val(),
-            anyhow::anyhow!("retaining {amount} bytes for {allocation}"),
+            "retaining {amount} bytes for {allocation}"
         ))
     })
 }

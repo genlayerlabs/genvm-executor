@@ -435,6 +435,24 @@ macro_rules! internal_ensure {
 }
 pub use internal_ensure;
 
+/// Create an [`ErrorKind::Vm`] error with `code` and a format-string context.
+#[macro_export]
+macro_rules! vm_error {
+    ($code:expr, $($arg:tt)*) => {
+        $crate::rt::errors::Error::vm($code).context(::std::format!($($arg)*))
+    };
+}
+pub use vm_error;
+
+/// Create an [`ErrorKind::FatalVm`] error with `code` and a format-string context.
+#[macro_export]
+macro_rules! fatal_vm_error {
+    ($code:expr, $($arg:tt)*) => {
+        $crate::rt::errors::Error::fatal_vm($code).context(::std::format!($($arg)*))
+    };
+}
+pub use fatal_vm_error;
+
 /// Attach context to a `Result<T, E: Into<Error>>`. Named `ctx`/`with_ctx`
 /// (not `context`) to avoid colliding with `anyhow::Context` while both are in
 /// scope during the migration.

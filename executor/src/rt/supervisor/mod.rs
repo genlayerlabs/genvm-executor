@@ -611,9 +611,9 @@ async fn apply_contract_actions_inner(
         .with_context(|| format!("reading contract major for {topmost_runner_id}"))?;
     let node_major = genvm_common::version::CURRENT.major;
     if u16::from(contract_major) != node_major {
-        return Err(rt::errors::Error::wrap(
+        return Err(rt::errors::vm_error!(
             public_abi::VmError::invalid_contract().major_mismatch(),
-            anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
+            "contract major {contract_major} != node major {node_major}"
         )
         .into());
     }

@@ -543,16 +543,14 @@ impl DataLimit {
                 .consume_bucket_raw(bucket, &bucket.subtract_on_start.clone())
                 .await
             {
-                return Some(rt::errors::Error::wrap(
+                return Some(rt::errors::vm_error!(
                     bucket.oom_error.clone(),
-                    rt::errors::internal!(
-                        "subtract_on_start exceeds bucket {:?} total",
-                        bucket
-                            .bucket_names
-                            .iter()
-                            .map(symbol_table::GlobalSymbol::as_str)
-                            .collect::<Vec<_>>()
-                    ),
+                    "subtract_on_start exceeds bucket {:?} total",
+                    bucket
+                        .bucket_names
+                        .iter()
+                        .map(symbol_table::GlobalSymbol::as_str)
+                        .collect::<Vec<_>>()
                 ));
             }
         }

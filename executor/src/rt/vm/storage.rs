@@ -90,9 +90,9 @@ impl Limiter {
 
     pub async fn consume(&self, amount: u64) -> rt::errors::Result<()> {
         if !self.limit.consume_storage_pages(amount).await? {
-            return Err(rt::errors::Error::wrap(
+            return Err(rt::errors::vm_error!(
                 abi::consts::VmError::out_of().storage(),
-                anyhow::anyhow!("consuming {amount} storage pages"),
+                "consuming {amount} storage pages"
             ));
         }
         Ok(())
@@ -128,9 +128,9 @@ impl StoragePagesOverride {
                 .mem
                 .reserve_permanent(memory_limiter_consts::NEW_STORAGE_PAGE.into())
                 .ok_or_else(|| {
-                    rt::errors::Error::wrap(
+                    rt::errors::vm_error!(
                         abi::consts::VmError::out_of().memory().val(),
-                        anyhow::anyhow!("allocating storage page override"),
+                        "allocating storage page override"
                     )
                 })?;
             // Memory is charged first so a write refused for want of RAM costs no
@@ -147,15 +147,16 @@ impl StoragePagesOverride {
         // While we keep our version alive the child can copy-on-write every page
         // it inherits, so it pays for them up front and gets it back when it ends.
         let inherited: u32 = self.pages.size().into_int_downcast().map_err(|_| {
-            rt::errors::Error::wrap(
+            rt::errors::vm_error!(
                 abi::consts::VmError::out_of().memory().val(),
-                anyhow::anyhow!("inheriting {} storage pages", self.pages.size()),
+                "inheriting {} storage pages",
+                self.pages.size()
             )
         })?;
         if !mem.consume_mul(inherited, memory_limiter_consts::STORAGE_PAGE_INHERITED) {
-            return Err(rt::errors::Error::wrap(
+            return Err(rt::errors::vm_error!(
                 abi::consts::VmError::out_of().memory().val(),
-                anyhow::anyhow!("inheriting {inherited} storage pages"),
+                "inheriting {inherited} storage pages"
             ));
         }
 
@@ -173,9 +174,9 @@ impl StoragePagesOverride {
         // it owes us is strictly less than what we still hold.
         debug_assert!(charged, "permanent fold charge exceeded the parent budget");
         if !charged {
-            return Err(rt::errors::Error::fatal_vm_cause(
+            return Err(rt::errors::fatal_vm_error!(
                 abi::consts::VmError::out_of().memory().val(),
-                Some(anyhow::anyhow!("folding permanent allocations")),
+                "folding permanent allocations"
             ));
         }
         self.pages = child.pages;
@@ -583,9 +584,9 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
     pub fn check_major(contract_major: u8) -> rt::errors::Result<()> {
         let node_major = genvm_common::version::CURRENT.major;
         if u16::from(contract_major) != node_major {
-            return Err(rt::errors::Error::wrap(
+            return Err(rt::errors::vm_error!(
                 abi::consts::VmError::invalid_contract().major_mismatch(),
-                anyhow::anyhow!("contract major {contract_major} != node major {node_major}"),
+                "contract major {contract_major} != node major {node_major}"
             ));
         }
         Ok(())

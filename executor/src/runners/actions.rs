@@ -47,26 +47,22 @@ impl Env {
         val: &str,
     ) -> core::result::Result<(), rt::errors::Error> {
         if name.len() > runner_limits::ENV_NAME_LEN.into_int_comptime() {
-            return Err(rt::errors::Error::vm_cause(
+            return Err(rt::errors::vm_error!(
                 abi::consts::VmError::invalid_contract()
                     .runner()
                     .malformed(),
-                Some(anyhow::anyhow!(
-                    "env var name is too long: {} bytes",
-                    name.len()
-                )),
+                "env var name is too long: {} bytes",
+                name.len()
             ));
         }
 
         for c in name.chars() {
             if !c.is_ascii() || c == '=' || c.is_control() || c.is_whitespace() {
-                return Err(rt::errors::Error::vm_cause(
+                return Err(rt::errors::vm_error!(
                     abi::consts::VmError::invalid_contract()
                         .runner()
                         .malformed(),
-                    Some(anyhow::anyhow!(
-                        "env var name contains invalid character: `{c:?}`"
-                    )),
+                    "env var name contains invalid character: `{c:?}`"
                 ));
             }
         }
@@ -88,14 +84,12 @@ impl Env {
         };
 
         if new_val.len() > runner_limits::ENV_VALUE_LEN.into_int_comptime() {
-            return Err(rt::errors::Error::vm_cause(
+            return Err(rt::errors::vm_error!(
                 abi::consts::VmError::invalid_contract()
                     .runner()
                     .malformed(),
-                Some(anyhow::anyhow!(
-                    "env var {name:?} value is too long: {} bytes",
-                    new_val.len()
-                )),
+                "env var {name:?} value is too long: {} bytes",
+                new_val.len()
             ));
         }
 
@@ -103,24 +97,20 @@ impl Env {
             .limiter
             .consume(new_val.len().into_int_downcast_panicking())
         {
-            return Err(rt::errors::Error::vm_cause(
+            return Err(rt::errors::vm_error!(
                 abi::consts::VmError::out_of().memory().val(),
-                Some(anyhow::anyhow!(
-                    "env var {name:?} value is too long: {} bytes, exceeds memory limit",
-                    new_val.len()
-                )),
+                "env var {name:?} value is too long: {} bytes, exceeds memory limit",
+                new_val.len()
             ));
         }
 
         for c in new_val.chars() {
             if c == '\0' {
-                return Err(rt::errors::Error::vm_cause(
+                return Err(rt::errors::vm_error!(
                     abi::consts::VmError::invalid_contract()
                         .runner()
                         .malformed(),
-                    Some(anyhow::anyhow!(
-                        "env var {name:?} value contains invalid character: `{c:?}`"
-                    )),
+                    "env var {name:?} value contains invalid character: `{c:?}`"
                 ));
             }
         }

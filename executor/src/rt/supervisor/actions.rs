@@ -18,14 +18,6 @@ pub struct Ctx<'a, 'b> {
     pub vm: &'b mut rt::vm::VMBase,
 }
 
-fn make_malformed_runner_error(extra_msg: &str) -> anyhow::Error {
-    rt::errors::Error::wrap(
-        public_abi::VmError::invalid_contract().runner().malformed(),
-        anyhow::anyhow!("{}", extra_msg),
-    )
-    .into()
-}
-
 fn next_action_context(
     capture: genvm_common::debug_mode::Capture,
     contexts: &VecDeque<String>,
@@ -71,14 +63,16 @@ fn maps_into_vm(to: &str) -> bool {
 /// past it and resolve into `/vm/` once the VFS normalizes the path.
 pub fn check_mapping_target(to: &str) -> anyhow::Result<()> {
     if maps_into_vm(to) {
-        return Err(make_malformed_runner_error(&format!(
+        return Err(runners::malformed_runner_error(format!(
             "mapping into /vm/ is forbidden: {to}"
-        )));
+        ))
+        .into());
     }
     if to.split('/').any(|component| component == "..") {
-        return Err(make_malformed_runner_error(&format!(
+        return Err(runners::malformed_runner_error(format!(
             "mapping path with a '..' component is forbidden: {to}"
-        )));
+        ))
+        .into());
     }
     Ok(())
 }
@@ -143,9 +137,9 @@ pub(crate) async fn resolve_runner_id(
     id: &str,
 ) -> anyhow::Result<runners::Id> {
     let Some(parsed) = runners::parse_runner_id(id) else {
-        return Err(make_malformed_runner_error(
-            "runner id doesn't match expected format",
-        ));
+        return Err(
+            runners::malformed_runner_error("runner id doesn't match expected format").into(),
+        );
     };
 
     let resolved: runners::Id = match parsed {
@@ -154,25 +148,27 @@ pub(crate) async fn resolve_runner_id(
             let hash: Bytes32Hash = if hash == "test" || hash == "latest" {
                 if !supervisor.shared_data.debug_mode.allows_latest_resolution() {
                     log_warn!(@user; ":{hash} runner used in non-debug mode, this is not allowed");
-                    return Err(make_malformed_runner_error(
+                    return Err(runners::malformed_runner_error(
                         "runner id doesn't match expected format",
-                    ));
+                    )
+                    .into());
                 }
                 let new_latest = supervisor.runner_cache.get_latest(&name);
                 log_info!(runner_id = name.as_str(), tag = hash.as_str(); "resolving :test/:latest runner");
                 let Some(new_latest) = new_latest else {
-                    return Err(make_malformed_runner_error(
+                    return Err(runners::malformed_runner_error(
                         "runner id doesn't match expected format",
-                    ));
+                    )
+                    .into());
                 };
                 Bytes32Hash::from_gvm32(new_latest).map_err(|e| {
-                    make_malformed_runner_error(&format!(
+                    runners::malformed_runner_error(format!(
                         "runner hash `{new_latest}` is not valid gvm32: {e}"
                     ))
                 })?
             } else {
                 Bytes32Hash::from_gvm32(&hash).map_err(|e| {
-                    make_malformed_runner_error(&format!(
+                    runners::malformed_runner_error(format!(
                         "runner hash `{hash}` is not valid gvm32: {e}"
                     ))
                 })?
@@ -185,14 +181,16 @@ pub(crate) async fn resolve_runner_id(
             // executor that does not ship it.
             match supervisor.runner_cache.get_version(&name, &hash_gvm32) {
                 None => {
-                    return Err(make_malformed_runner_error(&format!(
+                    return Err(runners::malformed_runner_error(format!(
                         "runner `{name}:{hash_gvm32}` is not installed"
-                    )));
+                    ))
+                    .into());
                 }
                 Some(version) if !version.is_visible_in(&supervisor.forks) => {
-                    return Err(make_malformed_runner_error(&format!(
+                    return Err(runners::malformed_runner_error(format!(
                         "runner `{name}:{hash_gvm32}` is not available on this network"
-                    )));
+                    ))
+                    .into());
                 }
                 Some(_) => {}
             }
@@ -208,7 +206,7 @@ pub(crate) async fn resolve_runner_id(
                 Some(s) => s,
                 None => {
                     let mode = on.host_storage_type().ok_or_else(|| {
-                        make_malformed_runner_error(
+                        runners::malformed_runner_error(
                             "deploy-state chain runner cannot resolve its code slot from chain",
                         )
                     })?;
@@ -236,7 +234,7 @@ pub(crate) async fn resolve_runner_id(
         }
         runners::IdUnresolved::Custom { hash } => {
             let hash = Bytes32Hash::from_gvm32(&hash).map_err(|e| {
-                make_malformed_runner_error(&format!(
+                runners::malformed_runner_error(format!(
                     "custom runner hash `{hash}` is not valid gvm32: {e}"
                 ))
             })?;
@@ -292,26 +290,29 @@ pub(crate) fn resolve_child_custom_runners(
                 let hash = match runners::parse_runner_id(&elem) {
                     Some(runners::IdUnresolved::Custom { hash }) => hash,
                     _ => {
-                        return Err(make_malformed_runner_error(&format!(
+                        return Err(runners::malformed_runner_error(format!(
                             "custom_runners entry `{elem}` is not a `custom:` runner id"
-                        )));
+                        ))
+                        .into());
                     }
                 };
                 let hash = Bytes32Hash::from_gvm32(&hash).map_err(|e| {
-                    make_malformed_runner_error(&format!(
+                    runners::malformed_runner_error(format!(
                         "custom_runners entry `{elem}` hash is not valid gvm32: {e}"
                     ))
                 })?;
                 let id = runners::Id::Custom { hash }.canonical();
                 let Some(pin) = parent_loaded.get(id) else {
-                    return Err(make_malformed_runner_error(&format!(
+                    return Err(runners::malformed_runner_error(format!(
                         "custom_runners entry `{elem}` is not loaded in this scope"
-                    )));
+                    ))
+                    .into());
                 };
                 if !granted_ids.insert(id) {
-                    return Err(make_malformed_runner_error(&format!(
+                    return Err(runners::malformed_runner_error(format!(
                         "custom_runners entry `{elem}` is duplicated"
-                    )));
+                    ))
+                    .into());
                 }
                 grants.push(pin.clone());
             }
@@ -322,9 +323,10 @@ pub(crate) fn resolve_child_custom_runners(
     if let runners::Id::Custom { .. } = target {
         let id = target.canonical();
         let Some(pin) = parent_loaded.get(id) else {
-            return Err(make_malformed_runner_error(
+            return Err(runners::malformed_runner_error(
                 "runner to execute is a custom runner not loaded in this scope",
-            ));
+            )
+            .into());
         };
         if granted_ids.insert(id) {
             grants.push(pin.clone());
@@ -547,9 +549,10 @@ pub(crate) async fn load_action(
 
     let Resolved { id, kind } = resolved;
     if matches!(kind, ResolvedKind::Custom) {
-        return Err(make_malformed_runner_error(&format!(
+        return Err(runners::malformed_runner_error(format!(
             "custom runner {id} is not registered in this execution scope"
-        )));
+        ))
+        .into());
     }
     let cell = supervisor.runner_cache.cell(id);
     if cell.initialized() {
@@ -597,7 +600,9 @@ pub(crate) async fn load_action(
         }
         ResolvedKind::Chain { address, on, slot } => {
             let mode = on.host_storage_type().ok_or_else(|| {
-                make_malformed_runner_error("deploy-state chain runner is not available on chain")
+                runners::malformed_runner_error(
+                    "deploy-state chain runner is not available on chain",
+                )
             })?;
             let mut storage = rt::vm::storage::Storage::new(
                 address,
@@ -617,11 +622,9 @@ pub(crate) async fn load_action(
                 .with_ctx(|| format!("reading major for chain runner {id}"))?;
             let node_major = genvm_common::version::CURRENT.major;
             if u16::from(dep_major) != node_major {
-                return Err(rt::errors::Error::wrap(
+                return Err(rt::errors::vm_error!(
                     public_abi::VmError::invalid_contract().major_mismatch(),
-                    anyhow::anyhow!(
-                        "chain runner {id} major {dep_major} != node major {node_major}"
-                    ),
+                    "chain runner {id} major {dep_major} != node major {node_major}"
                 )
                 .into());
             }
