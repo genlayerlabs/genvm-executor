@@ -635,24 +635,38 @@ impl DataLimit {
         .ctx("calculating message fee internal")
     }
 
-    pub async fn consume_message_fee(&self, cost_fee: &CostVec, cost_receipt: &CostVec) -> bool {
-        let mut buckets = self.buckets.lock().await;
+    pub async fn consume_message_fee(
+        &self,
+        cost_fee: &CostVec,
+        cost_receipt: &CostVec,
+    ) -> Result<(), symbol_table::GlobalSymbol> {
+        self.consume_message_costs(Some(cost_fee), cost_receipt)
+            .await
+    }
 
-        debug_assert_eq!(self.message_fee.bucket_names.len(), cost_fee.0.len());
+    async fn consume_message_costs(
+        &self,
+        cost_fee: Option<&CostVec>,
+        cost_receipt: &CostVec,
+    ) -> Result<(), symbol_table::GlobalSymbol> {
+        let mut buckets = self.buckets.lock().await;
+        let fee_costs = cost_fee.map_or(&[][..], |cost| cost.0.as_slice());
+
+        debug_assert!(cost_fee.is_none() || self.message_fee.bucket_names.len() == fee_costs.len());
         debug_assert_eq!(
             self.message_receipt.bucket_names.len(),
             cost_receipt.0.len()
         );
         let mut deductions: Vec<(symbol_table::GlobalSymbol, primitive_types::U256)> = Vec::new();
 
-        for (&name, &cost) in self.message_fee.bucket_names.iter().zip(cost_fee.0.iter()) {
+        for (&name, &cost) in self.message_fee.bucket_names.iter().zip(fee_costs.iter()) {
             if let Some((_, total)) = deductions
                 .iter_mut()
                 .find(|(existing, _)| *existing == name)
             {
                 let Some(sum) = total.checked_add(cost) else {
                     log_warn!(@operator, bucket = name.as_str(); "consume_message_fee: cost overflow");
-                    return false;
+                    return Err(name);
                 };
                 *total = sum;
             } else {
@@ -671,7 +685,7 @@ impl DataLimit {
             {
                 let Some(sum) = total.checked_add(cost) else {
                     log_warn!(@operator, bucket = name.as_str(); "consume_message_fee: cost overflow");
-                    return false;
+                    return Err(name);
                 };
                 *total = sum;
             } else {
@@ -688,7 +702,7 @@ impl DataLimit {
                     name.as_str()
                 );
                 log_warn!(@operator, bucket = name.as_str(); "consume_message_fee: bucket missing");
-                return false;
+                return Err(name);
             };
             if *remaining < total {
                 log_warn!(
@@ -698,7 +712,7 @@ impl DataLimit {
                     remaining:display = *remaining;
                     "consume_message_fee: insufficient funds"
                 );
-                return false;
+                return Err(name);
             }
         }
 
@@ -712,7 +726,7 @@ impl DataLimit {
         std::mem::drop(buckets);
 
         // Update per-category consumed trackers.
-        for (i, &cost) in cost_fee.0.iter().enumerate() {
+        for (i, &cost) in fee_costs.iter().enumerate() {
             *self.message_fee.total_consumed[i].lock().await += cost;
         }
         for (i, &cost) in cost_receipt.0.iter().enumerate() {
@@ -720,15 +734,15 @@ impl DataLimit {
         }
 
         log_debug!("consume_message_fee: ok");
-        true
+        Ok(())
     }
 
-    /// Consumes only the `message_receipt` bucket, leaving the `message_fee`
-    /// bucket untouched (balance-funded messages are excluded from the sender
-    /// pool on-chain). Atomic; returns `false` if the bucket cannot cover it.
-    pub async fn consume_message_receipt_only(&self, cost_receipt: &CostVec) -> bool {
-        self.consume_bucket_raw(&self.message_receipt, &cost_receipt.0)
-            .await
+    /// Balance-funded messages skip the sender pool on-chain, so only receipt costs are consumed.
+    pub async fn consume_message_receipt_only(
+        &self,
+        cost_receipt: &CostVec,
+    ) -> Result<(), symbol_table::GlobalSymbol> {
+        self.consume_message_costs(None, cost_receipt).await
     }
 
     pub fn calculate_message_fee_external(

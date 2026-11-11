@@ -63,10 +63,29 @@ pub struct FeesBucketConfig {
     pub delta_expr: String,
 }
 
+pub const MESSAGE_BYTES_BUCKET: &str = "submitted_messages";
+pub const MESSAGE_COUNT_BUCKET: &str = "submitted_messages_count";
+
+fn deserialize_message_receipt<'de, D>(d: D) -> Result<FeesBucketConfig, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let config = <FeesBucketConfig as serde::Deserialize>::deserialize(d)?;
+    for required in [MESSAGE_BYTES_BUCKET, MESSAGE_COUNT_BUCKET] {
+        if !config.buckets.iter().any(|name| name.as_str() == required) {
+            return Err(serde::de::Error::custom(format!(
+                "message_receipt requires reserved bucket `{required}`"
+            )));
+        }
+    }
+    Ok(config)
+}
+
 #[derive(Clone, Deserialize, Debug)]
 pub struct FeesConfig {
     pub expr_prelude: String,
     pub storage: FeesBucketConfig,
+    #[serde(deserialize_with = "deserialize_message_receipt")]
     pub message_receipt: FeesBucketConfig,
     pub nondet_output: FeesBucketConfig,
     pub message_fee: FeesBucketConfig,

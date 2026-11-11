@@ -82,8 +82,10 @@ async fn reveal_cost_is_charged_with_only_the_first_message() {
         .calculate_message_receipt(empty_external_message(false))
         .unwrap();
 
-    assert!(fees.consume_message_receipt_only(&message).await);
-    assert!(fees.consume_message_receipt_only(&next_message).await);
+    fees.consume_message_receipt_only(&message).await.unwrap();
+    fees.consume_message_receipt_only(&next_message)
+        .await
+        .unwrap();
 
     let remaining = fees.remaining().await;
     assert_eq!(remaining["execution_data_gas"], U256::zero());

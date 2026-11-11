@@ -55,10 +55,10 @@ async fn shared_message_bucket_cost_overflow_is_rejected_atomically() {
     };
     let fees = data_limit(config(event));
 
-    assert!(
-        !fees
-            .consume_message_fee(&CostVec(vec![U256::MAX]), &CostVec(vec![U256::one()]))
-            .await
+    assert_eq!(
+        fees.consume_message_fee(&CostVec(vec![U256::MAX]), &CostVec(vec![U256::one()]))
+            .await,
+        Err("test".into()),
     );
     assert_eq!(
         fees.remaining().await,

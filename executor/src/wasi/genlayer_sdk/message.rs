@@ -223,6 +223,17 @@ fn convert_external_message_params_to_sdk(
     }
 }
 
+fn message_bucket_error(
+    bucket: symbol_table::GlobalSymbol,
+    fee_error: abi::consts::VmError,
+) -> abi::consts::VmError {
+    match bucket.as_str() {
+        crate::config::MESSAGE_BYTES_BUCKET => abi::consts::VmError::out_of().message_bytes(),
+        crate::config::MESSAGE_COUNT_BUCKET => abi::consts::VmError::out_of().message_count(),
+        _ => fee_error,
+    }
+}
+
 async fn consume_message_fee_internal(
     shared_data: &rt::SharedData,
     funding: FeeFunding<'_>,
@@ -296,7 +307,7 @@ async fn consume_message_fee_internal(
                 )));
             }
 
-            if !shared_data
+            if let Err(bucket) = shared_data
                 .data_fees_limit
                 .consume_message_fee(&fee_cost, &receipt_cost)
                 .await
@@ -307,12 +318,13 @@ async fn consume_message_fee_internal(
                     buckets:? = shared_data.data_fees_limit;
                     "not enough remaining fee limit to consume message fee"
                 );
-                return Err(internal_trap(rt::errors::Error::vm(
+                return Err(internal_trap(rt::errors::Error::vm(message_bucket_error(
+                    bucket,
                     abi::consts::VmError::out_of()
                         .message_fee()
                         .total()
                         .internal(),
-                )));
+                ))));
             }
 
             *consumed += fee_total;
@@ -338,7 +350,7 @@ async fn consume_message_fee_internal(
                 return Err(generated::types::Errno::InsufficientBalance.into());
             }
 
-            if !shared_data
+            if let Err(bucket) = shared_data
                 .data_fees_limit
                 .consume_message_receipt_only(&receipt_cost)
                 .await
@@ -349,12 +361,13 @@ async fn consume_message_fee_internal(
                     buckets:? = shared_data.data_fees_limit;
                     "not enough remaining receipt limit to consume message receipt"
                 );
-                return Err(internal_trap(rt::errors::Error::vm(
+                return Err(internal_trap(rt::errors::Error::vm(message_bucket_error(
+                    bucket,
                     abi::consts::VmError::out_of()
                         .receipt()
                         .message()
                         .internal(),
-                )));
+                ))));
             }
         }
     }
@@ -419,17 +432,18 @@ async fn consume_message_fee_external(
         })
         .map_err(internal_trap)?;
 
-    if !shared_data
+    if let Err(bucket) = shared_data
         .data_fees_limit
         .consume_message_fee(&fee_cost, &receipt_cost)
         .await
     {
-        return Err(internal_trap(rt::errors::Error::vm(
+        return Err(internal_trap(rt::errors::Error::vm(message_bucket_error(
+            bucket,
             abi::consts::VmError::out_of()
                 .message_fee()
                 .total()
                 .external(),
-        )));
+        ))));
     }
 
     *consumed += fee_total;
@@ -457,14 +471,15 @@ async fn consume_external_receipt_only(
         })
         .map_err(internal_trap)?;
 
-    if !shared_data
+    if let Err(bucket) = shared_data
         .data_fees_limit
         .consume_message_receipt_only(&receipt_cost)
         .await
     {
-        return Err(internal_trap(rt::errors::Error::vm(
+        return Err(internal_trap(rt::errors::Error::vm(message_bucket_error(
+            bucket,
             abi::consts::VmError::out_of().receipt().message().val(),
-        )));
+        ))));
     }
 
     Ok(rt::fees::MessageFeeConsumption {

@@ -157,6 +157,8 @@
           },
           "subvm_recursion",
           "nondet_blocks",
+          "message_bytes",
+          "message_count",
           "emissions",
           "locked_slots",
           "upgraders",

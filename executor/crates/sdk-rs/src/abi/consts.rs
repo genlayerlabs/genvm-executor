@@ -378,6 +378,8 @@ pub mod __VmError {
         pub const fn storage(&self) -> VmError { VmError(Cow::Borrowed("out_of storage")) }
         pub const fn subvm_recursion(&self) -> VmError { VmError(Cow::Borrowed("out_of subvm_recursion")) }
         pub const fn nondet_blocks(&self) -> VmError { VmError(Cow::Borrowed("out_of nondet_blocks")) }
+        pub const fn message_bytes(&self) -> VmError { VmError(Cow::Borrowed("out_of message_bytes")) }
+        pub const fn message_count(&self) -> VmError { VmError(Cow::Borrowed("out_of message_count")) }
         pub const fn emissions(&self) -> VmError { VmError(Cow::Borrowed("out_of emissions")) }
         pub const fn locked_slots(&self) -> VmError { VmError(Cow::Borrowed("out_of locked_slots")) }
         pub const fn upgraders(&self) -> VmError { VmError(Cow::Borrowed("out_of upgraders")) }
@@ -532,6 +534,8 @@ impl VmError {
             "out_of message_fee allocation_budget" |
             "out_of subvm_recursion" |
             "out_of nondet_blocks" |
+            "out_of message_bytes" |
+            "out_of message_count" |
             "out_of emissions" |
             "out_of locked_slots" |
             "out_of upgraders" |

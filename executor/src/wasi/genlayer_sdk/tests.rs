@@ -1,3 +1,6 @@
+#[path = "message_bucket_test.rs"]
+mod message_buckets;
+
 use super::descendant_grant::{
     encode_grant, prepare_descendants, AllocationFeeParams, FlatAllocation, Grant, GrantPolicy,
     GrantValidationError, ROOT_PARENT,
@@ -1115,7 +1118,15 @@ impl EmissionTestContext {
                 ..Default::default()
             },
             data_fees_limit: rt::fees::DataLimit::new(
-                std::collections::HashMap::from([("test".to_owned(), U256::from(fee_total))]),
+                std::iter::once("test")
+                    .chain(
+                        fees.message_receipt
+                            .buckets
+                            .iter()
+                            .map(|name| name.as_str()),
+                    )
+                    .map(|name| (name.to_owned(), U256::from(fee_total)))
+                    .collect(),
                 fees.clone(),
                 Default::default(),
             )
