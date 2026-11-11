@@ -152,6 +152,8 @@ class _ContractAtEmitMethod:
 		self._use_balance = use_balance
 
 	def __call__(self, *args, **kwargs) -> None:
+		if self._addr == Address.ZERO:
+			raise ValueError('cannot emit an internal message to the zero address')
 		message: dict[str, calldata.Encodable] = {
 			'address': self._addr,
 			'calldata': _make_calldata_obj(self._name, args, kwargs),
@@ -230,6 +232,7 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 			prefunded pool. Balance funding requires
 			``can_use_balance_for_message_fees`` permission
 		:returns: Object providing access to write methods
+		:raises ValueError: When a method on the returned namespace emits to the zero address
 
 		.. warning::
 			Emitting transactions, especially with value transfers on ``decided``
@@ -252,7 +255,7 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 		:param on: When transaction message should be emitted to consensus
 		:param use_balance: Fund the message fee from this contract's balance; see :py:meth:`emit`
 
-		:raises ValueError: If value is zero
+		:raises ValueError: If value is not positive or the recipient is the zero address
 		"""
 		...
 

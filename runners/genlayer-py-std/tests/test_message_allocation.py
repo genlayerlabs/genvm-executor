@@ -16,9 +16,29 @@ from genlayer.message_allocation import (
 )
 from genlayer.types import Address, Keccak256
 
+RECIPIENT = Address(b'\x01' * 20)
+
 
 def params() -> InternalMessageParams:
 	return InternalMessageParams(5, 10, 100, [0], 1, 10**18, 10**18)
+
+
+@pytest.mark.parametrize('kind', ['call', 'transfer', 'account_transfer'])
+def test_internal_message_rejects_zero_recipient_before_encoding(monkeypatch, kind):
+	def unexpected(*args, **kwargs):
+		pytest.fail('zero-address message must fail before encoding or calling the VM')
+
+	monkeypatch.setattr(contract.calldata, 'encode', unexpected)
+	monkeypatch.setattr(
+		contract, 'wasi', types.SimpleNamespace(gl_call=unexpected), raising=False
+	)
+	with pytest.raises(ValueError, match='zero address'):
+		if kind == 'call':
+			contract.get_at(Address.ZERO).emit().run()
+		elif kind == 'transfer':
+			contract.get_at(Address.ZERO).emit_transfer(1)
+		else:
+			gl.chain.Account(Address.ZERO).emit_transfer(1)
 
 
 def test_message_allocation_module_is_available_from_package():
@@ -90,7 +110,7 @@ def test_allocation_keys_survive_every_emission_path(
 		else InternalAllocation(Address.ZERO, key, params(), 100)
 	)
 	funding = UseBalanceParams(params(), [allocation])
-	proxy = contract.get_at(Address.ZERO)
+	proxy = contract.get_at(RECIPIENT)
 	if kind == 'call':
 		proxy.emit(funding).run()
 	elif kind == 'transfer':
@@ -113,7 +133,7 @@ def test_external_allocation_pads_selector_on_the_right(monkeypatch, selector, k
 		Address.ZERO, selector, gl.chain.ExternalMessageParams(1, 1), 1
 	)
 	funding = UseBalanceParams(params(), [node])
-	proxy = contract.get_at(Address.ZERO)
+	proxy = contract.get_at(RECIPIENT)
 	if kind == 'call':
 		proxy.emit(funding).run()
 	elif kind == 'transfer':
@@ -151,7 +171,7 @@ def test_external_allocation_rejects_invalid_keys_before_emission(monkeypatch, i
 		Address.ZERO, invalid, gl.chain.ExternalMessageParams(1, 1), 1
 	)
 	with pytest.raises((TypeError, ValueError)):
-		contract.get_at(Address.ZERO).emit(UseBalanceParams(params(), [node])).run()
+		contract.get_at(RECIPIENT).emit(UseBalanceParams(params(), [node])).run()
 	assert calls == []
 
 
@@ -193,7 +213,7 @@ def test_closed_descendants_are_omitted_from_emit(monkeypatch, descendants):
 		contract, 'wasi', types.SimpleNamespace(gl_call=calls.append), raising=False
 	)
 
-	contract.get_at(Address.ZERO).emit(
+	contract.get_at(RECIPIENT).emit(
 		UseBalanceParams(fee_params=params(), descendants=descendants),
 	).run()
 
@@ -206,7 +226,7 @@ def test_open_and_pinned_descendants_are_forwarded(monkeypatch):
 	monkeypatch.setattr(
 		contract, 'wasi', types.SimpleNamespace(gl_call=calls.append), raising=False
 	)
-	proxy = contract.get_at(Address.ZERO)
+	proxy = contract.get_at(RECIPIENT)
 
 	proxy.emit(use_balance=UseBalanceParams(params(), descendants=300)).run()
 	open_message = calldata.decode(calls.pop())['EmitInternalMessage']
@@ -241,9 +261,7 @@ def test_bool_descendants_are_rejected(monkeypatch):
 	)
 
 	with pytest.raises(TypeError, match='bool'):
-		contract.get_at(Address.ZERO).emit(
-			UseBalanceParams(params(), descendants=False)
-		).run()
+		contract.get_at(RECIPIENT).emit(UseBalanceParams(params(), descendants=False)).run()
 
 	with pytest.raises(TypeError, match='bool'):
 		contract.deploy(UseBalanceParams(params(), descendants=False), code=b'code')
@@ -261,15 +279,15 @@ def test_balance_parameter_can_be_positional_or_keyword(monkeypatch, keyword, ki
 	)
 	balance = UseBalanceParams(params())
 	args, kwargs = ((), {'use_balance': balance}) if keyword else ((balance,), {})
-	proxy = contract.get_at(Address.ZERO)
+	proxy = contract.get_at(RECIPIENT)
 	if kind == 'call':
 		proxy.emit(*args, **kwargs).run()
 	elif kind == 'transfer':
 		proxy.emit_transfer(1, *args, **kwargs)
 	elif kind == 'account_transfer':
-		gl.chain.Account(Address.ZERO).emit_transfer(1, *args, **kwargs)
+		gl.chain.Account(RECIPIENT).emit_transfer(1, *args, **kwargs)
 	elif kind == 'self_transfer':
-		monkeypatch.setattr(gl.message, 'contract_address', Address.ZERO, raising=False)
+		monkeypatch.setattr(gl.message, 'contract_address', RECIPIENT, raising=False)
 		with pytest.warns(UserWarning, match='transfer to self'):
 			contract.Contract().emit_transfer(1, *args, **kwargs)
 	else:
@@ -285,11 +303,11 @@ def test_sender_funding_omits_balance_fields(monkeypatch):
 	monkeypatch.setattr(
 		contract, 'wasi', types.SimpleNamespace(gl_call=calls.append), raising=False
 	)
-	contract.get_at(Address.ZERO).emit().run()
+	contract.get_at(RECIPIENT).emit().run()
 	message = calldata.decode(calls.pop())['EmitInternalMessage']
 	assert not {'use_balance', 'fee_params', 'descendants'} & message.keys()
 	with pytest.raises(TypeError, match='UseBalanceParams'):
-		contract.get_at(Address.ZERO).emit(True).run()
+		contract.get_at(RECIPIENT).emit(True).run()
 
 
 @pytest.mark.parametrize('sequence', [list, tuple, UserList])
@@ -306,7 +324,7 @@ def test_descendant_tree_flattens_in_preorder_without_mutation(monkeypatch, sequ
 	)
 	balance = UseBalanceParams(params(), sequence([root, external]))
 	for _ in range(2):
-		contract.get_at(Address.ZERO).emit(balance).run()
+		contract.get_at(RECIPIENT).emit(balance).run()
 		flat = calldata.decode(calls.pop())['EmitInternalMessage']['descendants']
 		assert [node['parent_index'] for node in flat] == [2**256 - 1, 0, 1, 0, 2**256 - 1]
 		assert all('children' not in node for node in flat)
@@ -322,9 +340,7 @@ def test_cyclic_descendant_tree_is_bounded(monkeypatch, sequence):
 	root = InternalAllocation(Address.ZERO, None, params(), 1)
 	root.children.append(root)
 	with pytest.raises(ValueError, match='1024'):
-		contract.get_at(Address.ZERO).emit(
-			UseBalanceParams(params(), sequence([root]))
-		).run()
+		contract.get_at(RECIPIENT).emit(UseBalanceParams(params(), sequence([root]))).run()
 	assert calls == []
 
 
