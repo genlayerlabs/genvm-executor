@@ -286,6 +286,90 @@ async fn fresh_storage_inherits_nothing() {
     assert_eq!(mem.get_remaining_memory(), 0);
 }
 
+// -- cached reads ----------------------------------------------------
+
+#[tokio::test]
+async fn repeated_long_reads_preserve_cached_tail() {
+    for (offset, len) in [(0, 4384), (7, 4384), (0, 8192), (31, 8193)] {
+        let data: Vec<u8> = (0..offset + len).map(|i| (i % 251 + 1) as u8).collect();
+        let mut storage = Storage::new(
+            calldata::Address::zero(),
+            data_fees(0),
+            rt::memlimiter::Limiter::new(),
+            FakeHost(std::sync::Arc::new(data.clone())),
+        );
+        let mut first = vec![0; len];
+        storage
+            .read(SlotID::ZERO, offset as u32, &mut first)
+            .await
+            .unwrap();
+        assert_eq!(first, data[offset..]);
+        for fill in [0, 0xff] {
+            let mut repeated = vec![fill; len];
+            storage
+                .read(SlotID::ZERO, offset as u32, &mut repeated)
+                .await
+                .unwrap();
+            assert_eq!(
+                repeated.iter().zip(&first).position(|(a, b)| a != b),
+                None,
+                "offset={offset}, len={len}, fill={fill}: cached tail changed"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn long_read_preserves_overrides_amid_cached_pages() {
+    let mut expected: Vec<u8> = (0..8192).map(|i| (i % 251 + 1) as u8).collect();
+    let mut storage = Storage::new(
+        calldata::Address::zero(),
+        data_fees(3),
+        rt::memlimiter::Limiter::new(),
+        FakeHost(std::sync::Arc::new(expected.clone())),
+    );
+    storage
+        .read(SlotID::ZERO, 0, &mut vec![0; expected.len()])
+        .await
+        .unwrap();
+    for page in [0, 129, 255] {
+        storage
+            .write_page(PageID(SlotID::ZERO, page), [0xfe; 32])
+            .await
+            .unwrap();
+        expected[page as usize * 32..(page as usize + 1) * 32].fill(0xfe);
+    }
+    for _ in 0..2 {
+        let mut actual = vec![0; expected.len() - 18];
+        storage.read(SlotID::ZERO, 7, &mut actual).await.unwrap();
+        assert_eq!(actual, expected[7..expected.len() - 11]);
+    }
+}
+
+#[tokio::test]
+async fn long_read_preserves_cached_prefix_and_suffix_around_host_middle() {
+    let expected: Vec<u8> = (0..8192).map(|i| (i % 251 + 1) as u8).collect();
+    let mut storage = Storage::new(
+        calldata::Address::zero(),
+        data_fees(0),
+        rt::memlimiter::Limiter::new(),
+        FakeHost(std::sync::Arc::new(expected.clone())),
+    );
+    let mut edge = [0; 64];
+    storage.read(SlotID::ZERO, 0, &mut edge).await.unwrap();
+    storage
+        .read(
+            SlotID::ZERO,
+            (expected.len() - edge.len()) as u32,
+            &mut edge,
+        )
+        .await
+        .unwrap();
+    let mut actual = vec![0; expected.len()];
+    storage.read(SlotID::ZERO, 0, &mut actual).await.unwrap();
+    assert_eq!(actual, expected);
+}
+
 // -- page id ordering ------------------------------------------------
 
 #[test]

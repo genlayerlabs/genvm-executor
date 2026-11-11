@@ -1,4 +1,3 @@
-use std::mem::MaybeUninit;
 use std::ops::DerefMut;
 
 use const_lru::ConstLru;
@@ -327,11 +326,7 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
             )?;
         }
 
-        let mut put_to_cache: [MaybeUninit<(PageID, [u8; 32])>; STORAGE_CACHE_SIZE / 16] =
-            // SAFETY: MaybeUninit does not require initialization
-            unsafe { MaybeUninit::uninit().assume_init() };
-        let mut put_to_cache_count = 0;
-
+        // Copy every known page before cache insertions can evict the suffix.
         for page_idx in start_page..=end_page {
             let page_id = PageID(slot_id, page_idx.into_int_downcast_panicking());
 
@@ -354,27 +349,23 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
                     buf[dst_offset..dst_offset + copy_len]
                         .copy_from_slice(&page_data[src_offset..src_offset + copy_len]);
                 }
-            } else if page_start_byte >= need_host_read_start && page_end_byte <= need_host_read_end
-            {
-                // This page was read from host, extract it from buf and put to cache
-                let src_offset = page_start_byte - start_index;
-                let mut page_data = [0u8; 32];
-                page_data.copy_from_slice(&buf[src_offset..src_offset + 32]);
-
-                if put_to_cache_count < put_to_cache.len() {
-                    put_to_cache[put_to_cache_count].write((page_id, page_data));
-                    put_to_cache_count += 1;
-                } else {
-                    // staging buffer full: insert directly so no read page is dropped
-                    self.cache.insert(page_id, page_data);
-                }
             }
         }
 
-        for item in put_to_cache.iter().take(put_to_cache_count) {
-            // SAFETY: elements 0..put_to_cache_count have been initialized above
-            let (page_id, page_data) = unsafe { item.assume_init_ref() };
-            self.cache.insert(*page_id, *page_data);
+        for page_idx in start_page..=end_page {
+            let page_start_byte = page_idx * 32;
+            let page_end_byte = page_start_byte + 32;
+            let page_id = PageID(slot_id, page_idx.into_int_downcast_panicking());
+            if page_start_byte >= need_host_read_start
+                && page_end_byte <= need_host_read_end
+                && self.pages.get(page_id).is_none()
+                && self.cache.get(&page_id).is_none()
+            {
+                let src_offset = page_start_byte - start_index;
+                let mut page_data = [0u8; 32];
+                page_data.copy_from_slice(&buf[src_offset..src_offset + 32]);
+                self.cache.insert(page_id, page_data);
+            }
         }
 
         Ok(())
