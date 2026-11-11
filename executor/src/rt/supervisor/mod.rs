@@ -643,8 +643,7 @@ async fn apply_contract_actions_inner(
     let actions = arch
         .get_actions()
         .await
-        .with_context(|| format!("loading init actions for contract {topmost_runner_id}"))
-        .map_err(|e| rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e))?;
+        .with_context(|| format!("loading init actions for contract {topmost_runner_id}"))?;
 
     let mut ctx = actions::Ctx {
         env: runners::Env::new(limiter.clone()),
@@ -654,25 +653,16 @@ async fn apply_contract_actions_inner(
         vm: &mut vm.vm_base,
     };
 
-    let inst = match ctx
+    match ctx
         .apply(&actions, topmost_runner_id.canonical(), &arch)
-        .await
+        .await?
     {
-        Ok(Some(inst)) => inst,
-        Ok(None) => {
-            return Err(runners::malformed_runner_error(format!(
-                "init actions for contract {topmost_runner_id} have no start instruction"
-            ))
-            .into());
-        }
-        Err(e) => {
-            return Err(
-                rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e).into(),
-            );
-        }
-    };
-
-    Ok(inst)
+        Some(inst) => Ok(inst),
+        None => Err(runners::malformed_runner_error(format!(
+            "init actions for contract {topmost_runner_id} have no start instruction"
+        ))
+        .into()),
+    }
 }
 
 async fn run_single_nondet(

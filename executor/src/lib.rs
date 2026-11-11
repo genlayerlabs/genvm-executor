@@ -394,10 +394,7 @@ pub async fn run_with_impl(
                 .await?;
 
             let code_slot = rt::vm::storage::default_code_slot();
-            let archive = runners::parse(code.clone(), limiter_det.get_remaining_memory())
-                .map_err(|e| {
-                    rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
-                })?;
+            let archive = runners::parse(code.clone(), limiter_det.get_remaining_memory())?;
             *deploy_pin = Some(supervisor.prepopulate_deploy_runner(
                 entry_data.message.contract_address,
                 code_slot,

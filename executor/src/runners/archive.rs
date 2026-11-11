@@ -154,10 +154,18 @@ fn check_entry_fields(name: &str, entry: &genvm_stored_zip::Entry<'_>) -> errors
 }
 
 impl Archive {
-    /// Open `bytes` as a zip and read it.
+    /// Read the zip of an installed runner. Its bytes are the executor's own, so
+    /// only exceeding `max_meta_size` is a VM error.
     pub fn from_zip_bytes(bytes: bytes::Bytes, max_meta_size: u32) -> errors::Result<Self> {
-        Self::try_from_zip(&bytes, max_meta_size)
-            .map_err(|e| malformed_runner(format!("cannot open ZIP archive: {e}")))?
+        let oom = abi::consts::VmError::out_of().memory().val();
+        match Self::try_from_zip(&bytes, max_meta_size) {
+            Ok(Ok(archive)) => Ok(archive),
+            Ok(Err(e)) if matches!(&e.kind, errors::ErrorKind::Vm(code) if *code == oom) => Err(e),
+            Ok(Err(e)) => Err(errors::internal!(
+                "installed runner archive is malformed: {e}"
+            )),
+            Err(e) => Err(errors::internal!("cannot open ZIP archive: {e}")),
+        }
     }
 
     /// The outer error means `bytes` is not a zip at all, the inner one that it

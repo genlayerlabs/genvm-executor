@@ -112,6 +112,25 @@ fn directory_entries_are_charged() {
 }
 
 #[test]
+fn installed_archive_is_out_of_memory_only_over_budget() {
+    let cost = genvm_common::internal_constants::memory_limiter_consts::ZIP_FILE_COST;
+    let archive = stored_zip_with_entries(&[("dir/", b"")]);
+    match genvm::runners::Archive::from_zip_bytes(archive.clone().into(), cost + 3) {
+        Ok(_) => panic!("archive was accepted"),
+        Err(err) => assert_out_of_memory(&err),
+    }
+    for archive in [archive, b"not a zip".to_vec()] {
+        match genvm::runners::Archive::from_zip_bytes(archive.into(), u32::MAX) {
+            Ok(_) => panic!("archive was accepted"),
+            Err(err) => assert!(
+                matches!(err.kind, genvm::rt::errors::ErrorKind::Internal),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+}
+
+#[test]
 fn charge_precedes_entry_checks() {
     let cost = genvm_common::internal_constants::memory_limiter_consts::ZIP_FILE_COST;
     let mut archive = stored_zip_with_entries(&[("a", b"first"), ("b", b"second")]);

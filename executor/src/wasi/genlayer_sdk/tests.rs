@@ -3737,3 +3737,322 @@ async fn gated_runner_fails_like_an_uninstalled_one_while_its_fork_is_inactive()
             .unwrap_err(),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Runner init: error classification
+// ---------------------------------------------------------------------------
+
+const INIT_RUNNER: &str = "base";
+const INIT_DEPENDENCY: &str = "dep";
+
+/// Imports a function nothing provides
+const WASM_UNKNOWN_IMPORT: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x02, 0x0d,
+    0x01, 0x04, b'n', b'o', b'p', b'e', 0x04, b'n', b'o', b'p', b'e', 0x00, 0x00,
+];
+
+/// Its start function is `unreachable`
+const WASM_START_TRAPS: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02,
+    0x01, 0x00, 0x08, 0x01, 0x00, 0x0a, 0x05, 0x01, 0x03, 0x00, 0x00, 0x0b,
+];
+
+/// Starts with 1024 pages of memory
+const WASM_LARGE_MEMORY: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x05, 0x04, 0x01, 0x00, 0x80, 0x08,
+];
+
+const WASM_UNNAMED: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+/// Its start function returns via `proc_exit(0)`
+const WASM_START_RETURNS: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x60, 0x01, 0x7f, 0x00, 0x60,
+    0x00, 0x00, 0x02, 0x24, 0x01, 0x16, b'w', b'a', b's', b'i', b'_', b's', b'n', b'a', b'p', b's',
+    b'h', b'o', b't', b'_', b'p', b'r', b'e', b'v', b'i', b'e', b'w', b'1', 0x09, b'p', b'r', b'o',
+    b'c', b'_', b'e', b'x', b'i', b't', 0x00, 0x00, 0x03, 0x02, 0x01, 0x01, 0x05, 0x03, 0x01, 0x00,
+    0x01, 0x07, 0x0a, 0x01, 0x06, b'm', b'e', b'm', b'o', b'r', b'y', 0x02, 0x00, 0x08, 0x01, 0x01,
+    0x0a, 0x08, 0x01, 0x06, 0x00, 0x41, 0x00, 0x10, 0x00, 0x0b,
+];
+
+/// Named `m`, its `_initialize` returns via `proc_exit(0)`
+const WASM_INITIALIZE_RETURNS: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x60, 0x01, 0x7f, 0x00, 0x60,
+    0x00, 0x00, 0x02, 0x24, 0x01, 0x16, b'w', b'a', b's', b'i', b'_', b's', b'n', b'a', b'p', b's',
+    b'h', b'o', b't', b'_', b'p', b'r', b'e', b'v', b'i', b'e', b'w', b'1', 0x09, b'p', b'r', b'o',
+    b'c', b'_', b'e', b'x', b'i', b't', 0x00, 0x00, 0x03, 0x02, 0x01, 0x01, 0x05, 0x03, 0x01, 0x00,
+    0x01, 0x07, 0x18, 0x02, 0x06, b'm', b'e', b'm', b'o', b'r', b'y', 0x02, 0x00, 0x0b, b'_', b'i',
+    b'n', b'i', b't', b'i', b'a', b'l', b'i', b'z', b'e', 0x00, 0x01, 0x0a, 0x08, 0x01, 0x06, 0x00,
+    0x41, 0x00, 0x10, 0x00, 0x0b, 0x00, 0x09, 0x04, b'n', b'a', b'm', b'e', 0x00, 0x02, 0x01, b'm',
+];
+
+/// Named `m`, exports an empty function `f`
+const WASM_NAMED: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02,
+    0x01, 0x00, 0x07, 0x05, 0x01, 0x01, b'f', 0x00, 0x00, 0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b, 0x00,
+    0x09, 0x04, b'n', b'a', b'm', b'e', 0x00, 0x02, 0x01, b'm',
+];
+
+/// [`WASM_UNKNOWN_IMPORT`] named `m`
+const WASM_NAMED_UNKNOWN_IMPORT: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x02, 0x0d,
+    0x01, 0x04, b'n', b'o', b'p', b'e', 0x04, b'n', b'o', b'p', b'e', 0x00, 0x00, 0x00, 0x09, 0x04,
+    b'n', b'a', b'm', b'e', 0x00, 0x02, 0x01, b'm',
+];
+
+fn runner_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = genvm_stored_zip::Writer::new();
+    for (name, contents) in entries {
+        writer
+            .add(name, genvm_stored_zip::STORED, contents)
+            .unwrap();
+    }
+    writer.finish().unwrap()
+}
+
+fn runner_archive_path(root: &std::path::Path, name: &str, hash: &str) -> std::path::PathBuf {
+    let mut path = root.join("runners");
+    crate::runners::append_runner_subpath(name, hash, &mut path);
+    path.set_extension("zip");
+    path
+}
+
+/// Runs the init actions of the installed runner `base` holding `entries`;
+/// `dep` is installed too, and `install_dep` lays down its archive file
+async fn init_outcome(
+    entries: &[(&str, &[u8])],
+    install_dep: impl FnOnce(&std::path::Path),
+) -> anyhow::Result<rt::vm::RunOk> {
+    init_outcome_within(u32::MAX, entries, install_dep).await
+}
+
+async fn init_outcome_within(
+    memory_limit: u32,
+    entries: &[(&str, &[u8])],
+    install_dep: impl FnOnce(&std::path::Path),
+) -> anyhow::Result<rt::vm::RunOk> {
+    let (base, dep) = (runner_hash(1), runner_hash(2));
+    let mut test = EmissionTestContext::build(
+        memory_limit,
+        100,
+        emission_fees(),
+        U256::MAX,
+        &format!(
+            r#"{{
+                "{INIT_RUNNER}": {{"latest": "{base}", "versions": {{"{base}": {{"forks": "{LINE_FORK}"}}}}}},
+                "{INIT_DEPENDENCY}": {{"latest": "{dep}", "versions": {{"{dep}": {{"forks": "{LINE_FORK}"}}}}}}
+            }}"#
+        ),
+        crate::runners::cache::parse_forks(LINE_FORK, ',').unwrap(),
+    );
+
+    let base_path = runner_archive_path(&test._root, INIT_RUNNER, &base);
+    std::fs::create_dir_all(base_path.parent().unwrap()).unwrap();
+    std::fs::write(&base_path, runner_zip(entries)).unwrap();
+    let dep_path = runner_archive_path(&test._root, INIT_DEPENDENCY, &dep);
+    std::fs::create_dir_all(dep_path.parent().unwrap()).unwrap();
+    install_dep(&dep_path);
+
+    test.context.data.conf.execution.topmost_runner_id = crate::runners::Id::Builtin {
+        name: symbol_table::GlobalSymbol::new(INIT_RUNNER),
+        hash: Bytes32Hash::from_gvm32(&base).unwrap(),
+    };
+    // a whole root page, so writing it does not read the host
+    let mut root_page = [0u8; 32];
+    root_page[0] = genvm_common::version::CURRENT
+        .major
+        .into_int_downcast_panicking();
+    test.context
+        .data
+        .storage
+        .write(crate::SlotID::ZERO, 0, &root_page)
+        .await
+        .unwrap();
+
+    let EmissionTestContext {
+        _host_peer,
+        _root,
+        context,
+        ..
+    } = test;
+    let supervisor = context.data.supervisor.clone();
+    // the run future is too large for a test thread stack in debug builds
+    let res = Box::pin(rt::spawn_apply_run(&supervisor, Box::new(context.data))).await;
+    rt::supervisor::await_nondet_vms(&supervisor).await.unwrap();
+    res.map(|r| r.run_ok)
+}
+
+fn depends_on_dependency() -> String {
+    format!(r#"{{"Depends": "{INIT_DEPENDENCY}:{}"}}"#, runner_hash(2))
+}
+
+fn assert_internal(res: anyhow::Result<rt::vm::RunOk>, needle: &str) {
+    let err = match res {
+        Ok(run_ok) => panic!("expected an internal error, got {run_ok:?}"),
+        Err(err) => err,
+    };
+    let message = format!("{err:#}");
+    let err = rt::errors::Error::from(err);
+    assert!(
+        matches!(err.kind, rt::errors::ErrorKind::Internal),
+        "expected an internal error, got {err}"
+    );
+    assert!(message.contains(needle), "unexpected error: {message}");
+}
+
+fn assert_vm_error(res: anyhow::Result<rt::vm::RunOk>, code: public_abi::VmError) {
+    match res {
+        Ok(rt::vm::RunOk::VMError(actual, cause)) => {
+            assert_eq!(actual, code, "cause: {cause:?}")
+        }
+        Ok(other) => panic!("expected {code:?}, got {other:?}"),
+        Err(err) => panic!("expected {code:?}, got {err:#}"),
+    }
+}
+
+#[tokio::test]
+async fn init_dependency_without_archive_is_internal() {
+    let runner_json = depends_on_dependency();
+    let res = init_outcome(&[("runner.json", runner_json.as_bytes())], |_| {}).await;
+    assert_internal(res, "not found");
+}
+
+#[tokio::test]
+async fn init_dependency_with_unreadable_archive_is_internal() {
+    let runner_json = depends_on_dependency();
+    let res = init_outcome(&[("runner.json", runner_json.as_bytes())], |path| {
+        std::fs::create_dir(path).unwrap();
+    })
+    .await;
+    assert_internal(res, "reading runner archive");
+}
+
+#[tokio::test]
+async fn init_dependency_with_malformed_archive_is_internal() {
+    let runner_json = depends_on_dependency();
+    let res = init_outcome(&[("runner.json", runner_json.as_bytes())], |path| {
+        std::fs::write(path, b"not a zip").unwrap();
+    })
+    .await;
+    assert_internal(res, "cannot open ZIP archive");
+}
+
+#[tokio::test]
+async fn init_unknown_import_is_wasm_linking() {
+    let res = init_outcome(
+        &[
+            ("runner.json", br#"{"StartWasm": "main.wasm"}"#),
+            ("main.wasm", WASM_UNKNOWN_IMPORT),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(
+        res,
+        public_abi::VmError::invalid_contract().wasm().linking(),
+    );
+}
+
+#[tokio::test]
+async fn init_start_function_trap_keeps_its_trap_code() {
+    let res = init_outcome(
+        &[
+            ("runner.json", br#"{"StartWasm": "main.wasm"}"#),
+            ("main.wasm", WASM_START_TRAPS),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(res, public_abi::VmError::wasm_trap().unreachable());
+}
+
+#[tokio::test]
+async fn init_link_wasm_unknown_import_is_wasm_linking() {
+    let res = init_outcome(
+        &[
+            ("runner.json", br#"{"LinkWasm": "lib.wasm"}"#),
+            ("lib.wasm", WASM_NAMED_UNKNOWN_IMPORT),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(
+        res,
+        public_abi::VmError::invalid_contract().wasm().linking(),
+    );
+}
+
+#[tokio::test]
+async fn init_link_wasm_unnamed_module_is_wasm_linking() {
+    let res = init_outcome(
+        &[
+            ("runner.json", br#"{"LinkWasm": "lib.wasm"}"#),
+            ("lib.wasm", WASM_UNNAMED),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(
+        res,
+        public_abi::VmError::invalid_contract().wasm().linking(),
+    );
+}
+
+#[tokio::test]
+async fn init_link_wasm_duplicate_instance_name_is_wasm_linking() {
+    let res = init_outcome(
+        &[
+            (
+                "runner.json",
+                br#"{"Seq": [{"LinkWasm": "a.wasm"}, {"LinkWasm": "b.wasm"}]}"#,
+            ),
+            ("a.wasm", WASM_NAMED),
+            ("b.wasm", WASM_NAMED),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(
+        res,
+        public_abi::VmError::invalid_contract().wasm().linking(),
+    );
+}
+
+#[tokio::test]
+async fn init_memory_over_budget_is_out_of_memory() {
+    let res = init_outcome_within(
+        genvm_common::internal_constants::memory_limiter_consts::VM_SPAWN_COST + (32 << 20),
+        &[
+            ("runner.json", br#"{"StartWasm": "main.wasm"}"#),
+            ("main.wasm", WASM_LARGE_MEMORY),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(res, public_abi::VmError::out_of().memory().wasm_memory());
+}
+
+#[tokio::test]
+async fn init_start_function_return_is_invalid_contract() {
+    let res = init_outcome(
+        &[
+            ("runner.json", br#"{"StartWasm": "main.wasm"}"#),
+            ("main.wasm", WASM_START_RETURNS),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(res, public_abi::VmError::invalid_contract().val());
+}
+
+#[tokio::test]
+async fn init_initialize_return_is_invalid_contract() {
+    let res = init_outcome(
+        &[
+            ("runner.json", br#"{"LinkWasm": "lib.wasm"}"#),
+            ("lib.wasm", WASM_INITIALIZE_RETURNS),
+        ],
+        |_| {},
+    )
+    .await;
+    assert_vm_error(res, public_abi::VmError::invalid_contract().val());
+}

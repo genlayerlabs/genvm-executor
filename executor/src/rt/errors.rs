@@ -240,11 +240,10 @@ impl Error {
         }
     }
 
-    /// Wrap a cause as a VM error with `code`, **keeping the inner terminal
-    /// error if it already is one**: if `cause` already carries a `Vm`/`User`
-    /// kind it is returned unchanged (so the innermost code wins, instead of
-    /// being masked by an outer one); otherwise its `Internal` payload is
-    /// promoted to `Vm(code)`, preserving the accumulated context and source.
+    /// Classify a third-party error (JSON decoding, wasmparser, wasmtime
+    /// instantiation, version parsing) as a VM error with `code`. A `Vm`/`User`
+    /// kind already carried inside wins; anything else becomes `Vm(code)`, so
+    /// never call this on a first-party result, which is classified at its source.
     pub fn wrap(code: abi::consts::VmError, cause: impl Into<Error>) -> Self {
         let mut cause = cause.into();
         if !cause.is_vm() && !cause.is_user() {
@@ -258,20 +257,14 @@ impl Error {
     /// [`rt::vm::RunOk::VMError`].
     pub fn vm_cause(code: abi::consts::VmError, cause: Option<anyhow::Error>) -> Self {
         match cause {
-            Some(cause) => Self::wrap(code, cause),
+            Some(cause) => Self::vm(code).context(format!("{cause:#}")),
             None => Self::vm(code),
         }
     }
 
     pub fn fatal_vm_cause(code: abi::consts::VmError, cause: Option<anyhow::Error>) -> Self {
         match cause {
-            Some(cause) => {
-                let mut cause = Self::from(cause);
-                if !cause.is_fatal_vm() {
-                    cause.kind = ErrorKind::FatalVm(code);
-                }
-                cause
-            }
+            Some(cause) => Self::fatal_vm(code).context(format!("{cause:#}")),
             None => Self::fatal_vm(code),
         }
     }

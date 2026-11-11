@@ -50,6 +50,38 @@ fn next_action_context(
     }
 }
 
+/// Only the entry point may end a run with a value, not a start function or `_initialize`
+fn reject_init_return(e: wasmtime::Error) -> Result<wasmtime::Error, anyhow::Error> {
+    if !e.is::<wasi::genlayer_sdk::ContractReturn>() {
+        return Ok(e);
+    }
+    log_warn!(@user; "contract returned during wasm initialization, which is not allowed; only its entry point may return");
+    Err(rt::errors::vm_error!(
+        public_abi::VmError::invalid_contract().val(),
+        "contract returned during wasm initialization"
+    )
+    .into())
+}
+
+/// Instantiation also runs the start function, whose traps and host calls keep
+/// their own classification; any other failure is the module not linking
+fn classify_instantiate_error(e: wasmtime::Error) -> anyhow::Error {
+    let e = match reject_init_return(e) {
+        Ok(e) => e,
+        Err(returned) => return returned,
+    };
+    let raised_by_execution = e.is::<wasmtime::Trap>()
+        || e.is::<wiggle::GuestError>()
+        || e.is::<rt::errors::Error>()
+        || e.is::<wasmtime::OutOfMemory>();
+    let e = anyhow::Error::from(e);
+    if raised_by_execution {
+        e
+    } else {
+        rt::errors::Error::wrap(public_abi::VmError::invalid_contract().wasm().linking(), e).into()
+    }
+}
+
 fn maps_into_vm(to: &str) -> bool {
     wasi::vfs::split_normalize_path(to, true)
         .first()
@@ -747,11 +779,7 @@ async fn register_runner_load_into(
         cell,
         id,
         code.len(),
-        |max_meta_size| async move {
-            runners::parse(code, max_meta_size).map_err(|e| {
-                rt::errors::Error::wrap(public_abi::VmError::invalid_contract().val(), e)
-            })
-        },
+        |max_meta_size| async move { runners::parse(code, max_meta_size) },
     )
     .await?;
     Ok(id)
@@ -1090,33 +1118,30 @@ impl Ctx<'_, '_> {
                                 .linker
                                 .instantiate_async(&mut self.vm.store, &module)
                                 .await
+                                .map_err(classify_instantiate_error)
                                 .with_context(|| format!("instantiating {path:?}")),
                             &contexts
                         );
                         let name = try_context!(
-                            module
-                                .name()
-                                .ok_or_else(|| {
-                                    anyhow::anyhow!("can't link unnamed module {:?}", current)
-                                })
-                                .with_context(|| {
-                                    format!("getting module name for {path:?} of {current}")
-                                })
-                                .map_err(|e| {
-                                    rt::errors::Error::wrap(
-                                        public_abi::VmError::invalid_contract().wasm().linking(),
-                                        e,
-                                    )
-                                }),
+                            module.name().ok_or_else(|| {
+                                rt::errors::vm_error!(
+                                    public_abi::VmError::invalid_contract().wasm().linking(),
+                                    "can't link unnamed module {path:?} of {current}"
+                                )
+                            }),
                             &contexts
                         );
                         try_context!(
                             self.vm
                                 .linker
                                 .instance(&mut self.vm.store, name, instance)
-                                .with_context(|| {
-                                    format!("linking instance {name} for {path:?}")
-                                }),
+                                .map_err(|e| {
+                                    rt::errors::Error::wrap(
+                                        public_abi::VmError::invalid_contract().wasm().linking(),
+                                        e,
+                                    )
+                                })
+                                .with_ctx(|| format!("linking instance {name} for {path:?}")),
                             &contexts
                         );
                         instance
@@ -1125,7 +1150,13 @@ impl Ctx<'_, '_> {
                         Err(_) => {}
                         Ok(func) => {
                             log_info!(runner = current_runner_arch.runner_id().as_str(), path = path; "calling _initialize");
-                            try_context!(func.call_async(&mut self.vm.store, ()).await, &contexts);
+                            try_context!(
+                                func.call_async(&mut self.vm.store, ())
+                                    .await
+                                    .map_err(|e| reject_init_return(e)
+                                        .map_or_else(|returned| returned, anyhow::Error::from)),
+                                &contexts
+                            );
                         }
                     }
                 }
@@ -1160,6 +1191,7 @@ impl Ctx<'_, '_> {
                             .linker
                             .instantiate_async(&mut self.vm.store, &module)
                             .await
+                            .map_err(classify_instantiate_error)
                             .with_context(|| format!("instantiating {path:?}")),
                         &contexts
                     )));
