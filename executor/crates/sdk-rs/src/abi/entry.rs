@@ -270,7 +270,7 @@ pub mod contract_def {
     /// Parsed calldata for Main entry kind - regular contract method calls.
     #[derive(Debug, Clone, Default)]
     pub struct MainCalldata {
-        /// Method name to call (empty string for default/receive)
+        /// Method name to call (empty string means no named method, not a value transfer)
         pub method: String,
         /// Positional arguments
         pub args: Vec<Value>,

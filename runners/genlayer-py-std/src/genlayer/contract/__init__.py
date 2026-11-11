@@ -27,6 +27,7 @@ import typing
 
 import genlayer.calldata as calldata
 from genlayer import IS_IN_VM
+from genlayer._internal.schema_attrs import reject_removed_receive_hook
 from genlayer.chain import IAccount
 from genlayer.message_allocation import UseBalanceParams, _flatten_allocations
 from genlayer.types import Address, Lazy, u256
@@ -733,8 +734,9 @@ class Contract(IAccount):
 		"""
 		Initialize the contract subclass and register it as the main contract.
 
-		:raises TypeError: If another Contract subclass already exists in this module
+		:raises TypeError: If another Contract subclass already exists or the class defines the removed receive hook.
 		"""
+		reject_removed_receive_hook(cls)
 		global __known_contract__
 		if __known_contract__ is not None:
 			raise TypeError(

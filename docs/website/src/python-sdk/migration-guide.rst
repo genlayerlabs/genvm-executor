@@ -56,8 +56,12 @@ After unpickling, ``resolve()`` queries the factory again
 Receive Hook Removed
 ~~~~~~~~~~~~~~~~~~~~
 
-``Contract.__receive__`` is removed in v0.4. An empty or omitted method name on a non-deployment
-call raises the undefined-method error, with or without value, without invoking either fallback.
+``Contract.__receive__`` is removed in v0.4: contracts have no receive hook.
+Defining or inheriting ``__receive__`` raises ``TypeError`` during contract class validation and schema generation;
+remove the hook rather than leaving it unused
+
+An empty or omitted method name on a non-deployment call raises ``ValueError('empty method name')``,
+with or without value, without invoking either fallback.
 To accept value through an Intelligent Contract call, expose a named ``gl.public.write.payable`` method
 
 Account-Only Value Transfers

@@ -51,6 +51,12 @@ call to a private method.
 Special Methods
 ---------------
 
+Defining or inheriting the removed ``__receive__`` hook raises ``TypeError`` during contract class validation
+and schema generation. Contracts have no receive hook; use a named payable method to execute code with value
+
+``Account(addr).emit_transfer(value)`` is an EVM-level value send with empty calldata and never executes
+the recipient's contract code. Any nonzero recipient address is currently accepted, including an IC address
+
 The VM calls 3 methods on its own. None of them can be called by name, and decorating
 any of them with ``gl.public`` raises ``TypeError`` when the class is defined.
 
@@ -100,5 +106,5 @@ Dispatch
       HasPay -- yes --> FbPay["__handle_undefined_method_payable__"]
       HasPay -- no --> Refuse
 
-An empty or omitted method name on a non-deployment call is rejected as an undefined method,
+An empty or omitted method name on a non-deployment call raises ``ValueError('empty method name')``,
 with or without value. It never reaches either fallback

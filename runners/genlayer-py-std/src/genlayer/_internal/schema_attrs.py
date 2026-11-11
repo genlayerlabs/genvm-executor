@@ -11,11 +11,22 @@ MIN_GAS_LEADER_ATTR = '__gl_min_gas_leader__'
 MIN_GAS_VALIDATOR_ATTR = '__gl_min_gas_validator__'
 PAYABLE_ATTR = '__gl_payable__'
 
+_REMOVED_RECEIVE_ERROR = (
+	'`__receive__` was removed in v0.4; contracts have no receive hook'
+)
+
+
+def reject_removed_receive_hook(contract: type) -> None:
+	if any('__receive__' in vars(base) for base in contract.__mro__):
+		raise TypeError(_REMOVED_RECEIVE_ERROR)
+
 
 def public_name_error(name: str) -> str | None:
 	"""
 	Error message if a method called ``name`` cannot be public
 	"""
+	if name == '__receive__':
+		return _REMOVED_RECEIVE_ERROR
 	if name == '__init__':
 		return (
 			'the constructor `__init__` must not be public: remove its `gl.public` decorator'

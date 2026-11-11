@@ -122,6 +122,38 @@ def test_public_method_requires_self(first_parameter):
 		get_schema(Contract)
 
 
+@pytest.mark.parametrize('inherited', [False, True])
+@pytest.mark.parametrize(
+	'wrapper',
+	[
+		lambda method: method,
+		public,
+		staticmethod,
+		classmethod,
+		property,
+		lambda method: None,
+	],
+)
+def test_schema_rejects_removed_receive_hook(inherited, wrapper):
+	def receive(self):
+		pytest.fail('validation must not invoke the receive hook or descriptor')
+
+	class Legacy:
+		__receive__ = wrapper(receive)
+
+	class Contract(Legacy if inherited else object):
+		def __init__(self): ...
+
+	if not inherited:
+		Contract.__receive__ = Legacy.__dict__['__receive__']
+
+	with pytest.raises(
+		TypeError,
+		match='`__receive__` was removed in v0\\.4; contracts have no receive hook',
+	):
+		get_schema(Contract)
+
+
 _SPECIAL = [
 	'__handle_undefined_method__',
 	'__handle_undefined_method_payable__',

@@ -14,6 +14,7 @@ from genlayer._internal.schema_attrs import (
 	PUBLIC_ATTR,
 	READONLY_ATTR,
 	public_name_error,
+	reject_removed_receive_hook,
 )
 from genlayer.types import Address
 
@@ -189,6 +190,7 @@ def get_schema(contract: type) -> typing.Any:
 	Uses python type reflections to produce GenVM ABI schema
 	"""
 
+	reject_removed_receive_hook(contract)
 	ctor = _get_ctor(contract)
 
 	meths = {

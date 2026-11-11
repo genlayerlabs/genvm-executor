@@ -6,7 +6,6 @@ import genlayer as gl
 import genlayer.contract as contract
 import pytest
 from genlayer._internal import entry_calldata
-from genlayer._internal.schema_attrs import public_name_error
 
 
 @pytest.fixture
@@ -21,17 +20,19 @@ def dispatch(monkeypatch):
 	monkeypatch.setitem(sys.modules, 'contract', types.ModuleType('contract'))
 	main = runpy.run_module('_genlayer_bootloader')['_handle_main']
 
-	def run(klass, calldata, value):
+	def run(klass, calldata, value, *, is_init=False):
 		monkeypatch.setattr(contract, '__known_contract__', klass)
 		monkeypatch.setattr(
 			gl.message,
 			'raw',
-			{'entry_data': gl.calldata.encode(calldata), 'is_init': False, 'value': value},
+			{'entry_data': gl.calldata.encode(calldata), 'is_init': is_init, 'value': value},
 		)
 		monkeypatch.setattr(
 			gl.storage.Root,
 			'get',
-			lambda: types.SimpleNamespace(get_contract_instance=lambda cls: cls()),
+			lambda: types.SimpleNamespace(
+				get_contract_instance=lambda cls: cls(), lock_default=lambda: None
+			),
 		)
 		main()
 
@@ -55,9 +56,8 @@ def test_empty_method_is_rejected_without_dispatch(
 	if has_handlers:
 
 		def unexpected(*args, **kwargs):
-			pytest.fail('empty method must not invoke receive or either fallback')
+			pytest.fail('empty method must not invoke either fallback')
 
-		Methods.__receive__ = unexpected
 		Methods.__handle_undefined_method__ = unexpected
 		Methods.__handle_undefined_method_payable__ = unexpected
 
@@ -69,11 +69,52 @@ def test_contract_has_no_receive_hook():
 	assert not hasattr(contract.Contract, '__receive__')
 
 
-def test_receive_name_has_only_the_general_dunder_restriction():
-	assert (
-		public_name_error('__receive__')
-		== 'public method names must not start with `__`: `__receive__`'
-	)
+@pytest.mark.parametrize(
+	'decorate', [gl.public.view, gl.public.write, gl.public.write.payable]
+)
+def test_receive_name_reports_removal_even_when_decorated(decorate):
+	def __receive__(self): ...
+
+	with pytest.raises(
+		TypeError,
+		match=r'`__receive__` was removed in v0\.4; contracts have no receive hook',
+	):
+		decorate(__receive__)
+
+
+@pytest.mark.parametrize(
+	'entry, is_init', [({}, True), ({'': 'run'}, False), ({'': '#get-schema'}, False)]
+)
+def test_runtime_rejects_contract_defining_receive(
+	dispatch, monkeypatch, tmp_path, entry, is_init
+):
+	(tmp_path / 'contract.py').write_text("""import genlayer as gl
+
+class Invalid(gl.contract.Contract):
+	def __init__(self):
+		raise AssertionError('invalid contract must not be instantiated')
+
+	def __receive__(self):
+		raise AssertionError('removed hook must not run')
+
+	@gl.public.write
+	def run(self):
+		raise AssertionError('invalid contract must not run')
+""")
+	monkeypatch.delitem(sys.modules, 'contract')
+	monkeypatch.syspath_prepend(str(tmp_path))
+	from genlayer._internal.on_chain import gl_call
+
+	def unexpected_result(result):
+		pytest.fail('invalid contract must not return a schema')
+
+	monkeypatch.setattr(gl_call, 'contract_return', unexpected_result)
+	with pytest.raises(
+		TypeError,
+		match=r'`__receive__` was removed in v0\.4; contracts have no receive hook',
+	):
+		dispatch(None, entry, 0, is_init=is_init)
+	assert contract.__known_contract__ is None
 
 
 @pytest.mark.parametrize('value', [0, 100])
