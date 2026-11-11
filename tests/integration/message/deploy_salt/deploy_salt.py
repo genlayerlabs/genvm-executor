@@ -4,7 +4,10 @@ import genlayer as gl
 
 class Contract(gl.contract.Contract):
 	def __init__(self):
-		res = gl.contract.deploy(
-			code='not really a contract'.encode('utf-8'), salted=gl.contract.Salted(1)
-		)
+		salted = gl.contract.Salted(1)
+		address = salted.resolve()
+		assert salted.resolve() == address
+		res = gl.contract.deploy(code=b'not really a contract', salted=salted)
+		assert res == address
 		print(res)
+		assert gl.contract.deploy(code=b'not really a contract', salted=2) is None

@@ -486,18 +486,31 @@ def interface[TView, TWrite](
 from genlayer.types import u256  # noqa: E402
 
 
+def _validate_salt_nonce(salt_nonce: int, parameter: str) -> None:
+	if isinstance(salt_nonce, bool) or not isinstance(salt_nonce, int):
+		raise TypeError(f'{parameter} must be int')
+	if not 0 < salt_nonce < 2**256:
+		raise ValueError(f'{parameter} must be in [1, 2**256)')
+
+
 class Salted:
 	"""
 	Requests a deterministic deploy address from :py:func:`deploy`
 
-	The address is
-	``keccak256(0xff ++ deployer ++ keccak256(contract_address ++ salt_nonce) ++ code_hash)[12:]``,
-	where ``contract_address`` is the deploying contract and ``salt_nonce`` is 32 bytes big-endian
+	Construction makes no chain calls. :py:meth:`resolve` queries the factory on first use
+	and caches its prediction; :py:meth:`resolve_hardcoded` opts into a local formula
+
+	Deployment inputs are read-only so the cached address stays tied to the configured salt and factory
+
+	Pickling preserves those inputs but discards the cached address, so :py:meth:`resolve` queries the factory again
 	"""
 
+	__slots__ = ('salt_nonce', 'deployer', 'code_hash', '_address')  # noqa: RUF023
+
 	salt_nonce: u256
-	deployer: Address | None
-	code_hash: bytes | None
+	deployer: Address
+	code_hash: bytes
+	_address: Address | None
 
 	def __init__(
 		self,
@@ -507,22 +520,17 @@ class Salted:
 		code_hash: bytes | None = None,
 	):
 		"""
+		Configure a salted deployment without resolving its address
+
 		:param salt_nonce: Nonzero salt, unique per deploying contract
-		:param deployer: Settlement-chain contract that performs the ``CREATE2``
-		:param code_hash: 32-byte ``keccak256`` of the init code the deployer passes to ``CREATE2``
-
-		Where the address comes from:
-
-		- neither ``deployer`` nor ``code_hash``: computed from :py:data:`genlayer.message.create2`
-		- both: computed from them, without a call
-		- ``deployer`` only: ``deployer.predictGhostAddress(salt_nonce, contract_address)``, an EVM view call
-
-		:raises ValueError: if ``salt_nonce`` is 0 or out of range, if ``code_hash`` is given without ``deployer``, or if ``code_hash`` is not 32 bytes
+		:param deployer: Settlement-chain factory; defaults to :py:data:`genlayer.message.create2`
+		:param code_hash: 32-byte init-code hash for :py:meth:`resolve_hardcoded`;
+			defaults to :py:data:`genlayer.message.create2`
+		:raises TypeError: If ``salt_nonce`` is not an integer or ``deployer`` is not an Address
+		:raises ValueError: If ``salt_nonce`` is outside ``[1, 2**256)``, ``code_hash`` is not 32 bytes,
+			or ``code_hash`` is given without ``deployer``
 		"""
-		if isinstance(salt_nonce, bool) or not isinstance(salt_nonce, int):
-			raise TypeError('salt_nonce must be int')
-		if not 0 < salt_nonce < 2**256:
-			raise ValueError('salt_nonce must be in [1, 2**256)')
+		_validate_salt_nonce(salt_nonce, 'salt_nonce')
 		if deployer is None and code_hash is not None:
 			raise ValueError('code_hash requires deployer')
 		if deployer is not None and not isinstance(deployer, Address):
@@ -531,12 +539,89 @@ class Salted:
 			not isinstance(code_hash, bytes) or len(code_hash) != 32
 		):
 			raise ValueError('code_hash must be 32 bytes')
+		import genlayer.message as message
+
 		self.salt_nonce = salt_nonce
-		self.deployer = deployer
-		self.code_hash = code_hash
+		self.deployer = message.create2['deployer'] if deployer is None else deployer
+		self.code_hash = message.create2['code_hash'] if code_hash is None else code_hash
+		self._address = None
+
+	def __setattr__(self, name: str, value: typing.Any) -> None:
+		if name != '_address' and hasattr(self, name):
+			raise AttributeError(f'{name} is read-only')
+		super().__setattr__(name, value)
+
+	def __delattr__(self, name: str) -> None:
+		raise AttributeError(f'{name} is read-only')
+
+	def __getstate__(self) -> tuple[u256, Address, bytes]:
+		return self.salt_nonce, self.deployer, self.code_hash
+
+	def __setstate__(self, state: tuple[u256, Address, bytes]) -> None:
+		salt_nonce, deployer, code_hash = state
+		self.__init__(salt_nonce, deployer=deployer, code_hash=code_hash)
+
+	def resolve(self) -> Address:
+		"""
+		Return the cached address or query the settlement-chain factory and cache its prediction
+
+		Calls ``deployer.predictGhostAddress(salt_nonce, contract_address)`` via ``eth_call``
+		on first use, unless :py:meth:`resolve_hardcoded` has already stored an address
+
+		:returns: The predicted contract address
+		:raises ValueError: If the factory returns the zero address
+		"""
+		address = self._address
+		if address is None:
+			import genlayer.message as message
+			from genlayer._internal import predict_ghost_address
+
+			address = predict_ghost_address(
+				self.deployer, self.salt_nonce, message.contract_address
+			)
+			self._address = address
+		return address
+
+	def resolve_hardcoded(self) -> Address:
+		"""
+		Compute the deployment address locally and cache it if it agrees with any stored prediction
+
+		The formula is
+		``keccak256(0xff ++ deployer ++ keccak256(contract_address ++ salt_nonce) ++ code_hash)[12:]``,
+		where ``contract_address`` is the deploying contract and ``salt_nonce`` is 32 bytes big-endian
+
+		.. warning::
+			This formula is not 100% future proof: governance can change the factory's address derivation.
+			Use it only in short-lived contracts that will not outlive such a change.
+			Prefer :py:meth:`resolve` for long-lived contracts
+
+			With an explicit custom ``deployer``, an omitted ``code_hash`` still defaults to the configured
+			factory's hash in :py:data:`genlayer.message.create2`, so the formula may be wrong for a different factory
+
+			Once cached, this address is also used by :py:meth:`resolve` and :py:func:`deploy`
+			without consulting the factory
+
+		:returns: The locally computed address
+		:raises ValueError: If the computed address differs from the stored address; neither is overwritten
+		"""
+		import genlayer.message as message
+		from genlayer._internal import create2_address
+
+		address = create2_address(
+			self.deployer, self.code_hash, message.contract_address, self.salt_nonce
+		)
+		if self._address is not None and self._address != address:
+			raise ValueError(
+				f'hardcoded address {address} conflicts with stored address {self._address}'
+			)
+		self._address = address
+		return address
 
 	def __repr__(self) -> str:
-		return f'Salted({self.salt_nonce}, deployer={self.deployer!r}, code_hash={self.code_hash!r})'
+		return (
+			f'Salted({self.salt_nonce}, deployer={self.deployer!r}, '
+			f'code_hash={self.code_hash!r}, _address={self._address!r})'
+		)
 
 
 @typing.overload
@@ -546,7 +631,7 @@ def deploy(
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
 	kwargs: collections.abc.Mapping[str, calldata.Encodable] = {},
-	salted: None = None,
+	salted: int | None = None,
 	value: u256 = 0,
 	on: ON = 'finalized',
 ) -> None: ...
@@ -571,7 +656,7 @@ def deploy(
 	code: bytes,
 	args: collections.abc.Sequence[calldata.Encodable] = [],
 	kwargs: collections.abc.Mapping[str, calldata.Encodable] = {},
-	salted: Salted | None = None,
+	salted: int | Salted | None = None,
 	value: u256 = 0,
 	on: ON = 'finalized',
 ) -> Address | None:
@@ -585,12 +670,15 @@ def deploy(
 	:param code: Source code of the contract to deploy. It can be regular Python code. See :ref:`runners-reference` for more information
 	:param args: Positional arguments for the contract constructor
 	:param kwargs: Keyword arguments for the contract constructor
-	:param salted: Deploy at a deterministic address; see :py:class:`Salted`
+	:param salted: A nonzero integer salt deploys deterministically without predicting the address;
+		a :py:class:`Salted` resolves and returns the address; None or omitted uses CREATE1
 	:param value: Amount of native tokens to send to the contract during deployment
 	:param on: When to execute the deployment ('decided' or 'finalized')
 	:param use_balance: Fund the deploy message fee from this contract's balance; see :py:meth:`Proxy.emit`
-	:returns: The contract address if ``salted`` is given, None otherwise
-	:raises ValueError: if ``predictGhostAddress`` returns the zero address; nothing is emitted then
+	:returns: The predicted address from :py:meth:`Salted.resolve` for a :py:class:`Salted`, None otherwise
+	:raises TypeError: If ``salted`` is not an integer, Salted or None, or is a bool
+	:raises ValueError: If the integer salt is outside ``[1, 2**256)`` or the factory returns the zero address;
+		nothing is emitted then
 
 	Example:
 		>>> # Non-deterministic deployment
@@ -616,29 +704,16 @@ def deploy(
 		- The contract's constructor will be called with the provided ``args`` and ``kwargs``
 	"""
 
-	import genlayer.message as _message
-
 	address: Address | None = None
 	salt_nonce: u256 = 0
-	if salted is not None:
-		if not isinstance(salted, Salted):
-			raise TypeError('salted must be Salted or None')
+	if isinstance(salted, Salted):
 		salt_nonce = salted.salt_nonce
-		deployer, code_hash = salted.deployer, salted.code_hash
-		if deployer is None:
-			create2 = _message.create2
-			deployer, code_hash = create2['deployer'], create2['code_hash']
-
-		if code_hash is None:
-			from genlayer._internal import predict_ghost_address
-
-			address = predict_ghost_address(deployer, salt_nonce, _message.contract_address)
-		else:
-			from genlayer._internal import create2_address
-
-			address = create2_address(
-				deployer, code_hash, _message.contract_address, salt_nonce
-			)
+		address = salted.resolve()
+	elif isinstance(salted, int):
+		_validate_salt_nonce(salted, 'salted')
+		salt_nonce = salted
+	elif salted is not None:
+		raise TypeError('salted must be int, Salted or None')
 
 	message: dict[str, calldata.Encodable] = {
 		'calldata': _make_calldata_obj(None, args, kwargs),

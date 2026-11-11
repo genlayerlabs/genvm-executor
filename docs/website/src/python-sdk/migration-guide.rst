@@ -17,10 +17,11 @@ From v0.3 to v0.4
 Salted Deploys
 ~~~~~~~~~~~~~~
 
-The ``salt_nonce`` argument of ``deploy`` moves into ``salted``, which takes a
-:py:class:`genlayer.contract.Salted`. A ``salt_nonce`` of 0 raises instead of meaning "not salted";
-omit ``salted`` for that. The returned address now matches the
-address the settlement chain assigns, so it differs from what v0.3 returned:
+The ``salt_nonce`` argument of ``deploy`` moves into ``salted``, which takes a nonzero integer or a
+:py:class:`genlayer.contract.Salted`. An integer deploys deterministically but returns ``None``;
+``Salted`` resolves and returns the address. A salt of 0 raises instead of meaning "not salted";
+omit ``salted`` or pass ``None`` for that. The predicted address now matches the settlement chain's
+factory, so it differs from what v0.3 returned:
 
 .. code-block:: python
 
@@ -30,9 +31,27 @@ address the settlement chain assigns, so it differs from what v0.3 returned:
     # v0.4
     address = gl.contract.deploy(code=source, salted=gl.contract.Salted(42))
 
-By default the address derives from :py:data:`genlayer.message.create2`. ``deployer`` and
-``code_hash`` passed to ``Salted`` override it; with ``deployer`` alone, the address comes from
-its ``predictGhostAddress`` view call
+``Salted`` defaults ``deployer`` and ``code_hash`` from :py:data:`genlayer.message.create2`
+without calling the chain. Explicit values override those defaults; an explicit ``code_hash``
+still requires an explicit ``deployer``
+
+:py:meth:`genlayer.contract.Salted.resolve` queries ``deployer.predictGhostAddress`` on first use
+and caches the address. ``deploy`` calls it automatically. To skip prediction entirely, use
+``gl.contract.deploy(code=source, salted=42)``
+
+:py:meth:`genlayer.contract.Salted.resolve_hardcoded` uses ``deployer`` and ``code_hash`` to compute
+and cache the address locally. It raises if the result conflicts with a previously cached address
+
+.. warning::
+    The hardcoded formula is governance-changeable and is only suitable for short-lived contracts
+
+    A custom ``deployer`` still defaults ``code_hash`` to the configured factory's hash, which may be wrong
+    for a different factory
+
+    Once cached, the address is also used by ``resolve()`` and ``deploy`` without consulting the factory
+
+Pickling a ``Salted`` preserves its deployment inputs but discards its cached address.
+After unpickling, ``resolve()`` queries the factory again
 
 .. _py-sdk-v03-rc:
 
