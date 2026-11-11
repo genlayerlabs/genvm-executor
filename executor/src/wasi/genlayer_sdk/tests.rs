@@ -1013,16 +1013,16 @@ impl MessageEmission {
     }
 }
 
-pub(super) struct EmissionTestContext {
+pub(crate) struct EmissionTestContext {
     _host_peer: std::os::unix::net::UnixStream,
     vfs: vfs::VFS,
     preview1: super::super::preview1::Context,
-    pub(super) context: Context,
+    pub(crate) context: Context,
     _root: TestDir,
 }
 
 impl EmissionTestContext {
-    fn new(memory_limit: u32, fee_total: u64) -> Self {
+    pub(crate) fn new(memory_limit: u32, fee_total: u64) -> Self {
         Self::with_fees(memory_limit, fee_total, emission_fees())
     }
 

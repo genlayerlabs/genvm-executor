@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "compilation_test.rs"]
+mod tests;
+
 use genlayer_sdk::abi;
 use wiggle::error::Context as _;
 
@@ -67,36 +71,14 @@ impl super::Supervisor {
                 std::borrow::Cow::Borrowed(wasm),
                 Some(std::path::Path::new(debug_path)),
             )?
-            .compile_module();
-
-        let module_det = match module_det {
-            Ok(v) => v,
-            Err(e) => {
-                return Err(rt::errors::Error::wrap(
-                    abi::consts::VmError::invalid_contract().wasm().validating(),
-                    e,
-                )
-                .into());
-            }
-        };
+            .compile_module()?;
 
         let module_non_det = wasmtime::CodeBuilder::new(&self.engines.non_det)
             .wasm_binary(
                 std::borrow::Cow::Borrowed(wasm),
                 Some(std::path::Path::new(debug_path)),
             )?
-            .compile_module();
-
-        let module_non_det = match module_non_det {
-            Ok(v) => v,
-            Err(e) => {
-                return Err(rt::errors::Error::wrap(
-                    abi::consts::VmError::invalid_contract().wasm().validating(),
-                    e,
-                )
-                .into());
-            }
-        };
+            .compile_module()?;
 
         log_info!(status = "done", duration:? = start_time.elapsed(), path = debug_path; "cache compiling");
 

@@ -21,7 +21,7 @@ mod descendant_grant;
 mod message;
 mod run;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 // Leader-result parsing/stripping. Pure functions over untrusted bytes,
 // re-exported (rather than making `run` public) so the fuzz targets can reach
