@@ -60,6 +60,23 @@ Receive Hook Removed
 call raises the undefined-method error, with or without value, without invoking either fallback.
 To accept value through an Intelligent Contract call, expose a named ``gl.public.write.payable`` method
 
+Account-Only Value Transfers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``emit_transfer`` is removed from Intelligent Contract proxies, ``Contract`` and ``IAccount``.
+Replace ``gl.contract.get_at(address).emit_transfer(value)`` with ``gl.chain.Account(address).emit_transfer(value)``
+
+``Account(addr).emit_transfer(value)`` is an EVM-level value send (EthSend) with empty calldata,
+applied only on finalization. It never executes the recipient's contract code.
+Any nonzero address is accepted, including an Intelligent Contract address
+
+The ``on`` and ``use_balance`` parameters are removed: the external-message ABI has neither staging
+nor balance-funded fee parameters or descendant grants. The value still comes from the emitting
+contract's balance, and fees use the external allocation pool
+
+EVM contract proxies keep their existing ``emit_transfer(value)`` helper, which also sends an empty-calldata
+external message on finalization
+
 .. _py-sdk-v03-rc:
 
 Within v0.3: Release-Candidate Changes
@@ -71,7 +88,7 @@ Within v0.3: Release-Candidate Changes
 Message Funding
 ~~~~~~~~~~~~~~~
 
-``emit``, ``emit_transfer`` and ``deploy`` accept an optional ``UseBalanceParams``
+``emit`` and ``deploy`` accept an optional ``UseBalanceParams``
 as a positional or keyword ``use_balance`` argument. Omission or ``None`` uses
 sender funding. Replace ``use_balance=True, fee_params=fees`` with
 ``use_balance=gl.contract.UseBalanceParams(fee_params=fees)``
@@ -91,7 +108,6 @@ sender funding. Replace ``use_balance=True, fee_params=fees`` with
             ],
         ),
     ])).run()  # Pinned
-    target.emit_transfer(1, gl.contract.UseBalanceParams(fees))
     gl.contract.deploy(gl.contract.UseBalanceParams(fees), code=source)
 
 ``descendants=None``, ``0`` and ``[]`` select Closed; a positive integer selects
@@ -100,7 +116,7 @@ to a flat list of parent indices; contracts do not need to calculate indices
 
 For either allocation type, ``call_key=None`` now means any method, equivalent
 to ``gl.message_allocation.ANY_METHOD``. Use ``bytes(32)`` for the exact zero
-key previously selected by ``None``: internal deploys/transfers and external
+key previously selected by ``None``: internal deploys and external
 calldata shorter than 4 bytes
 
 Internal allocations accept method names or raw 32-byte keys. External allocations
@@ -345,7 +361,9 @@ Functions for interacting with other contracts have been renamed and moved into 
 
 The ``ContractProxy`` type is renamed to ``gl.contract.Proxy``.
 
-GenLayer contract proxies, ``Contract`` itself, and the new ``gl.chain.Account`` all implement the ``gl.chain.IAccount`` protocol, exposing ``address``, ``balance``, and ``emit_transfer(value, *, on=...)``. EVM contract proxies expose ``emit_transfer(value)`` without ``on`` because ``EmitExternalMessage`` has no decided/finalized staging option.
+GenLayer contract proxies, ``Contract`` itself, and ``gl.chain.Account`` implement the ``gl.chain.IAccount``
+protocol. In v0.4 it exposes only ``address`` and ``balance``; transfer helpers belong to ``Account`` and
+EVM contract proxies, not Intelligent Contract types
 
 Value Transfers and ``on=`` Parameter
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -357,11 +375,11 @@ Write-call and deploy APIs now take an ``on`` keyword controlling when the messa
     contract.emit(value=100, on='finalized').transfer(to, amount)
     gl.contract.deploy(code=source, value=1000, on='finalized', salt_nonce=42)
 
-A new ``emit_transfer`` helper sends a plain value transfer without a method call. The receiver may catch it via ``Contract.__receive__``, see :ref:`method-dispatch`:
+In v0.4, account value transfers use an external message without a method call and always apply on finalization:
 
 .. code-block:: python
 
-    contract.emit_transfer(1000, on='finalized')
+    gl.chain.Account(address).emit_transfer(1000)
 
 Accounts
 ~~~~~~~~

@@ -11,7 +11,7 @@ class Contract(gl.contract.Contract):
 		print('main self', self.balance)
 		print('main At(self)', gl.contract.get_at(gl.message.contract_address).balance)
 		print('=== transfer ===')
-		gl.contract.get_at(gl.message.sender_address).emit_transfer(value=5)
+		gl.chain.Account(gl.message.sender_address).emit_transfer(value=5)
 		print('main self', self.balance)
 		print('main At(self)', gl.contract.get_at(gl.message.contract_address).balance)
 

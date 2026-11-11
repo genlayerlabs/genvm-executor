@@ -23,8 +23,7 @@ def params() -> InternalMessageParams:
 	return InternalMessageParams(5, 10, 100, [0], 1, 10**18, 10**18)
 
 
-@pytest.mark.parametrize('kind', ['call', 'transfer', 'account_transfer'])
-def test_internal_message_rejects_zero_recipient_before_encoding(monkeypatch, kind):
+def test_internal_message_rejects_zero_recipient_before_encoding(monkeypatch):
 	def unexpected(*args, **kwargs):
 		pytest.fail('zero-address message must fail before encoding or calling the VM')
 
@@ -33,12 +32,7 @@ def test_internal_message_rejects_zero_recipient_before_encoding(monkeypatch, ki
 		contract, 'wasi', types.SimpleNamespace(gl_call=unexpected), raising=False
 	)
 	with pytest.raises(ValueError, match='zero address'):
-		if kind == 'call':
-			contract.get_at(Address.ZERO).emit().run()
-		elif kind == 'transfer':
-			contract.get_at(Address.ZERO).emit_transfer(1)
-		else:
-			gl.chain.Account(Address.ZERO).emit_transfer(1)
+		contract.get_at(Address.ZERO).emit().run()
 
 
 def test_message_allocation_module_is_available_from_package():
@@ -46,12 +40,9 @@ def test_message_allocation_module_is_available_from_package():
 	assert 'message_allocation' in gl.__all__
 
 
-def test_account_funding_type_hints_resolve():
-	for account in (gl.chain.IAccount, gl.chain.Account):
-		assert (
-			typing.get_type_hints(account.emit_transfer)['use_balance']
-			== UseBalanceParams | None
-		)
+def test_internal_message_funding_type_hints_resolve():
+	for emit in (contract.Proxy.emit, contract._ContractAt.emit, contract.deploy):
+		assert typing.get_type_hints(emit)['use_balance'] == UseBalanceParams | None
 
 
 def test_call_key_resolution_matches_rust_sdk():
@@ -86,7 +77,7 @@ def test_internal_call_key_uses_utf8_byte_length(name):
 	assert _resolve_call_key(name) == expected
 
 
-@pytest.mark.parametrize('kind', ['call', 'transfer', 'deploy'])
+@pytest.mark.parametrize('kind', ['call', 'deploy'])
 @pytest.mark.parametrize('external', [False, True])
 @pytest.mark.parametrize(
 	'key, expected',
@@ -113,8 +104,6 @@ def test_allocation_keys_survive_every_emission_path(
 	proxy = contract.get_at(RECIPIENT)
 	if kind == 'call':
 		proxy.emit(funding).run()
-	elif kind == 'transfer':
-		proxy.emit_transfer(1, funding)
 	else:
 		contract.deploy(funding, code=b'code')
 	message = next(iter(calldata.decode(calls.pop()).values()))
@@ -123,7 +112,7 @@ def test_allocation_keys_survive_every_emission_path(
 
 
 @pytest.mark.parametrize('selector', [bytes(4), bytes.fromhex('a9059cbb'), b'\xff' * 4])
-@pytest.mark.parametrize('kind', ['call', 'transfer', 'deploy'])
+@pytest.mark.parametrize('kind', ['call', 'deploy'])
 def test_external_allocation_pads_selector_on_the_right(monkeypatch, selector, kind):
 	calls = []
 	monkeypatch.setattr(
@@ -136,8 +125,6 @@ def test_external_allocation_pads_selector_on_the_right(monkeypatch, selector, k
 	proxy = contract.get_at(RECIPIENT)
 	if kind == 'call':
 		proxy.emit(funding).run()
-	elif kind == 'transfer':
-		proxy.emit_transfer(1, funding)
 	else:
 		contract.deploy(funding, code=b'code')
 	message = next(iter(calldata.decode(calls.pop()).values()))
@@ -269,9 +256,7 @@ def test_bool_descendants_are_rejected(monkeypatch):
 
 
 @pytest.mark.parametrize('keyword', [False, True])
-@pytest.mark.parametrize(
-	'kind', ['call', 'transfer', 'deploy', 'account_transfer', 'self_transfer']
-)
+@pytest.mark.parametrize('kind', ['call', 'deploy'])
 def test_balance_parameter_can_be_positional_or_keyword(monkeypatch, keyword, kind):
 	calls = []
 	monkeypatch.setattr(
@@ -282,14 +267,6 @@ def test_balance_parameter_can_be_positional_or_keyword(monkeypatch, keyword, ki
 	proxy = contract.get_at(RECIPIENT)
 	if kind == 'call':
 		proxy.emit(*args, **kwargs).run()
-	elif kind == 'transfer':
-		proxy.emit_transfer(1, *args, **kwargs)
-	elif kind == 'account_transfer':
-		gl.chain.Account(RECIPIENT).emit_transfer(1, *args, **kwargs)
-	elif kind == 'self_transfer':
-		monkeypatch.setattr(gl.message, 'contract_address', RECIPIENT, raising=False)
-		with pytest.warns(UserWarning, match='transfer to self'):
-			contract.Contract().emit_transfer(1, *args, **kwargs)
 	else:
 		assert contract.deploy(*args, code=b'code', **kwargs) is None
 	message = next(iter(calldata.decode(calls.pop()).values()))

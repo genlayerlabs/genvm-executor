@@ -139,7 +139,7 @@ class _ContractAtEmitMethod:
 
 	def __init__(
 		self,
-		name: str | None,
+		name: str,
 		addr: Address,
 		value: u256,
 		on: str,
@@ -240,24 +240,6 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 		"""
 		...
 
-	def emit_transfer(
-		self,
-		value: u256,
-		use_balance: UseBalanceParams | None = None,
-		*,
-		on: ON = 'finalized',
-	) -> None:
-		"""
-		Emit a value transfer without calling any method
-
-		:param value: Amount of native tokens to transfer
-		:param on: When transaction message should be emitted to consensus
-		:param use_balance: Fund the message fee from this contract's balance; see :py:meth:`emit`
-
-		:raises ValueError: If value is not positive or the recipient is the zero address
-		"""
-		...
-
 
 class ErasedMethods(typing.Protocol):
 	"""
@@ -347,17 +329,6 @@ class _ContractAt(Proxy[ErasedMethods, ErasedMethods]):
 			on,
 			use_balance,
 		)
-
-	def emit_transfer(
-		self,
-		value: u256,
-		use_balance: UseBalanceParams | None = None,
-		*,
-		on: ON = 'finalized',
-	) -> None:
-		if value <= 0:
-			raise ValueError('value must be greater than 0 for emit_transfer')
-		_ContractAtEmitMethod(None, self._address, value, on, use_balance)()
 
 	@property
 	def balance(self) -> u256:
@@ -785,20 +756,6 @@ class Contract(IAccount):
 		import genlayer.message as message
 
 		return message.contract_address
-
-	def emit_transfer(
-		self,
-		value: u256,
-		use_balance: UseBalanceParams | None = None,
-		*,
-		on: ON = 'finalized',
-	) -> None:
-		import warnings
-
-		warnings.warn('Emitting transfer to self without data makes little sense')
-		from genlayer.contract import get_at
-
-		get_at(self.address).emit_transfer(value, use_balance, on=on)
 
 	def __handle_undefined_method__(
 		self, method_name: str, args: list[typing.Any], kwargs: dict[str, typing.Any]

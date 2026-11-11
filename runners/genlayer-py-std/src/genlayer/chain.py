@@ -11,11 +11,6 @@ __all__ = (
 import dataclasses
 import typing
 
-import genlayer
-
-if typing.TYPE_CHECKING:
-	import genlayer.message_allocation
-
 import genlayer._internal.on_chain.gl_call as gl_call
 import genlayer.calldata as calldata
 from genlayer import IS_IN_VM
@@ -81,22 +76,6 @@ class IAccount(typing.Protocol):
 		"""
 		...
 
-	def emit_transfer(
-		self,
-		value: u256,
-		use_balance: 'genlayer.message_allocation.UseBalanceParams | None' = None,
-		*,
-		on: ON = 'finalized',
-	) -> None:
-		"""
-		Emit a transfer message to this account's address.
-
-		:param value: amount to transfer
-		:param use_balance: Balance funding parameters, or None for sender funding
-		:param on: transaction stage at which the transfer is applied
-		"""
-		...
-
 
 class Account(IAccount):
 	"""
@@ -132,23 +111,21 @@ class Account(IAccount):
 
 		return get_at(self.address).balance
 
-	def emit_transfer(
-		self,
-		value: u256,
-		use_balance: 'genlayer.message_allocation.UseBalanceParams | None' = None,
-		*,
-		on: ON = 'finalized',
-	) -> None:
+	def emit_transfer(self, value: u256) -> None:
 		"""
-		Emit a transfer message to this account's address.
+		Send value through an EVM-level external message, applied only on finalization.
 
-		:param value: amount to transfer
-		:param use_balance: Balance funding parameters, or None for sender funding
-		:param on: transaction stage at which the transfer is applied
+		The calldata is empty and the recipient's contract code is never executed.
+		Any nonzero address is accepted, including an Intelligent Contract address.
+		The value comes from the emitting contract's balance, while fees use the external allocation pool.
+		External messages do not support ``use_balance``, descendant grants or an ``on`` parameter.
+
+		:param value: Amount of native tokens to transfer
+		:raises ValueError: If value is not positive or the recipient is the zero address
 		"""
-		from genlayer.contract import get_at
+		from genlayer._internal.on_chain import eth
 
-		get_at(self.address).emit_transfer(value, use_balance, on=on)
+		eth.perform_send(self.address, b'', value)
 
 
 import inspect  # noqa: E402

@@ -10,7 +10,7 @@ class Contract(gl.contract.Contract):
 
 		def sandbox_fn():
 			try:
-				gl.contract.get_at(target).emit_transfer(value=60)
+				gl.chain.Account(target).emit_transfer(value=60)
 			except SystemError as e:
 				print(f'sandbox transfer failed: {e}')
 			return self.balance
@@ -19,7 +19,7 @@ class Contract(gl.contract.Contract):
 		print(f'sandbox result={result} balance after sandbox={self.balance}')
 
 		try:
-			gl.contract.get_at(target).emit_transfer(value=60)
+			gl.chain.Account(target).emit_transfer(value=60)
 		except Exception as e:
 			print(f'transfer failed with error: {e}')
 

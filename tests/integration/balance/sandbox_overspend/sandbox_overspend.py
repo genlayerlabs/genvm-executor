@@ -8,7 +8,7 @@ class Contract(gl.contract.Contract):
 		target = gl.message.sender_address
 
 		# First transfer: spend 60 out of 100
-		gl.contract.get_at(target).emit_transfer(value=60)
+		gl.chain.Account(target).emit_transfer(value=60)
 		balance_after_first = self.balance
 		print(f'balance before={balance_before} after_first_send={balance_after_first}')
 
@@ -20,7 +20,7 @@ class Contract(gl.contract.Contract):
 			# This should fail (total 120 > 100) but the sandbox
 			# doesn't know about the parent's 60 already spent.
 			try:
-				gl.contract.get_at(target).emit_transfer(value=60)
+				gl.chain.Account(target).emit_transfer(value=60)
 			except SystemError as e:
 				print(f'sandbox transfer failed: {e}')
 			return self.balance

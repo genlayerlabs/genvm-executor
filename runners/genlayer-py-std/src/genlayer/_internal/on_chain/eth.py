@@ -30,6 +30,11 @@ def _generate_view(name: str, params: tuple[type], ret: type) -> typing.Any:
 
 
 def perform_send(address: Address, calldata: bytes, value: u256) -> None:
+	if not calldata:
+		if address == Address.ZERO:
+			raise ValueError('cannot emit a value transfer to the zero address')
+		if value <= 0:
+			raise ValueError('value must be greater than 0 for emit_transfer')
 	gl_call.gl_call_generic(
 		{
 			'EmitExternalMessage': {
@@ -63,16 +68,7 @@ evm_contract_interface = contract_generator(
 	_generate_view,
 	_generate_send,
 	lambda p: wasi.get_balance(p.address.as_bytes),
-	lambda p, d: gl_call.gl_call_generic(
-		{
-			'EmitExternalMessage': {
-				'address': p.address,
-				'calldata': b'',
-				'value': d.get('value', 0),
-			}
-		},
-		lambda _x: None,
-	).get(),
+	lambda p, d: perform_send(p.address, b'', d.get('value', 0)),
 )
 
 evm_contract_interface.__doc__ = """
