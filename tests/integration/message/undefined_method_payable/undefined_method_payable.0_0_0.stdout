@@ -1,2 +1,1 @@
-{'me': '__receive__', 'value': 100}
-executed with `Return(null)`
+executed with `VMError("exit_code 1")`
