@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "run_test.rs"]
+mod tests;
+
 use super::*;
 use crate::runners;
 use sha3::digest::Update;
@@ -903,6 +907,26 @@ impl ContextVFS<'_> {
             }
         }
 
+        // Sync must afford the same inherited pages even though it runs no child.
+        let storage_checkpoint = if accepted_leader_proposal {
+            Some(
+                self.context
+                    .data
+                    .storage
+                    .fork(
+                        child_limiter
+                            .as_ref()
+                            .expect("nondeterministic child limiter is available")
+                            .clone(),
+                    )
+                    .map_err(|e| {
+                        generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into()))
+                    })?,
+            )
+        } else {
+            None
+        };
+
         if let Some(leaders_res) = validator_proposal {
             let (child_topmost_id, child_custom) = child_resources
                 .take()
@@ -910,12 +934,8 @@ impl ContextVFS<'_> {
             let child_limiter = child_limiter
                 .take()
                 .expect("nondeterministic child limiter is available");
-            let storage_checkpoint = self
-                .context
-                .data
-                .storage
-                .fork(child_limiter.clone())
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+            let storage_checkpoint = storage_checkpoint
+                .expect("accepted nondeterministic proposal has a storage checkpoint");
             let task_args = RunNondetGetVMTaskArgs {
                 child_topmost_id,
                 storage_checkpoint,
