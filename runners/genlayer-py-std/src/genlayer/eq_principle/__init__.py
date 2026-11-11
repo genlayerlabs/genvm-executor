@@ -30,8 +30,10 @@ def strict_eq[T: calldata.Decoded](fn: typing.Callable[[], T], /) -> Lazy[T]:
 	"""
 	Comparative equivalence principle that checks for strict equality
 
-	This function checks that VM result is of the same type and has the same value inside.
-	It is the most performant equivalence principle, but it is also the most strict one.
+	This function checks the VM result kind and compares canonical calldata encodings of
+	return values and user errors, distinguishing integers from booleans even in nested data
+
+	VM errors must have the same message
 
 	:param fn: function that provides result that will be validated
 
@@ -43,6 +45,10 @@ def strict_eq[T: calldata.Decoded](fn: typing.Callable[[], T], /) -> Lazy[T]:
 		leaders_res: vm.Result,
 	) -> bool:
 		my_res = vm.spawn_sandbox(fn)
+		if isinstance(my_res, vm.Return) and isinstance(leaders_res, vm.Return):
+			return calldata.encode(my_res.calldata) == calldata.encode(leaders_res.calldata)
+		if isinstance(my_res, vm.UserError) and isinstance(leaders_res, vm.UserError):
+			return calldata.encode(my_res.data) == calldata.encode(leaders_res.data)
 		return my_res == leaders_res
 
 	return vm.run_nondet.lazy(  # pyright: ignore[reportFunctionMemberAccess]
