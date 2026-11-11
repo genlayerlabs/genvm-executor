@@ -1010,11 +1010,11 @@ impl MessageEmission {
     }
 }
 
-struct EmissionTestContext {
+pub(super) struct EmissionTestContext {
     _host_peer: std::os::unix::net::UnixStream,
     vfs: vfs::VFS,
     preview1: super::super::preview1::Context,
-    context: Context,
+    pub(super) context: Context,
     _root: TestDir,
 }
 
@@ -1066,6 +1066,38 @@ impl EmissionTestContext {
         registry: &str,
         forks: crate::runners::cache::Forks,
     ) -> Self {
+        Self::build_with_mode(
+            memory_limit,
+            fee_total,
+            fees,
+            balance,
+            registry,
+            forks,
+            (rt::RunMode::Leader, None),
+        )
+    }
+
+    pub(super) fn with_nondet_mode(run_mode: rt::RunMode, proposal: bytes::Bytes) -> Self {
+        Self::build_with_mode(
+            u32::MAX,
+            100,
+            emission_fees(),
+            U256::MAX,
+            "{}",
+            Default::default(),
+            (run_mode, Some(vec![proposal])),
+        )
+    }
+
+    fn build_with_mode(
+        memory_limit: u32,
+        fee_total: u64,
+        fees: crate::config::FeesConfig,
+        balance: U256,
+        registry: &str,
+        forks: crate::runners::cache::Forks,
+        (run_mode, leader_nondet_results): (rt::RunMode, Option<Vec<bytes::Bytes>>),
+    ) -> Self {
         let root = TestDir::new();
         let runners_dir = root.join("runners");
         let registry_dir = root.join("registry");
@@ -1075,7 +1107,7 @@ impl EmissionTestContext {
 
         let shared_data = sync::DArc::new(rt::SharedData {
             allow_two_workers: true,
-            run_mode: rt::RunMode::Leader,
+            run_mode,
             genvm_id: genvm_modules_interfaces::GenVMId(0),
             debug_mode: genvm_common::DebugMode::Disabled,
             metrics: crate::Metrics {
@@ -1147,7 +1179,7 @@ impl EmissionTestContext {
                 shared_data: shared_data.clone(),
                 modules,
                 locked_slots: host::LockedSlotsSet::empty(),
-                leader_nondet_results: None,
+                leader_nondet_results,
                 emit_leader_public_data: false,
                 multi_host: host::MultiHost::new(vec![host], Vec::new()),
                 record_actions: Vec::new(),
@@ -1252,7 +1284,7 @@ impl EmissionTestContext {
         }
     }
 
-    fn wasi(&mut self) -> ContextVFS<'_> {
+    pub(super) fn wasi(&mut self) -> ContextVFS<'_> {
         ContextVFS {
             vfs: &mut self.vfs,
             preview1: &mut self.preview1,

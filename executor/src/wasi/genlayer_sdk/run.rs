@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "run_test.rs"]
+mod tests;
+
 use super::*;
 use crate::runners;
 use sha3::digest::Update;
@@ -796,13 +800,21 @@ impl ContextVFS<'_> {
             )));
         }
 
+        // Fork before proposal inspection using the caller's pre-output budget in every mode.
+        let child_limiter = self.context.limiter.derived();
+        let mut storage_checkpoint = Some(
+            self.context
+                .data
+                .storage
+                .fork(child_limiter.clone())
+                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?,
+        );
+        let mut child_limiter = Some(child_limiter);
+
         let run_mode = self.context.data.supervisor.shared_data.run_mode;
         let is_leader = run_mode == rt::RunMode::Leader;
         let is_validator = run_mode == rt::RunMode::Validator;
         let mut child_resources = Some((child_topmost_id, child_custom));
-        // The child gets the caller's budget before this block's output charge.
-        // The snapshot also keeps queued validator work independent of its parent.
-        let mut child_limiter = Some(self.context.limiter.derived());
         // Every non-leader mode re-checks an accepted proposal after caps; only
         // a validator additionally puts it to the contract's principle.
         let mut accepted_leader_proposal = false;
@@ -815,12 +827,9 @@ impl ContextVFS<'_> {
             let child_limiter = child_limiter
                 .take()
                 .expect("nondeterministic child limiter is available");
-            let storage_checkpoint = self
-                .context
-                .data
-                .storage
-                .fork(child_limiter.clone())
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+            let storage_checkpoint = storage_checkpoint
+                .take()
+                .expect("nondeterministic storage checkpoint is available");
             let task_args = RunNondetGetVMTaskArgs {
                 child_topmost_id,
                 storage_checkpoint,
@@ -911,12 +920,9 @@ impl ContextVFS<'_> {
             let child_limiter = child_limiter
                 .take()
                 .expect("nondeterministic child limiter is available");
-            let storage_checkpoint = self
-                .context
-                .data
-                .storage
-                .fork(child_limiter.clone())
-                .map_err(|e| generated::types::Error::trap(crate::anyhow_to_wasmtime(e.into())))?;
+            let storage_checkpoint = storage_checkpoint
+                .take()
+                .expect("nondeterministic storage checkpoint is available");
             let task_args = RunNondetGetVMTaskArgs {
                 child_topmost_id,
                 storage_checkpoint,
