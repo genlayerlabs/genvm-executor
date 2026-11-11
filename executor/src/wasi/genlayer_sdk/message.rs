@@ -636,7 +636,9 @@ impl ContextVFS<'_> {
 
         let mut call_key = abi::CallKey([0u8; 32]);
         if calldata.len() < 4 {
-            log_warn!(@user, len = calldata.len(); "calldata too short for method selector, using unnamed call key");
+            if !calldata.is_empty() {
+                log_warn!(@user, len = calldata.len(); "calldata too short for method selector, using unnamed call key");
+            }
         } else {
             call_key.0[..4].copy_from_slice(&calldata[..4]);
         }

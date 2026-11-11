@@ -1371,6 +1371,69 @@ fn trap_message(error: generated::types::Error) -> String {
 }
 
 #[tokio::test]
+async fn external_calldata_warns_only_for_incomplete_selector() {
+    struct LogWriter {
+        thread: std::thread::ThreadId,
+        bytes: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if std::thread::current().id() == self.thread {
+                self.bytes.lock().unwrap().extend_from_slice(bytes);
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+    genvm_common::logger::initialize(
+        genvm_common::logger::Level::Warn,
+        "",
+        LogWriter {
+            thread: std::thread::current().id(),
+            bytes: logs.clone(),
+        },
+    );
+    for len in 0..=5 {
+        let mut test = EmissionTestContext::new(u32::MAX, 100);
+        logs.lock().unwrap().clear();
+        test.wasi()
+            .gl_call_emit_external_message(
+                calldata::Address::zero(),
+                bytes::Bytes::from(vec![0x12; len]),
+                U256::zero(),
+            )
+            .await
+            .unwrap();
+        let captured = std::mem::take(&mut *logs.lock().unwrap());
+        let warnings = serde_json::Deserializer::from_slice(&captured)
+            .into_iter::<serde_json::Value>()
+            .map(Result::unwrap)
+            .filter(|record| {
+                record["message"]
+                    == "calldata too short for method selector, using unnamed call key"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            warnings.len(),
+            usize::from((1..4).contains(&len)),
+            "len={len}"
+        );
+        for warning in warnings {
+            assert_eq!(warning["level"], "warn");
+            assert_eq!(warning["audience"], "user");
+            assert_eq!(warning["len"], len.to_string());
+        }
+        test.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn internal_zero_remaining_exact_fails_before_using_wildcard() {
     for emission in [
         MessageEmission::InternalAllocation,
