@@ -53,6 +53,13 @@ and cache the address locally. It raises if the result conflicts with a previous
 Pickling a ``Salted`` preserves its deployment inputs but discards its cached address.
 After unpickling, ``resolve()`` queries the factory again
 
+Receive Hook Removed
+~~~~~~~~~~~~~~~~~~~~
+
+``Contract.__receive__`` is removed in v0.4. An empty or omitted method name on a non-deployment
+call raises the undefined-method error, with or without value, without invoking either fallback.
+To accept value through an Intelligent Contract call, expose a named ``gl.public.write.payable`` method
+
 .. _py-sdk-v03-rc:
 
 Within v0.3: Release-Candidate Changes
@@ -156,7 +163,9 @@ A ``catch_vm_error`` flag makes the callee's VM error a value instead of a re-ra
 Special Methods Are Not Public
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``__receive__`` and the fallbacks are called by the VM only and must not be decorated; a ``gl.public`` decorator on them, or on any other ``__*`` method, raises ``TypeError``. ``__receive__`` is always payable, and a payable fallback is now a method of its own, see :ref:`method-dispatch`:
+The fallbacks are called by the VM only and must not be decorated; a ``gl.public`` decorator on them,
+or on any other ``__*`` method, raises ``TypeError``. A payable fallback is a method of its own,
+see :ref:`method-dispatch`:
 
 .. code-block:: python
 

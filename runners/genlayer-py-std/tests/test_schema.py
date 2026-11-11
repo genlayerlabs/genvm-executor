@@ -123,7 +123,6 @@ def test_public_method_requires_self(first_parameter):
 
 
 _SPECIAL = [
-	'__receive__',
 	'__handle_undefined_method__',
 	'__handle_undefined_method_payable__',
 ]

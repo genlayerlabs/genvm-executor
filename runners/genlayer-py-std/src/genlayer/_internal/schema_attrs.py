@@ -21,7 +21,6 @@ def public_name_error(name: str) -> str | None:
 			'the constructor `__init__` must not be public: remove its `gl.public` decorator'
 		)
 	if name in (
-		'__receive__',
 		'__handle_undefined_method__',
 		'__handle_undefined_method_payable__',
 	):

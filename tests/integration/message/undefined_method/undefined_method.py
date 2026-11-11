@@ -18,6 +18,3 @@ class Contract(gl.contract.Contract):
 				'value': gl.message.value,
 			}
 		)
-
-	def __receive__(self):
-		print({'me': '__receive__', 'value': gl.message.value})

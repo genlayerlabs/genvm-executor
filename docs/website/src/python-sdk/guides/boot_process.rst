@@ -24,7 +24,7 @@ Handles standard contract method calls and initialization.
 
 * Loads user ``contract`` module and resolves the target method of a declared ``Contract`` class
 * Validates method access permissions (public/private, payable)
-* Handles special methods: ``__receive__`` and the 2 fallbacks, see :ref:`method-dispatch`
+* Handles the 2 fallbacks for undefined nonempty method names, see :ref:`method-dispatch`
 * Routes initialization calls to ``__init__`` method
 * Enforces security restrictions on dunder methods
 
@@ -43,7 +43,7 @@ For MAIN entry kind, the bootloader implements comprehensive method resolution:
 
 * **Initialization**: Routes to private ``__init__`` method during contract deployment
 * **Named Methods**: Resolves public method calls by name with validation
-* **Special Handling**: Routes plain transfers to ``__receive__`` and calls to undefined methods to the fallbacks, see :ref:`method-dispatch`
+* **Special Handling**: Rejects empty method names and routes other undefined methods to the fallbacks, see :ref:`method-dispatch`
 * **Security**: Blocks calls to methods starting with ``__`` and unknown special methods starting with ``#``
 
 Error Handling

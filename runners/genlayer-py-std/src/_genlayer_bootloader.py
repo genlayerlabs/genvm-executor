@@ -99,10 +99,6 @@ def _handle_main() -> typing.NoReturn:
 		if is_abstract(handler):
 			handler = payable
 		if is_abstract(handler):
-			if ctx.selector == '':
-				raise ValueError(
-					'plain transfer: define `__receive__` or `__handle_undefined_method_payable__` to accept it'
-				)
 			if ctx.msg['value'] > 0:
 				raise ValueError(
 					f'call to undefined method `{ctx.selector}` with non-zero value: '
@@ -126,9 +122,7 @@ def _handle_main() -> typing.NoReturn:
 			case ABI.SpecialMethod.GET_SCHEMA:
 				_give_result(ctx.contract_type.__get_schema__)
 			case '':
-				if is_abstract(ctx.contract_type.__receive__):
-					call_fallback(ctx)
-				return ctx.contract_type.__receive__
+				raise ValueError('empty method name')
 			case x:
 				if x.startswith('__'):
 					raise ValueError('calls to methods that start with __ is forbidden')

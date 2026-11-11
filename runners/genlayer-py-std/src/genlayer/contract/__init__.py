@@ -248,8 +248,7 @@ class Proxy[TView, TSend](IAccount, typing.Protocol):
 		on: ON = 'finalized',
 	) -> None:
 		"""
-		Emit a simple value transfer without calling any method. Receiver may catch it with
-		:py:meth:`Contract.__receive__` (see :ref:`method-dispatch`), so users may need to supply non-zero gas
+		Emit a value transfer without calling any method
 
 		:param value: Amount of native tokens to transfer
 		:param on: When transaction message should be emitted to consensus
@@ -807,9 +806,9 @@ class Contract(IAccount):
 		"""
 		Handle a call without value to a method the contract does not define.
 
-		It also receives a plain transfer without value if the contract does not define
-		:py:meth:`__receive__`, with ``method_name`` set to ``''``. Defaults to :py:meth:`__handle_undefined_method_payable__`. Like every special
-		method it is called by the VM only, so it must not be decorated with ``gl.public``.
+		Defaults to :py:meth:`__handle_undefined_method_payable__`.
+		An empty method name is rejected without invoking either fallback.
+		Like every special method it is called by the VM only, so it must not be decorated with ``gl.public``.
 		See :ref:`method-dispatch`
 
 		:param method_name: Name of the method that was called
@@ -833,27 +832,12 @@ class Contract(IAccount):
 		Handle a call to a method the contract does not define, with or without value.
 
 		Without an override, a call with value to an undefined method is refused.
-		It also receives a plain transfer if the contract does not define
-		:py:meth:`__receive__`, with ``method_name`` set to ``''``.
+		An empty method name is rejected without invoking either fallback.
 		See :ref:`method-dispatch`
 
 		:param method_name: Name of the method that was called
 		:param args: Positional arguments passed to the method
 		:param kwargs: Keyword arguments passed to the method
-		"""
-		raise NotImplementedError()
-
-	def __receive__(self):
-		"""
-		Handle a plain value transfer to this contract.
-
-		It is always payable and must not be decorated with ``gl.public``.
-		See :ref:`method-dispatch`
-
-		Example:
-			>>> class MyContract(gl.contract.Contract):
-			>>>     def __receive__(self):
-			>>>         self.total_received += gl.message.value
 		"""
 		raise NotImplementedError()
 
@@ -880,6 +864,5 @@ class Contract(IAccount):
 
 Contract.__handle_undefined_method__.__isabstractmethod__ = True  # type: ignore
 Contract.__handle_undefined_method_payable__.__isabstractmethod__ = True  # type: ignore
-Contract.__receive__.__isabstractmethod__ = True  # type: ignore
 
 __known_contract__: type[Contract] | None = None

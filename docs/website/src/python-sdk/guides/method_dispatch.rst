@@ -51,14 +51,11 @@ call to a private method.
 Special Methods
 ---------------
 
-The VM calls 4 methods on its own. None of them can be called by name, and decorating
+The VM calls 3 methods on its own. None of them can be called by name, and decorating
 any of them with ``gl.public`` raises ``TypeError`` when the class is defined.
 
 ``__init__``
    The constructor, run once on deploy
-
-``__receive__``
-   A plain value transfer, i.e. a message without a method name. It is always payable
 
 ``__handle_undefined_method__``
    A call without value to a method the contract does not define. Without an override it
@@ -73,9 +70,6 @@ Both fallbacks receive the method name, positional and keyword arguments:
 .. code-block:: python
 
     class Contract(gl.contract.Contract):
-        def __receive__(self):
-            self.received += gl.message.value
-
         def __handle_undefined_method_payable__(
             self, method_name: str, args: list, kwargs: dict
         ):
@@ -93,10 +87,7 @@ Dispatch
       Msg["Message"] --> Init{"Deploy?"}
       Init -- yes --> Ctor["__init__"]
       Init -- no --> Name{"Method name"}
-      Name -- "empty" --> HasRecv{"__receive__ defined?"}
-      HasRecv -- yes --> Recv["__receive__"]
-      HasRecv -- no --> Value
-      Name -- "starts with __, or an unknown #" --> Refuse["Refused"]
+      Name -- "empty, starts with __, or an unknown #" --> Refuse["Refused"]
       Name -- "other" --> Defined{"Method defined?"}
       Defined -- yes --> Check{"Public, and payable if value is non-zero?"}
       Check -- yes --> Meth["The method"]
@@ -109,5 +100,5 @@ Dispatch
       HasPay -- yes --> FbPay["__handle_undefined_method_payable__"]
       HasPay -- no --> Refuse
 
-A plain transfer to a contract without ``__receive__`` reaches the fallbacks with an
-empty method name.
+An empty or omitted method name on a non-deployment call is rejected as an undefined method,
+with or without value. It never reaches either fallback
