@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "actions_test.rs"]
+mod tests;
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use genlayer_sdk::abi;
@@ -71,6 +75,7 @@ impl Env {
             &self.vars,
             val,
             &genvm_common::templater::DOLLAR_UNFOLDER_RE,
+            runner_limits::ENV_VALUE_LEN.into_int_comptime(),
         ) {
             Ok(v) => v,
             Err(e) => {
@@ -78,20 +83,10 @@ impl Env {
                     abi::consts::VmError::invalid_contract()
                         .runner()
                         .malformed(),
-                    Some(e),
+                    Some(e.context(format!("expanding env var {name:?}"))),
                 ));
             }
         };
-
-        if new_val.len() > runner_limits::ENV_VALUE_LEN.into_int_comptime() {
-            return Err(rt::errors::vm_error!(
-                abi::consts::VmError::invalid_contract()
-                    .runner()
-                    .malformed(),
-                "env var {name:?} value is too long: {} bytes",
-                new_val.len()
-            ));
-        }
 
         if !self
             .limiter

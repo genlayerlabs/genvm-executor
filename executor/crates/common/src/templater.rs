@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "templater_test.rs"]
+mod tests;
+
 use anyhow::Result;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -10,20 +14,35 @@ pub static DOLLAR_UNFOLDER_RE: LazyLock<regex::Regex> =
 pub static HASH_UNFOLDER_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"#\{([a-zA-Z0-9_]*)\}"#).unwrap());
 
-fn replace_all<E>(
+fn push_bounded(output: &mut String, part: &str, limit: usize) -> Result<()> {
+    anyhow::ensure!(
+        part.len() <= limit - output.len(),
+        "template expansion exceeds limit of {limit} bytes"
+    );
+    let required = output.len() + part.len();
+    if required > output.capacity() {
+        let target = limit.min(required.max(output.capacity().saturating_mul(2)));
+        output.reserve_exact(target - output.len());
+    }
+    output.push_str(part);
+    Ok(())
+}
+
+fn replace_all<'a>(
     re: &regex::Regex,
     haystack: &str,
-    replacement: impl Fn(&regex::Captures) -> Result<String, E>,
-) -> Result<String, E> {
-    let mut new = String::with_capacity(haystack.len());
+    limit: usize,
+    replacement: impl Fn(&regex::Captures) -> Result<&'a str>,
+) -> Result<String> {
+    let mut new = String::with_capacity(haystack.len().min(limit));
     let mut last_match = 0;
     for caps in re.captures_iter(haystack) {
         let m = caps.get(0).unwrap();
-        new.push_str(&haystack[last_match..m.start()]);
-        new.push_str(&replacement(&caps)?);
+        push_bounded(&mut new, &haystack[last_match..m.start()], limit)?;
+        push_bounded(&mut new, replacement(&caps)?, limit)?;
         last_match = m.end();
     }
-    new.push_str(&haystack[last_match..]);
+    push_bounded(&mut new, &haystack[last_match..], limit)?;
     Ok(new)
 }
 
@@ -59,8 +78,13 @@ impl<K: std::cmp::Ord, V> AnyMap<K, V> for BTreeMap<K, V> {
     }
 }
 
-pub fn patch_str(vars: &impl AnyMap<String, String>, s: &str, re: &regex::Regex) -> Result<String> {
-    replace_all(re, s, |r: &regex::Captures| {
+pub fn patch_str(
+    vars: &impl AnyMap<String, String>,
+    s: &str,
+    re: &regex::Regex,
+    limit: usize,
+) -> Result<String> {
+    replace_all(re, s, limit, |r: &regex::Captures| {
         let r: &str = &r[1];
         vars.get_from_map(r)
             .map(|s| s.as_str())
@@ -72,7 +96,6 @@ pub fn patch_str(vars: &impl AnyMap<String, String>, s: &str, re: &regex::Regex)
                 }
             })
             .ok_or_else(|| anyhow::anyhow!("unknown variable `{r}`"))
-            .map(String::from)
     })
 }
 
@@ -82,7 +105,9 @@ pub fn patch_yaml(
     re: &regex::Regex,
 ) -> Result<serde_yaml::Value> {
     Ok(match v {
-        serde_yaml::Value::String(s) => serde_yaml::Value::String(patch_str(vars, &s, re)?),
+        serde_yaml::Value::String(s) => {
+            serde_yaml::Value::String(patch_str(vars, &s, re, usize::MAX)?)
+        }
         serde_yaml::Value::Sequence(a) => {
             let res: Result<Vec<serde_yaml::Value>, _> =
                 a.into_iter().map(|a| patch_yaml(vars, a, re)).collect();
@@ -113,7 +138,9 @@ pub fn patch_json(
     re: &regex::Regex,
 ) -> Result<serde_json::Value> {
     Ok(match v {
-        serde_json::Value::String(s) => serde_json::Value::String(patch_str(vars, &s, re)?),
+        serde_json::Value::String(s) => {
+            serde_json::Value::String(patch_str(vars, &s, re, usize::MAX)?)
+        }
         serde_json::Value::Array(a) => {
             let res: Result<Vec<serde_json::Value>, _> =
                 a.into_iter().map(|a| patch_json(vars, a, re)).collect();

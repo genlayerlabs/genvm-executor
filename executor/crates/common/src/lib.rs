@@ -108,7 +108,8 @@ pub fn load_config(
 ) -> anyhow::Result<serde_yaml::Value> {
     populate_default_config_vars(&mut vars)?;
 
-    let config_path = templater::patch_str(&vars, path, &templater::DOLLAR_UNFOLDER_RE)?;
+    let config_path =
+        templater::patch_str(&vars, path, &templater::DOLLAR_UNFOLDER_RE, usize::MAX)?;
 
     let file =
         std::fs::File::open(&config_path).with_context(|| format!("reading `{config_path}`"))?;
