@@ -877,6 +877,9 @@ impl ContextVFS<'_> {
             log_debug!("EmitInternalMessage rejected: can_send_messages=false (Forbidden)");
             return Err(generated::types::Errno::Forbidden.into());
         }
+        if address == calldata::Address::zero() {
+            return Err(generated::types::Errno::Inval.into());
+        }
         ensure_emission_slot(&self.context.data.accumulator.emissions)?;
 
         let balance_params = validate_balance_fee(

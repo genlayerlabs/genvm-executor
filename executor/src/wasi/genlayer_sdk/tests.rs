@@ -1320,7 +1320,7 @@ impl EmissionTestContext {
             MessageEmission::InternalAllocation | MessageEmission::InternalBalance => {
                 let use_balance = matches!(emission, MessageEmission::InternalBalance);
                 wasi.gl_call_emit_internal_message(
-                    calldata::Address::zero(),
+                    grant_address(1),
                     abi::entry::MainCallData {
                         name: None,
                         args: None,
@@ -1378,7 +1378,10 @@ async fn internal_zero_remaining_exact_fails_before_using_wildcard() {
     ] {
         let mut test = EmissionTestContext::new(u32::MAX, 100);
         let mut wildcard = internal_message_allocation();
-        wildcard.recipient = Some(calldata::Address::zero());
+        wildcard.recipient = Some(match emission {
+            MessageEmission::InternalAllocation => grant_address(1),
+            _ => calldata::Address::zero(),
+        });
         wildcard.subtree = bytes::Bytes::from_static(b"wildcard subtree");
         let mut exact = wildcard.clone();
         exact.call_key = Some(genvm_modules_interfaces::CallKey(match emission {
@@ -1428,7 +1431,10 @@ async fn internal_local_exhaustion_never_spills_to_wildcard() {
     ] {
         let mut test = EmissionTestContext::new(u32::MAX, 100);
         let mut exact = internal_message_allocation();
-        exact.recipient = Some(calldata::Address::zero());
+        exact.recipient = Some(match emission {
+            MessageEmission::InternalAllocation => grant_address(1),
+            _ => calldata::Address::zero(),
+        });
         exact.call_key = Some(genvm_modules_interfaces::CallKey(match emission {
             MessageEmission::InternalAllocation => abi::CallKey::UNNAMED.0,
             _ => abi::CallKey::DEPLOY.0,
@@ -1826,7 +1832,10 @@ async fn allocation_zero_price_caps_reject_calls_and_deploys_without_charging() 
         for cap in 0..3 {
             let mut test = EmissionTestContext::new(u32::MAX, 100);
             let mut exact = internal_message_allocation();
-            exact.recipient = Some(calldata::Address::zero());
+            exact.recipient = Some(match emission {
+                MessageEmission::InternalAllocation => grant_address(1),
+                _ => calldata::Address::zero(),
+            });
             let genvm_modules_interfaces::fees::MessageAllocationNodeParams::Internal(params) =
                 &mut exact.fee_params
             else {
@@ -2048,12 +2057,62 @@ async fn child_budget_overflow_is_internal_and_has_no_effect() {
 }
 
 #[tokio::test]
+async fn zero_internal_recipient_is_rejected_before_charging() {
+    for use_balance in [false, true] {
+        let mut test = EmissionTestContext::new(u32::MAX, 100);
+        let memory_before = test.context.limiter.get_remaining_memory();
+        let result = test
+            .wasi()
+            .gl_call_emit_internal_message(
+                calldata::Address::zero(),
+                abi::entry::MainCallData {
+                    name: None,
+                    args: None,
+                    kwargs: None,
+                },
+                EmitInternalMessageArgs {
+                    value: U256::one(),
+                    on: gl_call::On::Finalized,
+                    use_balance,
+                    fee_params: use_balance.then(valid_params),
+                    descendants: None,
+                },
+            )
+            .await;
+        assert!(result.is_err(), "zero recipient must be rejected");
+        assert_eq!(
+            result.unwrap_err().downcast().unwrap(),
+            generated::types::Errno::Inval
+        );
+        assert_eq!(test.context.limiter.get_remaining_memory(), memory_before);
+        let accumulator = &test.context.data.accumulator;
+        assert!(accumulator.emissions.is_empty());
+        assert_eq!(accumulator.messages_value_decremented, U256::zero());
+        assert!(accumulator
+            .message_fee_allocation_consumed
+            .iter()
+            .all(U256::is_zero));
+        let consumed = test
+            .context
+            .data
+            .supervisor
+            .shared_data
+            .data_fees_limit
+            .consumed()
+            .await;
+        assert_eq!(consumed.message_fee, U256::zero());
+        assert_eq!(consumed.message_receipt, U256::zero());
+        test.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn balance_descendant_grant_is_emitted_and_reserved_once() {
     let mut test = EmissionTestContext::new(u32::MAX, 100);
 
     test.wasi()
         .gl_call_emit_internal_message(
-            calldata::Address::zero(),
+            grant_address(1),
             abi::entry::MainCallData {
                 name: None,
                 args: None,
@@ -2153,7 +2212,7 @@ async fn zero_declared_budget_balance_messages_are_rejected() {
     let error = test
         .wasi()
         .gl_call_emit_internal_message(
-            calldata::Address::zero(),
+            grant_address(1),
             abi::entry::MainCallData {
                 name: None,
                 args: None,
@@ -2219,7 +2278,7 @@ async fn descendant_budget_is_included_in_the_balance_check() {
     let error = test
         .wasi()
         .gl_call_emit_internal_message(
-            calldata::Address::zero(),
+            grant_address(1),
             abi::entry::MainCallData {
                 name: None,
                 args: None,
@@ -2265,7 +2324,7 @@ async fn descendant_grants_are_forbidden_without_permission_or_in_nondet_mode() 
         let error = test
             .wasi()
             .gl_call_emit_internal_message(
-                calldata::Address::zero(),
+                grant_address(1),
                 abi::entry::MainCallData {
                     name: None,
                     args: None,
@@ -2299,7 +2358,7 @@ async fn repeated_descendant_grants_drain_the_contract_balance() {
     for _ in 0..2 {
         test.wasi()
             .gl_call_emit_internal_message(
-                calldata::Address::zero(),
+                grant_address(1),
                 abi::entry::MainCallData {
                     name: None,
                     args: None,
@@ -2320,7 +2379,7 @@ async fn repeated_descendant_grants_drain_the_contract_balance() {
     let error = test
         .wasi()
         .gl_call_emit_internal_message(
-            calldata::Address::zero(),
+            grant_address(1),
             abi::entry::MainCallData {
                 name: None,
                 args: None,
@@ -2353,7 +2412,7 @@ async fn allocation_funding_accepts_absent_descendants_and_rejects_explicit_desc
 
     test.wasi()
         .gl_call_emit_internal_message(
-            calldata::Address::zero(),
+            grant_address(1),
             abi::entry::MainCallData {
                 name: None,
                 args: None,
@@ -2377,7 +2436,7 @@ async fn allocation_funding_accepts_absent_descendants_and_rejects_explicit_desc
         let error = test
             .wasi()
             .gl_call_emit_internal_message(
-                calldata::Address::zero(),
+                grant_address(1),
                 abi::entry::MainCallData {
                     name: None,
                     args: None,
@@ -2409,7 +2468,7 @@ async fn rejected_descendant_grant_has_no_emission_reservation_or_fee_effect() {
     let error = test
         .wasi()
         .gl_call_emit_internal_message(
-            calldata::Address::zero(),
+            grant_address(1),
             abi::entry::MainCallData {
                 name: None,
                 args: None,
@@ -2459,7 +2518,7 @@ async fn descendant_budget_overflow_has_no_emission_reservation_or_fee_effect() 
     let error = test
         .wasi()
         .gl_call_emit_internal_message(
-            calldata::Address::zero(),
+            grant_address(1),
             abi::entry::MainCallData {
                 name: None,
                 args: None,
@@ -2671,7 +2730,7 @@ fn flat_argument_request(deploy: bool) -> (Vec<u8>, u32) {
         }
     } else {
         gl_call::Message::EmitInternalMessage {
-            address: calldata::Address::zero(),
+            address: grant_address(1),
             calldata: abi::entry::MainCallData {
                 name: None,
                 args: calldata.args,
@@ -2812,7 +2871,7 @@ async fn gl_call_internal_message_retains_calldata_args_as_validated_wire_bytes(
     let args = vec![arg.clone(), calldata::Value::Str("plain".to_owned())];
     let kwargs = calldata::Map::from([("kw".to_owned(), arg)]);
     let request = calldata::encode_obj(&gl_call::Message::EmitInternalMessage {
-        address: calldata::Address::zero(),
+        address: grant_address(1),
         calldata: abi::entry::MainCallData {
             name: None,
             args: Some(args.clone().into()),
