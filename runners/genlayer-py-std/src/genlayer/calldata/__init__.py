@@ -232,7 +232,9 @@ def encode[T](
 		elif isinstance(b, Raw):
 			mem.extend(b.data)
 		elif isinstance(b, collections.abc.Buffer):
-			b = bytes(b)
+			# not ``bytes(b)``: for a buffer that also has ``__index__``, such as a numpy
+			# integer scalar, that is ``b`` zero bytes instead of the buffer's contents
+			b = bytes(memoryview(b))
 			lb = len(b)
 			lb = (lb << 3) | TYPE_BYTES
 			append_uleb128(lb)
@@ -368,7 +370,7 @@ def to_str(d: Encodable, /) -> str:
 			buf.append(d.data.hex())
 		elif isinstance(d, collections.abc.Buffer):
 			buf.append('b#')
-			buf.append(bytes(d).hex())
+			buf.append(bytes(memoryview(d)).hex())
 		elif isinstance(d, int):
 			buf.append(str(d))
 		elif isinstance(d, Address):

@@ -1,5 +1,6 @@
 import array
 
+import numpy as np
 import pytest
 from genlayer.calldata import CalldataEncodable, DecodingError, Raw, to_str
 from genlayer.types import Address
@@ -99,3 +100,8 @@ def test_calldata_encodable():
 def test_unencodable():
 	with pytest.raises(DecodingError):
 		to_str(3.14)
+
+
+def test_buffer_that_is_also_an_index():
+	value = np.uint32(70000)
+	assert to_str(value) == f'b#{value.tobytes().hex()}'
