@@ -1,8 +1,7 @@
 use std::ops::DerefMut;
 
-use const_lru::ConstLru;
 use genlayer_sdk::abi;
-use genvm_common::{calldata, internal_constants::memory_limiter_consts, sync};
+use genvm_common::{calldata, internal_constants::memory_limiter_consts, sync, util::lru::Lru};
 
 use crate::int_traits::*;
 use crate::{public_abi::root_offsets, rt, SlotID};
@@ -192,7 +191,7 @@ pub struct Storage<HS: Send + Sync> {
     pub address: calldata::Address,
     host: HS,
     pages: StoragePagesOverride,
-    cache: ConstLru<PageID, [u8; 32], STORAGE_CACHE_SIZE>,
+    cache: Lru<PageID, [u8; 32], STORAGE_CACHE_SIZE>,
 }
 
 impl<HS: Send + Sync> Storage<HS> {
@@ -206,7 +205,7 @@ impl<HS: Send + Sync> Storage<HS> {
             address,
             host,
             pages: StoragePagesOverride::new(storage_pages_limit, mem),
-            cache: ConstLru::new(),
+            cache: Lru::new(),
         }
     }
 

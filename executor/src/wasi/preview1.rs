@@ -6,6 +6,7 @@ use tracing::instrument;
 use wiggle::{GuestError, GuestMemory, GuestPtr};
 
 use genvm_common::internal_constants::top_limits;
+use genvm_common::util::mt19937::MT19937;
 use genvm_common::*;
 
 use super::vfs;
@@ -29,7 +30,7 @@ pub struct Context {
     unix_timestamp_nanos: u64,
 
     conf: base::Config,
-    mt19937_rng: mt19937::MT19937,
+    mt19937_rng: MT19937,
 }
 
 pub struct ContextVFS<'a> {
@@ -328,7 +329,7 @@ impl Context {
                 seed[i * 4 + 3],
             ])
         });
-        let seed = mt19937::MT19937::new_with_slice_seed(&seed_words);
+        let seed = MT19937::new_with_slice_seed(&seed_words);
 
         let unix_ts_ns = (datetime.timestamp() as u64)
             .saturating_mul(1_000_000_000)
@@ -1368,8 +1369,6 @@ impl generated::wasi_snapshot_preview1::WasiSnapshotPreview1 for ContextVFS<'_> 
         let mut mem: Vec<u8> = std::iter::repeat_n(0, buf_len.into_int_comptime()).collect();
 
         if self.context.conf.permissions.deterministic {
-            use rand_core::RngCore as _;
-
             self.context.mt19937_rng.fill_bytes(&mut mem[..]);
         } else {
             // Non-deterministic mode: cryptographically secure random number generator
@@ -1552,7 +1551,7 @@ mod wasi_tests;
 
 #[cfg(test)]
 mod tests {
-    use rand_core::RngCore as _;
+    use genvm_common::util::mt19937::MT19937;
     use sha3::Digest as _;
 
     /// Known-answer test for the deterministic `random_get` byte layout. The seed is a
@@ -1571,7 +1570,7 @@ mod tests {
                 seed[i * 4 + 3],
             ])
         });
-        let mut rng = mt19937::MT19937::new_with_slice_seed(&seed_words);
+        let mut rng = MT19937::new_with_slice_seed(&seed_words);
 
         let mut out = [0u8; 20];
         rng.fill_bytes(&mut out);
