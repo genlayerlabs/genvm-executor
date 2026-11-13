@@ -1,5 +1,3 @@
-use concat_idents::concat_idents;
-
 pub trait IntoIntComptime<T> {
     fn into_int_comptime(self) -> T;
 }
@@ -31,16 +29,17 @@ const fn typecheck<T: Copy>(_: impl IntoIntDowncast<T>) {}
 const _: () = typecheck::<u32>(0_usize);
 
 macro_rules! declare_caster {
-    ($t1:ident, $t2:ident) => {
+    ($name:ident: $t1:ident => $t2:ident) => {
         const _: () = {
-            assert!($t1::BITS <= $t2::BITS, concat!(stringify!($t1), " cannot fit into ", stringify!($t2)));
+            assert!(
+                $t1::BITS <= $t2::BITS,
+                concat!(stringify!($t1), " cannot fit into ", stringify!($t2))
+            );
         };
 
-        concat_idents!(name = $t1, _into_, $t2 {
-            pub const fn name(x: $t1) -> $t2 {
-                x as $t2
-            }
-        });
+        pub const fn $name(x: $t1) -> $t2 {
+            x as $t2
+        }
 
         impl IntoIntComptime<$t2> for $t1 {
             fn into_int_comptime(self) -> $t2 {
@@ -52,7 +51,7 @@ macro_rules! declare_caster {
 
 // only pairs std has no `From` for, i.e. the platform-dependent ones;
 // together they pin usize to exactly 64 bits
-declare_caster!(u32, usize);
-declare_caster!(u64, usize);
-declare_caster!(usize, u64);
-declare_caster!(usize, u128);
+declare_caster!(u32_into_usize: u32 => usize);
+declare_caster!(u64_into_usize: u64 => usize);
+declare_caster!(usize_into_u64: usize => u64);
+declare_caster!(usize_into_u128: usize => u128);

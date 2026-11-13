@@ -338,16 +338,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
-name = "concat-idents"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f76990911f2267d837d9d0ad060aa63aaad170af40904b29461734c339030d4d"
-dependencies = [
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "const_format"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -967,7 +957,6 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "concat-idents",
  "crc32fast",
  "crossbeam",
  "dashmap",
