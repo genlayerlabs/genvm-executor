@@ -1159,9 +1159,7 @@ impl EmissionTestContext {
         };
         let (host_stream, host_peer) = std::os::unix::net::UnixStream::pair().unwrap();
         let host = host::Host::new(
-            Box::new(bufreaderwriter::seq::BufReaderWriterSeq::new_writer(
-                host_stream,
-            )),
+            Box::new(genvm_common::util::buf_stream::BufStream::new(host_stream)),
             shared_data.gep(|data| &data.metrics.hosts[0]),
         );
         let config = crate::config::Config {

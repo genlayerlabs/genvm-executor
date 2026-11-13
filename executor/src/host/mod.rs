@@ -3,6 +3,7 @@ pub mod message;
 
 use genlayer_sdk::abi;
 use genvm_common::internal_constants::top_limits;
+use genvm_common::util::buf_stream::BufStream;
 use genvm_common::*;
 
 use crate::public_abi::root_offsets;
@@ -21,9 +22,9 @@ pub use message::SlotID;
 
 pub trait Sock: std::io::Read + std::io::Write + Send + Sync {}
 
-impl Sock for bufreaderwriter::seq::BufReaderWriterSeq<std::os::unix::net::UnixStream> {}
+impl Sock for BufStream<std::os::unix::net::UnixStream> {}
 
-impl Sock for bufreaderwriter::seq::BufReaderWriterSeq<std::net::TcpStream> {}
+impl Sock for BufStream<std::net::TcpStream> {}
 
 pub struct Host {
     sock: Box<dyn Sock>,
@@ -42,7 +43,7 @@ impl Host {
     pub fn connect(addr: &str, metrics: sync::DArc<Metrics>, hello_data: &[u8]) -> Result<Host> {
         const UNIX: &str = "unix://";
         let mut sock: Box<dyn Sock> = if let Some(addr_suff) = addr.strip_prefix(UNIX) {
-            Box::new(bufreaderwriter::seq::BufReaderWriterSeq::new_writer(
+            Box::new(BufStream::new(
                 std::os::unix::net::UnixStream::connect(std::path::Path::new(addr_suff))
                     .with_context(|| format!("connecting to {addr}"))?,
             ))
@@ -51,9 +52,9 @@ impl Host {
                 .parse()
                 .with_context(|| format!("parsing fd number from '{fd_str}'"))?;
             let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
-            Box::new(bufreaderwriter::seq::BufReaderWriterSeq::new_writer(stream))
+            Box::new(BufStream::new(stream))
         } else {
-            Box::new(bufreaderwriter::seq::BufReaderWriterSeq::new_writer(
+            Box::new(BufStream::new(
                 std::net::TcpStream::connect(addr)
                     .with_context(|| format!("connecting to {addr}"))?,
             ))
