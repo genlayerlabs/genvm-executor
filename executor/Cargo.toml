@@ -187,3 +187,6 @@ default-features = false
 features = ["derive", "std"]
 optional = true
 version = "0.5.3"
+
+[patch.crates-io]
+directories-next = { path = "crates/directories-next-stub" }
