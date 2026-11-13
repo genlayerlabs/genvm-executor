@@ -20,7 +20,7 @@ mod compilation;
 
 const BALANCE_CACHE_SIZE: usize = 128;
 
-type BalanceLru = const_lru::ConstLru<calldata::Address, primitive_types::U256, BALANCE_CACHE_SIZE>;
+type BalanceLru = util::lru::Lru<calldata::Address, primitive_types::U256, BALANCE_CACHE_SIZE>;
 
 /// Read-through cache of host balances, shared by every sub-VM of a run.
 ///
@@ -37,7 +37,7 @@ pub struct BalanceCache(std::sync::Mutex<BalanceLru>);
 
 impl BalanceCache {
     fn new() -> Self {
-        Self(std::sync::Mutex::new(const_lru::ConstLru::new()))
+        Self(std::sync::Mutex::new(BalanceLru::new()))
     }
 
     pub fn get(&self, address: calldata::Address) -> Option<primitive_types::U256> {
@@ -55,7 +55,7 @@ impl BalanceCache {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(address, balance);
-        if let Some(const_lru::InsertReplaced::OldValue(old)) = evicted {
+        if let Some(util::lru::InsertReplaced::OldValue(old)) = evicted {
             assert_eq!(
                 old, balance,
                 "balance cache should not be updated with a different value"

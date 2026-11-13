@@ -348,15 +348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "const-lru"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df6e177825970fee44e66f247adbfd1844480027d21e64ccec91e6e7579c2ad0"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "const_format"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -977,7 +968,6 @@ dependencies = [
  "chrono",
  "clap",
  "concat-idents",
- "const-lru",
  "crc32fast",
  "crossbeam",
  "dashmap",

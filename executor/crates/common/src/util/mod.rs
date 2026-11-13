@@ -1,3 +1,4 @@
+pub mod lru;
 mod mmap;
 pub mod str;
 
