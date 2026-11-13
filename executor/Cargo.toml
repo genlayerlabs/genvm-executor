@@ -133,8 +133,6 @@ futures-util = "0.3.31"
 getrandom = { version = "0.3.2", default-features = false, features = ["std"] }
 hex = "0.4.3"
 itertools = "0.14.0"
-# Contract-visible output: bump only with an executor version bump
-mt19937 = "=3.1.0"
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-rational = { version = "0.4.2", default-features = false, features = [
     "num-bigint",
@@ -144,7 +142,6 @@ primitive-types = { version = "0.13.1", default-features = false, features = [
     "impl-serde",
     "std",
 ] }
-rand_core = "0.9.3"
 rpds = "1.2.0"
 serde = { version = "1.0.219", features = ["rc"] }
 serde_bytes = "0.11.17"

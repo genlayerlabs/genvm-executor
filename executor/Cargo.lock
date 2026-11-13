@@ -964,13 +964,11 @@ dependencies = [
  "hex",
  "itertools",
  "libc",
- "mt19937",
  "mutatis",
  "num-bigint",
  "num-rational",
  "once_cell",
  "primitive-types",
- "rand_core 0.9.5",
  "rpds",
  "serde",
  "serde_bytes",
@@ -1481,15 +1479,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mt19937"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df7151a832e54d2d6b2c827a20e5bcdd80359281cd2c354e725d4b82e7c471de"
-dependencies = [
- "rand_core 0.9.5",
 ]
 
 [[package]]
