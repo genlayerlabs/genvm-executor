@@ -212,6 +212,10 @@ pub fn create_engines(
         .consume_fuel(false)
         .cranelift_opt_level(wasmtime::OptLevel::None)
         .async_stack_size(8 << 20)
+        // memlimiter turns every grow failure into an internal error; these, with
+        // MEMORY64 off below, leave only host-side failures to reach it
+        .memory_may_move(true)
+        .wasm_custom_page_sizes(false)
         .max_wasm_stack(get_native_stack_size().into_int_comptime())
         .wasm_stack_limits(
             top_limits::WASM_CALL_DEPTH,
@@ -233,7 +237,8 @@ pub fn create_engines(
         .wasm_features(WasmFeatures::MUTABLE_GLOBAL, true)
         .wasm_features(WasmFeatures::MULTI_VALUE, true)
         //.wasm_features(WasmFeatures::REFERENCE_TYPES, false)
-        .wasm_features(WasmFeatures::SATURATING_FLOAT_TO_INT, true);
+        .wasm_features(WasmFeatures::SATURATING_FLOAT_TO_INT, true)
+        .wasm_features(WasmFeatures::MEMORY64, false);
 
     config_base(&mut base_conf)?;
 

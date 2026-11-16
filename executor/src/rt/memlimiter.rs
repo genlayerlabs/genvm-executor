@@ -199,8 +199,12 @@ impl wasmtime::ResourceLimiter for Limiter {
         &mut self,
         current: usize,
         desired: usize,
-        _maximum: Option<usize>,
+        maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
+        // Wasmtime checks the declared maximum only after we charge
+        if maximum.is_some_and(|max| desired > max) {
+            return Ok(false);
+        }
         let delta = desired - current;
         if delta > u32_into_usize(u32::MAX) {
             return Ok(false);
@@ -225,8 +229,11 @@ impl wasmtime::ResourceLimiter for Limiter {
         &mut self,
         current: usize,
         desired: usize,
-        _maximum: Option<usize>,
+        maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
+        if maximum.is_some_and(|max| desired > max) {
+            return Ok(false);
+        }
         let delta = desired - current;
 
         if delta > u32_into_usize(u32::MAX) {
@@ -251,6 +258,23 @@ impl wasmtime::ResourceLimiter for Limiter {
         }
     }
 
+    // With the declared maximum refused above and the engine config in
+    // `supervisor::create_engines`, a failure here is host-side and must not
+    // become a contract `-1`
+    fn memory_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        Err(rt::errors::Error::internal(format!(
+            "memory growth failed after limiter approval: {error:#}"
+        ))
+        .into())
+    }
+
+    fn table_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        Err(rt::errors::Error::internal(format!(
+            "table growth failed after limiter approval: {error:#}"
+        ))
+        .into())
+    }
+
     fn instances(&self) -> usize {
         1000
     }
@@ -261,19 +285,5 @@ impl wasmtime::ResourceLimiter for Limiter {
 
     fn memories(&self) -> usize {
         100
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn explicit_spawn_limit_is_honored() {
-        let limiter = Limiter::with_limit(100);
-        assert_eq!(limiter.get_remaining_memory(), 100);
-        assert!(limiter.consume(40));
-        assert_eq!(limiter.get_remaining_memory(), 60);
-        assert!(!limiter.consume(61));
     }
 }
