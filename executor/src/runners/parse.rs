@@ -3,6 +3,10 @@ use crate::rt::errors::{Error, ResultExt};
 use genlayer_sdk::abi;
 use genvm_common::*;
 
+#[cfg(test)]
+#[path = "parse_test.rs"]
+mod tests;
+
 /// What a raw wasm module may say about itself, in custom sections. Both are
 /// optional and both fall back to a default: the current major, and a runner
 /// that just starts this module.
@@ -86,10 +90,12 @@ fn code_to_archive_from_text(code: bytes::Bytes) -> rt::errors::Result<super::Ar
     let mut version_string = String::new();
     let mut code_comment = String::new();
     let mut first = true;
+    let mut header_lines = 0usize;
     for l in code_str.lines() {
         if !l.starts_with(code_start) {
             break;
         }
+        header_lines += 1;
 
         let l = &l[code_start.len()..];
 
@@ -107,9 +113,28 @@ fn code_to_archive_from_text(code: bytes::Bytes) -> rt::errors::Result<super::Ar
         }
     }
 
+    if let Some(hint) = explain_malformed_header(&code_comment, header_lines) {
+        log_warn!(@user, hint = hint; "contract header is not a valid runner.json");
+    }
+
     Ok(super::Archive::from_file_and_runner(
         code,
         bytes::Bytes::copy_from_slice(version_string.as_bytes()),
         bytes::Bytes::copy_from_slice(code_comment.as_bytes()),
+    ))
+}
+
+/// `None` when `header` parses; otherwise why it does not, for the contract author
+fn explain_malformed_header(header: &str, lines: usize) -> Option<String> {
+    const SHOWN_CHARS: usize = 200;
+
+    let error = super::actions::parse_runner_json(header).err()?;
+    let shown = match header.char_indices().nth(SHOWN_CHARS) {
+        Some((end, _)) => format!("{}...", &header[..end]),
+        None => header.to_owned(),
+    };
+    Some(format!(
+        "the header is all {lines} leading comment line(s), joined into `{shown}`, which fails with: {error}. \
+         It ends at the first line without the comment prefix, so leave a blank line between it and ordinary comments"
     ))
 }
