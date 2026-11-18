@@ -1,7 +1,12 @@
 use std::ops::DerefMut;
 
 use genlayer_sdk::abi;
-use genvm_common::{calldata, internal_constants::memory_limiter_consts, sync, util::lru::Lru};
+use genvm_common::{
+    calldata,
+    internal_constants::{self, memory_limiter_consts},
+    sync,
+    util::lru::Lru,
+};
 
 use crate::int_traits::*;
 use crate::{public_abi::root_offsets, rt, SlotID};
@@ -266,6 +271,8 @@ impl<HS: Send + Sync> Storage<HS> {
 pub fn default_code_slot() -> SlotID {
     SlotID::ZERO.indirection(root_offsets::CODE)
 }
+
+const _: () = assert!(internal_constants::ROOT_RESERVED_LEN == root_offsets::PERMISSIONS + 32);
 
 impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
     pub async fn read(
@@ -559,6 +566,17 @@ impl<HS: HostStorageLocking + Send + Sync> Storage<HS> {
         self.read(SlotID::ZERO, root_offsets::PERMISSIONS, &mut raw)
             .await?;
         Ok(raw)
+    }
+
+    /// Whether a contract was deployed here: any reserved root byte or the
+    /// default code slot's length is non-zero
+    pub async fn holds_contract(&mut self) -> rt::errors::Result<bool> {
+        let mut reserved = [0u8; u32_into_usize(internal_constants::ROOT_RESERVED_LEN)];
+        self.read(SlotID::ZERO, 0, &mut reserved).await?;
+        if reserved.iter().any(|b| *b != 0) {
+            return Ok(true);
+        }
+        Ok(self.read_code_len(default_code_slot()).await? != 0)
     }
 
     /// Verifies the contract's major version matches this node's, then resolves

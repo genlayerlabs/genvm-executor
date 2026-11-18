@@ -313,12 +313,23 @@ fn has_extra_leader_output(run_mode: rt::RunMode, executed: u32, published: usiz
     run_mode != rt::RunMode::Leader && published > executed as usize
 }
 
+/// Code may come only with a deployment; a deployment may omit it
+pub fn check_deploy_shape(is_init: bool, code: Option<&[u8]>) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        is_init || code.is_none(),
+        "host supplied code without is_init"
+    );
+    Ok(())
+}
+
 pub async fn run_with_impl(
     mut entry_data: genvm_modules_interfaces::ExecutionData,
     context: &ExecutionContext,
     permissions: &str,
     deploy_pin: &mut Option<runners::cache::ArchivePin>,
 ) -> anyhow::Result<rt::vm::FullResult> {
+    check_deploy_shape(entry_data.message.is_init, entry_data.code.as_deref())?;
+
     let supervisor = context.supervisor.clone();
     let storage_pages_limit = supervisor.get_storage_limiter();
     let limiter_det = context.det_limiter.derived();
@@ -367,6 +378,14 @@ pub async fn run_with_impl(
 
         if entry_data.message.is_init && entry_call_data.name.is_some() {
             return Err(rt::errors::Error::vm(public_abi::VmError::malformed_entry()).into());
+        }
+
+        if entry_data.message.is_init && topmost_storage.holds_contract().await? {
+            return Err(rt::errors::vm_error!(
+                public_abi::VmError::forbidden(),
+                "deployment target already holds a contract"
+            )
+            .into());
         }
 
         // Contract-owned permissions live in the root slot, not the node-granted

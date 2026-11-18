@@ -50,5 +50,11 @@
       "env_value_len": 1048576,
       "init_action_depth": 128
     }
+  },
+  {
+    "type": "const",
+    "name": "root_reserved_len",
+    "repr": "u32",
+    "value": 69
   }
 ]

@@ -42,4 +42,6 @@ pub mod runner_limits {
     pub const INIT_ACTION_DEPTH: u32 = 128;
 }
 
+pub const ROOT_RESERVED_LEN: u32 = 69;
+
 // EOF
