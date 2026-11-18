@@ -62,5 +62,11 @@
     "name": "host_storage_read_chunk",
     "repr": "u32",
     "value": 16777216
+  },
+  {
+    "type": "const",
+    "name": "external_call_calldata_max",
+    "repr": "u32",
+    "value": 262144
   }
 ]

@@ -44,5 +44,6 @@ pub mod runner_limits {
 
 pub const ROOT_RESERVED_LEN: u32 = 69;
 pub const HOST_STORAGE_READ_CHUNK: u32 = 16777216;
+pub const EXTERNAL_CALL_CALLDATA_MAX: u32 = 262144;
 
 // EOF

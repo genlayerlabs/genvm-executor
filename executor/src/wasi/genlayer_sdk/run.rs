@@ -413,6 +413,12 @@ impl ContextVFS<'_> {
         if !self.context.data.conf.permissions.call_others {
             return Err(generated::types::Errno::Forbidden.into());
         }
+        // Kept well below what any node's RPC provider accepts, so the
+        // outcome cannot depend on the provider
+        if calldata.len() > u32_into_usize(internal_constants::EXTERNAL_CALL_CALLDATA_MAX) {
+            log_info!(@user, len = calldata.len(), max = internal_constants::EXTERNAL_CALL_CALLDATA_MAX; "external call calldata too large");
+            return Err(generated::types::Errno::Inval.into());
+        }
 
         let supervisor = self.context.data.supervisor.clone();
 
