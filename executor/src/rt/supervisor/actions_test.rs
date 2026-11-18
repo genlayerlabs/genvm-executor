@@ -748,3 +748,83 @@ async fn register_runner_refuses_past_the_runner_count_limit() {
         "a refused registration never parses the code"
     );
 }
+
+// Instantiation error classification
+
+fn instantiate_error_kind(e: wasmtime::Error) -> rt::errors::ErrorKind {
+    classify_instantiate_error(e)
+        .downcast::<rt::errors::Error>()
+        .expect("classified into a runtime error")
+        .kind
+}
+
+#[test]
+fn host_mmap_failure_at_instantiation_is_internal() {
+    let e = wasmtime::Error::from(rustix::io::Errno::NOMEM).context("creating memory");
+    let kind = instantiate_error_kind(e);
+    assert!(
+        matches!(kind, rt::errors::ErrorKind::Internal),
+        "unexpected kind: {kind:?}"
+    );
+}
+
+#[test]
+fn host_io_failure_at_instantiation_is_internal() {
+    let e = wasmtime::Error::from(std::io::Error::other("write")).context("creating image");
+    let kind = instantiate_error_kind(e);
+    assert!(
+        matches!(kind, rt::errors::ErrorKind::Internal),
+        "unexpected kind: {kind:?}"
+    );
+}
+
+/// Shaped like `memfd::Error`: the io error is only reachable through `source()`
+#[derive(Debug)]
+struct SourcedIo(std::io::Error);
+
+impl std::fmt::Display for SourcedIo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("cannot create the memfd")
+    }
+}
+
+impl std::error::Error for SourcedIo {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+#[test]
+fn host_failure_behind_source_at_instantiation_is_internal() {
+    let e = wasmtime::Error::from(SourcedIo(std::io::Error::other("emfile")));
+    let kind = instantiate_error_kind(e);
+    assert!(
+        matches!(kind, rt::errors::ErrorKind::Internal),
+        "unexpected kind: {kind:?}"
+    );
+}
+
+#[test]
+fn trap_carrying_host_failure_keeps_its_kind() {
+    let e = wasmtime::Error::from(std::io::Error::other("write"))
+        .context(wasmtime::Trap::UnreachableCodeReached);
+    let classified = classify_instantiate_error(e);
+    let internal = classified
+        .downcast_ref::<rt::errors::Error>()
+        .is_some_and(|e| matches!(e.kind, rt::errors::ErrorKind::Internal));
+    assert!(!internal, "unexpected classification: {classified:#}");
+}
+
+#[test]
+fn other_instantiation_failure_is_linking() {
+    let e = wasmtime::Error::msg("incompatible import type for `env::f`");
+    let kind = instantiate_error_kind(e);
+    assert!(
+        matches!(
+            &kind,
+            rt::errors::ErrorKind::Vm(code)
+                if *code == public_abi::VmError::invalid_contract().wasm().linking()
+        ),
+        "unexpected kind: {kind:?}"
+    );
+}

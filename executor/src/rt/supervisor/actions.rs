@@ -64,7 +64,8 @@ fn reject_init_return(e: wasmtime::Error) -> Result<wasmtime::Error, anyhow::Err
 }
 
 /// Instantiation also runs the start function, whose traps and host calls keep
-/// their own classification; any other failure is the module not linking
+/// their own classification; a host failure is internal; any other failure is
+/// the module not linking
 fn classify_instantiate_error(e: wasmtime::Error) -> anyhow::Error {
     let e = match reject_init_return(e) {
         Ok(e) => e,
@@ -74,12 +75,22 @@ fn classify_instantiate_error(e: wasmtime::Error) -> anyhow::Error {
         || e.is::<wiggle::GuestError>()
         || e.is::<rt::errors::Error>()
         || e.is::<wasmtime::OutOfMemory>();
-    let e = anyhow::Error::from(e);
     if raised_by_execution {
-        e
-    } else {
-        rt::errors::Error::wrap(public_abi::VmError::invalid_contract().wasm().linking(), e).into()
+        return e.into();
     }
+    // `chain` also follows `source()`, which is where e.g. `memfd::Error` keeps its io error
+    let by_host = e
+        .chain()
+        .any(|c| c.is::<rustix::io::Errno>() || c.is::<std::io::Error>());
+    if by_host {
+        return rt::errors::Error::internal(format!("host failure during instantiation: {e:#}"))
+            .into();
+    }
+    rt::errors::Error::wrap(
+        public_abi::VmError::invalid_contract().wasm().linking(),
+        anyhow::Error::from(e),
+    )
+    .into()
 }
 
 fn maps_into_vm(to: &str) -> bool {
