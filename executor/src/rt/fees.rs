@@ -509,21 +509,18 @@ impl DataLimit {
             .collect()
     }
 
-    async fn sum_consumed(bucket: &Bucket) -> primitive_types::U256 {
-        let mut total = primitive_types::U256::zero();
-        for tc in &bucket.total_consumed {
-            total += *tc.lock().await;
-        }
-        total
+    /// Like [`CostVec::reported_fee`], only the first bucket counts
+    async fn reported_consumed(bucket: &Bucket) -> primitive_types::U256 {
+        *bucket.total_consumed[0].lock().await
     }
 
     pub async fn consumed(&self) -> BucketsConsumed {
         BucketsConsumed {
-            storage: Self::sum_consumed(&self.storage).await,
-            message_receipt: Self::sum_consumed(&self.message_receipt).await,
-            nondet_output: Self::sum_consumed(&self.nondet_output).await,
-            message_fee: Self::sum_consumed(&self.message_fee).await,
-            event: Self::sum_consumed(&self.event).await,
+            storage: Self::reported_consumed(&self.storage).await,
+            message_receipt: Self::reported_consumed(&self.message_receipt).await,
+            nondet_output: Self::reported_consumed(&self.nondet_output).await,
+            message_fee: Self::reported_consumed(&self.message_fee).await,
+            event: Self::reported_consumed(&self.event).await,
         }
     }
 

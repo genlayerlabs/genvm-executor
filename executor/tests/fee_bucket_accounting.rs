@@ -65,3 +65,28 @@ async fn shared_message_bucket_cost_overflow_is_rejected_atomically() {
         std::collections::BTreeMap::from([("test".to_owned(), U256::MAX)])
     );
 }
+
+#[tokio::test]
+async fn multi_bucket_charge_reports_only_the_first_bucket() {
+    let event = FeesBucketConfig {
+        buckets: vec![
+            symbol_table::GlobalSymbol::from("test"),
+            symbol_table::GlobalSymbol::from("other"),
+        ],
+        subtract_on_start_expr: "[2, 5]".to_owned(),
+        delta_expr: "\\attrs = [3, 7]".to_owned(),
+    };
+    let fees = DataLimit::new(
+        std::collections::HashMap::from([
+            ("test".to_owned(), U256::from(100)),
+            ("other".to_owned(), U256::from(100)),
+        ]),
+        config(event),
+        Default::default(),
+    )
+    .unwrap();
+
+    assert!(fees.consume_initial().await.is_none());
+    assert_eq!(fees.consume_event(0, 0).await.unwrap(), Some(U256::from(3)));
+    assert_eq!(fees.consumed().await.event, U256::from(5));
+}
