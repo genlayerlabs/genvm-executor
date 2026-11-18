@@ -660,7 +660,26 @@ impl Host {
         self.get_locked_slots(contract_address, limiter)
     }
 
+    /// Split into chunks, as the host caps a single reply
     pub fn storage_read(
+        &mut self,
+        mode: StorageView,
+        address: calldata::Address,
+        slot: SlotID,
+        offset: u32,
+        buf: &mut [u8],
+    ) -> Result<()> {
+        let chunk_len = u32_into_usize(internal_constants::HOST_STORAGE_READ_CHUNK);
+        for (i, chunk) in buf.chunks_mut(chunk_len).enumerate() {
+            let chunk_offset = offset
+                .checked_add((i * chunk_len).into_int_downcast_panicking())
+                .expect("storage access fits a slot");
+            self.storage_read_chunk(mode, address, slot, chunk_offset, chunk)?;
+        }
+        Ok(())
+    }
+
+    fn storage_read_chunk(
         &mut self,
         mode: StorageView,
         address: calldata::Address,

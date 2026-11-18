@@ -56,5 +56,11 @@
     "name": "root_reserved_len",
     "repr": "u32",
     "value": 69
+  },
+  {
+    "type": "const",
+    "name": "host_storage_read_chunk",
+    "repr": "u32",
+    "value": 16777216
   }
 ]
