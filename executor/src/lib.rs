@@ -225,6 +225,7 @@ pub fn create_supervisor(
 
 fn convert_message_data(
     message: genvm_modules_interfaces::MessageData,
+    is_init: bool,
     stack: Vec<calldata::Address>,
     create2: genvm_modules_interfaces::Create2Data,
 ) -> genlayer_sdk::abi::entry::MessageData {
@@ -236,7 +237,7 @@ fn convert_message_data(
         stack,
         chain_id: message.chain_id,
         value: message.value,
-        is_init: message.is_init,
+        is_init,
         datetime: message.transaction_timestamp,
         create2: genlayer_sdk::abi::entry::Create2Data {
             deployer: create2.deployer,
@@ -313,13 +314,14 @@ fn has_extra_leader_output(run_mode: rt::RunMode, executed: u32, published: usiz
     run_mode != rt::RunMode::Leader && published > executed as usize
 }
 
-/// Code may come only with a deployment; a deployment may omit it
-pub fn check_deploy_shape(is_init: bool, code: Option<&[u8]>) -> anyhow::Result<()> {
+/// A deployment is exactly a run that carries code
+pub fn resolve_is_init(claimed: Option<bool>, code: Option<&[u8]>) -> anyhow::Result<bool> {
+    let is_init = code.is_some();
     anyhow::ensure!(
-        is_init || code.is_none(),
-        "host supplied code without is_init"
+        claimed.is_none_or(|claimed| claimed == is_init),
+        "host is_init contradicts the presence of code"
     );
-    Ok(())
+    Ok(is_init)
 }
 
 pub async fn run_with_impl(
@@ -328,7 +330,7 @@ pub async fn run_with_impl(
     permissions: &str,
     deploy_pin: &mut Option<runners::cache::ArchivePin>,
 ) -> anyhow::Result<rt::vm::FullResult> {
-    check_deploy_shape(entry_data.message.is_init, entry_data.code.as_deref())?;
+    let is_init = resolve_is_init(entry_data.message.is_init, entry_data.code.as_deref())?;
 
     let supervisor = context.supervisor.clone();
     let storage_pages_limit = supervisor.get_storage_limiter();
@@ -376,11 +378,11 @@ pub async fn run_with_impl(
                 source: Some(Box::new(e)),
             })?;
 
-        if entry_data.message.is_init && entry_call_data.name.is_some() {
+        if is_init && entry_call_data.name.is_some() {
             return Err(rt::errors::Error::vm(public_abi::VmError::malformed_entry()).into());
         }
 
-        if entry_data.message.is_init && topmost_storage.holds_contract().await? {
+        if is_init && topmost_storage.holds_contract().await? {
             return Err(rt::errors::vm_error!(
                 public_abi::VmError::forbidden(),
                 "deployment target already holds a contract"
@@ -516,7 +518,7 @@ pub async fn run_with_impl(
             },
         },
         message_data: ExtendedMessage {
-            message: convert_message_data(entry_data.message, stack, entry_data.create2),
+            message: convert_message_data(entry_data.message, is_init, stack, entry_data.create2),
             entry_kind: public_abi::EntryKind::Main,
             entry_data: entry_data.calldata,
             entry_stage_data: calldata::Value::Null,
