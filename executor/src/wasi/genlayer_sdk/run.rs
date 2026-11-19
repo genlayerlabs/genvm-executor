@@ -667,7 +667,11 @@ impl ContextVFS<'_> {
         let supervisor = self.context.data.supervisor.clone();
 
         if state == public_abi::StorageView::Default {
-            state = self.context.data.conf.execution.state_mode;
+            // A host knows the default view only for the running contract
+            state = match self.context.data.conf.execution.state_mode {
+                public_abi::StorageView::Default => public_abi::StorageView::LatestDecided,
+                parent => parent,
+            };
         }
 
         let child_limiter = self.context.limiter.derived();
