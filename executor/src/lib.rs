@@ -165,6 +165,7 @@ pub fn create_supervisor(
 
 fn convert_message_data(
     message: genvm_modules_interfaces::MessageData,
+    is_init: bool,
     stack: Vec<calldata::Address>,
 ) -> genlayer_sdk::abi::entry::MessageData {
     genlayer_sdk::abi::entry::MessageData {
@@ -174,7 +175,7 @@ fn convert_message_data(
         stack,
         chain_id: message.chain_id,
         value: message.value,
-        is_init: message.is_init,
+        is_init,
         datetime: message.transaction_timestamp,
     }
 }
@@ -279,11 +280,22 @@ fn convert_message_allocation_node(
     }
 }
 
+/// A deployment is exactly a run that carries code
+pub fn resolve_is_init(claimed: Option<bool>, code: Option<&[u8]>) -> anyhow::Result<bool> {
+    let is_init = code.is_some();
+    anyhow::ensure!(
+        claimed.is_none_or(|claimed| claimed == is_init),
+        "host is_init contradicts the presence of code"
+    );
+    Ok(is_init)
+}
+
 pub async fn run_with_impl(
     mut entry_data: genvm_modules_interfaces::ExecutionData,
     supervisor: Arc<rt::supervisor::Supervisor>,
     permissions: &str,
 ) -> anyhow::Result<rt::vm::FullResult> {
+    let is_init = resolve_is_init(entry_data.message.is_init, entry_data.code.as_deref())?;
     let storage_pages_limit = supervisor.get_storage_limiter();
 
     // Everything a nested run imports arrives together or not at all, so unpack
@@ -412,7 +424,7 @@ pub async fn run_with_impl(
         // Permission model: docs/website/src/spec/03-vm/02-meta-properties.rst
         conf,
         message_data: ExtendedMessage {
-            message: convert_message_data(entry_data.message, stack),
+            message: convert_message_data(entry_data.message, is_init, stack),
             entry_kind: public_abi::EntryKind::Main,
             entry_data: entry_data.calldata,
             entry_stage_data: calldata::Value::Null,

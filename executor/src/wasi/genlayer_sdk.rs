@@ -1121,7 +1121,7 @@ impl generated::genlayer_sdk::GenlayerSdk for ContextVFS<'_> {
                             signer_address: vm_data.signer_address,
                             chain_id: message.chain_id.clone(),
                             value: message.value.clone(),
-                            is_init: message.is_init,
+                            is_init: None,
                             transaction_timestamp: message.datetime,
                         },
                         stack: message.stack.clone(),
