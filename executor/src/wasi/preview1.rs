@@ -132,7 +132,7 @@ impl Context {
                 "env": String::from_utf8_lossy(&self.env_buf),
                 "args": String::from_utf8_lossy(&self.args_buf),
                 "datetime_timestamp": self.unix_timestamp,
-                "datetime": chrono::DateTime::<chrono::Utc>::from_timestamp(self.unix_timestamp as i64, 0).map(|x| x.to_rfc3339()),
+                "datetime": jiff::Timestamp::from_nanosecond(i128::from(self.unix_timestamp)).ok().map(calldata::codec::rfc3339::format),
             }
         )
     }
@@ -260,7 +260,7 @@ where
 }
 
 impl Context {
-    pub fn new(datetime: chrono::DateTime<chrono::Utc>, conf: base::Config) -> Self {
+    pub fn new(datetime: jiff::Timestamp, conf: base::Config) -> Self {
         // v0.2.16 determinism: the deterministic `random_get` stream is seeded
         // from a FIXED constant (`b"GenLayer"`), NOT from the VM's stdin. This is
         // what makes a leader and its validators (different stdin) draw the same
@@ -277,8 +277,8 @@ impl Context {
             fs: Box::new(FilesTrie::Dir {
                 children: BTreeMap::new(),
             }),
-            unix_timestamp: datetime.timestamp() as u64 * 1_000_000_000
-                + datetime.timestamp_subsec_nanos() as u64,
+            unix_timestamp: calldata::codec::rfc3339::unix_seconds(datetime) as u64 * 1_000_000_000
+                + calldata::codec::rfc3339::unix_subsec_nanos(datetime) as u64,
             conf,
             mt19937_rng: seed,
         }

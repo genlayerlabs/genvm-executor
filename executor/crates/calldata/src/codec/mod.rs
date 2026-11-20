@@ -5,3 +5,4 @@ mod de;
 pub use de::*;
 
 pub mod as_bytes;
+pub mod rfc3339;

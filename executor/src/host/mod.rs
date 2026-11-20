@@ -944,9 +944,8 @@ mod tests {
                 chain_id: num_bigint::BigInt::ZERO,
                 value: num_bigint::BigInt::ZERO,
                 is_init: None,
-                transaction_timestamp: chrono::DateTime::parse_from_rfc3339("2026-07-28T00:00:00Z")
-                    .unwrap()
-                    .to_utc(),
+                transaction_timestamp: calldata::codec::rfc3339::parse("2026-07-28T00:00:00Z")
+                    .unwrap(),
             },
             stack: Vec::new(),
             permissions: genvm_modules_interfaces::NestedPermissions::DETERMINISTIC,
