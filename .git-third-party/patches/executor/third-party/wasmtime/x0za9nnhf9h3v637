@@ -148,10 +148,10 @@ index 86edc98..6eac669 100644
  
  /// This type helps managing the state of the runtime when entering and exiting
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index 7d80de0..2d6b64e 100644
+index 75d35d9..3048be8 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
-@@ -703,8 +703,6 @@ enum StoreInstanceKind {
+@@ -725,8 +725,6 @@ enum StoreInstanceKind {
  pub struct GenVMCtx {
      /// non-zero if should quit
      pub should_quit: Arc<std::sync::atomic::AtomicU32>,
