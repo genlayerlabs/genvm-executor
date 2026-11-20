@@ -8,7 +8,7 @@ local entries = [
 	{
 		vars: {},
 		code: '${jsonnetDir}/target.py',
-		message: msg + {is_init: true},
+		message: msg,
 		calldata: '{}',
 		next: [{
 			vars: {},
@@ -48,7 +48,7 @@ local entries = [
 	{
 		vars: {},
 		code: '${jsonnetDir}/target.py',
-		message: msg + {is_init: true},
+		message: msg,
 		calldata: '{}',
 		next: [{
 			vars: {},

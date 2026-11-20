@@ -309,23 +309,14 @@ fn has_extra_leader_output(run_mode: rt::RunMode, executed: u32, published: usiz
     run_mode != rt::RunMode::Leader && published > executed as usize
 }
 
-/// A deployment is exactly a run that carries code
-pub fn resolve_is_init(claimed: Option<bool>, code: Option<&[u8]>) -> anyhow::Result<bool> {
-    let is_init = code.is_some();
-    anyhow::ensure!(
-        claimed.is_none_or(|claimed| claimed == is_init),
-        "host is_init contradicts the presence of code"
-    );
-    Ok(is_init)
-}
-
 pub async fn run_with_impl(
     mut entry_data: genvm_modules_interfaces::ExecutionData,
     context: &ExecutionContext,
     permissions: &str,
     deploy_pin: &mut Option<runners::cache::ArchivePin>,
 ) -> anyhow::Result<rt::vm::FullResult> {
-    let is_init = resolve_is_init(entry_data.message.is_init, entry_data.code.as_deref())?;
+    // A deployment is exactly a run that carries code
+    let is_init = entry_data.code.is_some();
     let supervisor = context.supervisor.clone();
     let storage_pages_limit = supervisor.get_storage_limiter();
     let limiter_det = context.det_limiter.derived();

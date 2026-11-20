@@ -5,7 +5,7 @@ local util = import 'templates/util.jsonnet';
 	entry: util.addPaths([{
 		vars: {},
 		code: '${jsonnetDir}/${fileBaseName}.py',
-		message: msg + {is_init: true},
+		message: msg,
 		calldata: '{}',
 		stable_hash: false,
 		next: [{

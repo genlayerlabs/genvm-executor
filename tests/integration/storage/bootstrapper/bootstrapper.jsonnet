@@ -9,9 +9,7 @@ local contract_instance_slot = 'e1ae23412792df6b6a98fb7c9839701fb8b02b6fc7ed0228
 {tags: util.features([['storage', 'bootstrap']], 'stable') + ['python'],
 	entry: util.addPaths([util.chain([
 	// deploy bootstrapper
-	s {
-		message: super.message + {"is_init": true},
-	},
+	s,
 	// write i32 value 42 to the contract instance slot at offset 0
 	s {
 		code: null,

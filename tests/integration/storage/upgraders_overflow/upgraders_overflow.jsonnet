@@ -11,7 +11,6 @@ local util = import 'templates/util.jsonnet';
 					"args": [33],
 				}
 			|||,
-			message: super.message + { is_init: true },
 		},
 		// step 1: a write call -- the supervisor reads the over-limit set and the
 		// run must return `out_of upgraders` as a receipt (nop body never runs)
