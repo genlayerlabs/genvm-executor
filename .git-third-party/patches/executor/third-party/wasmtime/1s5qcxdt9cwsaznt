@@ -1224,7 +1224,7 @@ index 8772f54..8fd876f 100644
          debug_assert!(self.stack_shape.is_empty() || self.stack_shape.len() == self.stack.len());
      }
 diff --git a/crates/wasmtime/src/config.rs b/crates/wasmtime/src/config.rs
-index cc5640b..b3bd0cd 100644
+index 7f55155..ec22b1c 100644
 --- a/crates/wasmtime/src/config.rs
 +++ b/crates/wasmtime/src/config.rs
 @@ -173,6 +173,8 @@ pub struct Config {
@@ -1326,10 +1326,10 @@ index 6eac669..52df36c 100644
      }
  }
 diff --git a/crates/wasmtime/src/runtime/store.rs b/crates/wasmtime/src/runtime/store.rs
-index 2d6b64e..c1382a5 100644
+index 3048be8..bcb0334 100644
 --- a/crates/wasmtime/src/runtime/store.rs
 +++ b/crates/wasmtime/src/runtime/store.rs
-@@ -737,7 +737,10 @@ impl<T> Store<T> {
+@@ -759,7 +759,10 @@ impl<T> Store<T> {
          let inner = StoreOpaque {
              _marker: marker::PhantomPinned,
              engine: engine.clone(),
