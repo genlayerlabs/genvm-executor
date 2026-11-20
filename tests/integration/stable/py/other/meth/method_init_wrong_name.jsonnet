@@ -7,7 +7,4 @@ local util = import 'templates/util.jsonnet';
 			"args": []
 		}
 	|||,
-	"message": super.message + {
-		"is_init": true,
-	}
 }])}

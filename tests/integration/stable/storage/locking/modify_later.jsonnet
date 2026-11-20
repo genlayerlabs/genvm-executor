@@ -8,9 +8,6 @@ local util = import 'templates/util.jsonnet';
 				"args": [[Address(b'\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')], False],
 			}
 		|||,
-		message: super.message + {
-			"is_init": true,
-		},
 	},
 	s {
 		"calldata": |||
