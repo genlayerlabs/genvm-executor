@@ -9,9 +9,6 @@ local util = import 'templates/util.jsonnet';
 				"args": [[], False],
 			}
 		|||,
-		message: super.message + {
-			"is_init": true,
-		},
 	},
 	s {
 		code: null,

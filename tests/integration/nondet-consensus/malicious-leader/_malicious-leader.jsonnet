@@ -69,8 +69,7 @@ local test_cases = [
 			modes: 'vs',
 			leader_nondet: test.leader_nondet,
 			// A deployment carries no method name: the calling convention's key
-			// set is {"", "args", "kwargs"} and `""` must be absent when
-			// `is_init` is set.
+			// set is {"", "args", "kwargs"} and `""` must be absent.
 			"calldata": std.manifestJsonEx({
 				"args": [test.fn, test.comment],
 			}, "    "),

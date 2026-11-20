@@ -1044,7 +1044,6 @@ mod tests {
                 signer_address: calldata::Address::zero(),
                 chain_id: num_bigint::BigInt::ZERO,
                 value: num_bigint::BigInt::ZERO,
-                is_init: None,
                 transaction_timestamp: calldata::codec::rfc3339::parse("2026-07-28T00:00:00Z")
                     .unwrap(),
             },

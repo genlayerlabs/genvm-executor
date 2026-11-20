@@ -25,7 +25,6 @@ local common = {
 			code: '${jsonnetDir}/contract_a.py',
 			message: msg {
 				contract_address: addrA,
-				is_init: true,
 			},
 			calldata: '{}',
 
@@ -36,7 +35,6 @@ local common = {
 					code: '${jsonnetDir}/contract_b.py',
 					message: msg {
 						contract_address: addrB,
-						is_init: true,
 					},
 					calldata: '{}',
 
