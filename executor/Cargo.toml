@@ -119,11 +119,6 @@ base32 = "0.5.1"
 base64 = "0.22.1"
 bufreaderwriter = "0.2.4"
 bytes = { version = "1.11.0", features = ["serde"] }
-chrono = { version = "0.4.41", default-features = false, features = [
-    "clock",
-    "std",
-    "serde",
-] }
 clap = { version = "4.5.35", features = ["derive"] }
 concat-idents = "1.1.5"
 const-lru = "1.0.0"
@@ -134,6 +129,7 @@ futures-util = "0.3.31"
 getrandom = { version = "0.3.2", default-features = false, features = ["std"] }
 hex = "0.4.3"
 itertools = "0.14.0"
+jiff = { version = "0.2.39", default-features = false, features = ["std"] }
 # Contract-visible output: bump only with an executor version bump
 mt19937 = "=3.1.0"
 num-bigint = { version = "0.4.6", features = ["serde"] }
@@ -151,7 +147,6 @@ serde = { version = "1.0.219", features = ["rc"] }
 serde_bytes = "0.11.17"
 serde_derive = "1.0.219"
 serde_json = "1.0.140"
-serde_with = { version = "3.12.0", features = ["base64"] }
 serde_yaml = "0.9.34"
 sha2 = "0.10.8"
 sha3 = { version = "0.10.8", features = ["asm"] }

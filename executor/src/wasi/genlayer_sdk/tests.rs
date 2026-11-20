@@ -1233,7 +1233,7 @@ impl EmissionTestContext {
                 chain_id: num_bigint::BigInt::from(0),
                 value: num_bigint::BigInt::from(0),
                 is_init: false,
-                datetime: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                datetime: jiff::Timestamp::UNIX_EPOCH,
             },
             entry_kind: public_abi::EntryKind::Main,
             entry_data: bytes::Bytes::new(),
@@ -1271,7 +1271,7 @@ impl EmissionTestContext {
             _host_peer: host_peer,
             vfs: vfs::VFS::new(Vec::new(), limiter).unwrap(),
             preview1: super::super::preview1::Context::new(
-                chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                jiff::Timestamp::UNIX_EPOCH,
                 conf,
                 [0; 32],
             ),

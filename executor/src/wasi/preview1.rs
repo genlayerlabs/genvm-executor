@@ -156,7 +156,7 @@ impl Context {
                 "env": String::from_utf8_lossy(&self.env_buf),
                 "args": String::from_utf8_lossy(&self.args_buf),
                 "datetime_timestamp": self.unix_timestamp_nanos,
-                "datetime": chrono::DateTime::<chrono::Utc>::from_timestamp(self.unix_timestamp_nanos as i64, 0).map(|x| x.to_rfc3339()),
+                "datetime": jiff::Timestamp::from_nanosecond(i128::from(self.unix_timestamp_nanos)).ok().map(calldata::codec::rfc3339::format),
             }
         )
     }
@@ -312,11 +312,7 @@ where
 }
 
 impl Context {
-    pub fn new(
-        datetime: chrono::DateTime<chrono::Utc>,
-        conf: base::Config,
-        seed: [u8; 32],
-    ) -> Self {
+    pub fn new(datetime: jiff::Timestamp, conf: base::Config, seed: [u8; 32]) -> Self {
         // Deterministic randomness is seeded from `sha3-256(stdin)` of the VM, so two
         // runs with identical inputs see the same `random_get` stream while different
         // inputs diverge. The 32-byte digest is consumed as 8 little-endian u32 words.
@@ -330,9 +326,11 @@ impl Context {
         });
         let seed = mt19937::MT19937::new_with_slice_seed(&seed_words);
 
-        let unix_ts_ns = (datetime.timestamp() as u64)
+        let unix_ts_ns = (calldata::codec::rfc3339::unix_seconds(datetime) as u64)
             .saturating_mul(1_000_000_000)
-            .saturating_add(u64::from(datetime.timestamp_subsec_nanos()));
+            .saturating_add(u64::from(calldata::codec::rfc3339::unix_subsec_nanos(
+                datetime,
+            )));
 
         Self {
             args_buf: Vec::new(),

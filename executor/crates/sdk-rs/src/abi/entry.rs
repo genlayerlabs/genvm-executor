@@ -9,19 +9,6 @@ use crate::abi::consts::{EntryKind, ResultCode};
 use crate::calldata::{self, Address, Map, Value};
 use serde::{Deserialize, Serialize};
 
-fn decode_datetime_rfc3339(
-    val: calldata::Value,
-) -> Result<chrono::DateTime<chrono::Utc>, calldata::codec::DecodeError> {
-    let calldata::Value::Str(s) = val else {
-        return Err(calldata::codec::DecodeError::Unexpected(
-            "expected string for datetime",
-        ));
-    };
-    chrono::DateTime::parse_from_rfc3339(&s)
-        .map(|dt| dt.to_utc())
-        .map_err(|e| calldata::codec::DecodeError::UserError(Box::new(e)))
-}
-
 fn encode_entry_kind<W: calldata::Writer>(
     ek: &EntryKind,
     enc: &mut calldata::Encoder<W>,
@@ -47,15 +34,6 @@ fn decode_entry_kind(val: calldata::Value) -> Result<EntryKind, calldata::codec:
     })
 }
 
-fn encode_datetime_rfc3339<W: calldata::Writer>(
-    dt: &chrono::DateTime<chrono::Utc>,
-    enc: &mut calldata::Encoder<W>,
-) -> Result<(), W::Error> {
-    use chrono::SecondsFormat;
-    let s = dt.to_rfc3339_opts(SecondsFormat::AutoSi, true);
-    enc.push_str(&s)
-}
-
 fn default_stack() -> Vec<Address> {
     Vec::new()
 }
@@ -64,10 +42,8 @@ fn default_bigint() -> num_bigint::BigInt {
     num_bigint::BigInt::default()
 }
 
-fn default_datetime() -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::parse_from_rfc3339("2024-11-26T06:42:42.424242Z")
-        .unwrap()
-        .to_utc()
+fn default_datetime() -> jiff::Timestamp {
+    calldata::codec::rfc3339::parse("2024-11-26T06:42:42.424242Z").unwrap()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, calldata::Encode, calldata::Decode)]
@@ -110,13 +86,13 @@ pub struct MessageData {
     pub value: num_bigint::BigInt,
     pub is_init: bool,
     /// Transaction timestamp
-    #[serde(default = "default_datetime")]
+    #[serde(default = "default_datetime", with = "calldata::codec::rfc3339::serde")]
     #[calldata(
-        serialize_with = encode_datetime_rfc3339,
-        deserialize_with = decode_datetime_rfc3339
+        serialize_with = calldata::codec::rfc3339::serialize,
+        deserialize_with = calldata::codec::rfc3339::deserialize
     )]
     #[calldata(default = default_datetime)]
-    pub datetime: chrono::DateTime<chrono::Utc>,
+    pub datetime: jiff::Timestamp,
 }
 
 #[cfg(feature = "fuzzing")]
@@ -125,7 +101,7 @@ impl<'a> arbitrary::Arbitrary<'a> for MessageData {
         use arbitrary::Arbitrary;
 
         let ts = u32::arbitrary(u)?;
-        let Some(datetime) = chrono::DateTime::<chrono::Utc>::from_timestamp_secs(ts.into()) else {
+        let Ok(datetime) = jiff::Timestamp::from_second(ts.into()) else {
             return Err(arbitrary::Error::NotEnoughData);
         };
 
@@ -171,11 +147,11 @@ pub struct ExtendedMessageFlat {
     pub value: num_bigint::BigInt,
     pub is_init: bool,
     #[calldata(
-        serialize_with = encode_datetime_rfc3339,
-        deserialize_with = decode_datetime_rfc3339
+        serialize_with = calldata::codec::rfc3339::serialize,
+        deserialize_with = calldata::codec::rfc3339::deserialize
     )]
     #[calldata(default = default_datetime)]
-    pub datetime: chrono::DateTime<chrono::Utc>,
+    pub datetime: jiff::Timestamp,
 
     // ExtendedMessage-specific fields
     #[calldata(
