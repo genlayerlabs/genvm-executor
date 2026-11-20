@@ -28,9 +28,9 @@ fuzzing = ["dep:arbitrary", "dep:mutatis"]
 [dependencies]
 arbitrary = { version = "1.0", optional = true }
 bytes = { version = "1.11.0", features = ["serde"] }
-chrono = { version = "0.4", features = ["serde"] }
 genlayer_calldata_derive = { path = "../calldata-derive" }
 hex = "0.4.3"
+jiff = { version = "0.2.39", default-features = false, features = ["std"] }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 primitive-types = { version = "0.13", features = ["impl-serde"] }
 serde = { version = "1.0", features = ["derive"] }

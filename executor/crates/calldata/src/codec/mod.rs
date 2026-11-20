@@ -7,6 +7,7 @@ pub use de::*;
 use crate::Value;
 
 pub mod as_bytes;
+pub mod rfc3339;
 
 pub trait HasDeserializer<'a>
 where

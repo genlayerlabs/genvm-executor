@@ -1175,9 +1175,9 @@ impl ContextVFS<'_> {
         &mut self,
     ) -> Result<generated::types::Fd, generated::types::Error> {
         let timestamp = if self.context.data.conf.permissions.deterministic {
-            self.context.data.message_data.message.datetime.timestamp()
+            calldata::codec::rfc3339::unix_seconds(self.context.data.message_data.message.datetime)
         } else {
-            chrono::Utc::now().timestamp()
+            jiff::Timestamp::now().as_second()
         };
 
         let data = calldata::encode(&calldata::Value::Number(num_bigint::BigInt::from(

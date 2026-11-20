@@ -5,7 +5,7 @@ use generated::wasi_snapshot_preview1::WasiSnapshotPreview1 as _;
 
 fn context() -> Context {
     Context::new(
-        chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        jiff::Timestamp::UNIX_EPOCH,
         base::Config {
             needs_error_fingerprint: false,
             permissions: base::Permissions {
