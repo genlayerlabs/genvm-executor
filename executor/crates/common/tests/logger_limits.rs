@@ -322,6 +322,40 @@ fn an_error_chain_stops_at_the_depth_limit() {
 }
 
 #[test]
+fn a_map_past_the_depth_limit_still_stops_at_the_budget() {
+    // parsing would merge the repeated marker keys, so the raw line is measured
+    let leaf: serde_json::Map<String, serde_json::Value> = (0..10_000)
+        .map(|i| (format!("key{i:05}"), serde_json::Value::from(i)))
+        .collect();
+    let mut value = serde_json::Value::Object(leaf);
+    for depth in 1..=MAX_SERIALIZATION_DEPTH + 2 {
+        value = serde_json::Value::Array(vec![value]);
+        let mut buf = Vec::new();
+        log_into_buffer(
+            &mut buf,
+            Record {
+                callsite: OPERATOR,
+                args: format_args!("static"),
+                kv: &[(
+                    "v",
+                    Capture::Serde(&|v| serde::Serialize::serialize(&value, v)),
+                )],
+                file: file!(),
+                line: line!(),
+            },
+            LogIntoBufferConfig::default(),
+        )
+        .unwrap();
+
+        assert!(
+            buf.len() < 16 * 1024,
+            "{} bytes at depth {depth}",
+            buf.len()
+        );
+    }
+}
+
+#[test]
 fn a_map_key_keeps_the_dollar_escape() {
     let map = std::collections::BTreeMap::from([("$key".to_owned(), 1u32)]);
     let record = render_operator(&[(
