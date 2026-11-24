@@ -143,7 +143,7 @@ impl std::fmt::Debug for Value {
                 }
                 Ok(())
             }
-            Self::Number(num) => f.write_fmt(format_args!("{num:}")),
+            Self::Number(num) => f.write_str(&crate::elide::bigint(num)),
             Self::Map(map) => {
                 f.write_str("{")?;
                 let mut first = true;

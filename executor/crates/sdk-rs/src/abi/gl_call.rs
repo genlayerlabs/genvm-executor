@@ -579,7 +579,7 @@ fn decode_storage_view(
     };
     let v: u8 = <u8 as TryFrom<&num_bigint::BigInt>>::try_from(&n).map_err(|_| {
         calldata::codec::DecodeError::OutOfRange {
-            value: n.to_string(),
+            value: calldata::elide::bigint(&n),
             target: "StorageView",
         }
     })?;

@@ -71,7 +71,12 @@ pub fn patch_str(vars: &impl AnyMap<String, String>, s: &str, re: &regex::Regex)
                     None
                 }
             })
-            .ok_or_else(|| anyhow::anyhow!("unknown variable `{r}`"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown variable `{}`",
+                    genlayer_calldata::elide::UserLogStr(r)
+                )
+            })
             .map(String::from)
     })
 }

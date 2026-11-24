@@ -169,6 +169,8 @@ fn encode_body(buf: &mut Vec<u8>, res: &FullResult) {
     }
 }
 
+const INTERNAL_ERROR_LIMIT: usize = 16 * 1024;
+
 pub fn encode_result(res: &Result<FullResult>) -> Result<Vec<u8>> {
     match res {
         Ok(d) => {
@@ -178,7 +180,11 @@ pub fn encode_result(res: &Result<FullResult>) -> Result<Vec<u8>> {
         }
         Err(e) => {
             let mut encoded = Vec::from([host_fns::ResultCode::InternalError as u8]);
-            let fake_res = FullResult::new_internal_error(format!("{e:?}"));
+            let message = genlayer_calldata::elide::format_string(
+                INTERNAL_ERROR_LIMIT,
+                format_args!("{e:?}"),
+            );
+            let fake_res = FullResult::new_internal_error(message);
             encode_body(&mut encoded, &fake_res);
             Ok(encoded)
         }

@@ -1,4 +1,5 @@
 use anyhow::Context;
+use genlayer_calldata::elide::UserLogStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
@@ -24,7 +25,7 @@ impl std::str::FromStr for Version {
 
         let mut parts: Vec<&str> = s.split('.').collect();
         if parts.len() != 3 {
-            return Err(anyhow::anyhow!("Invalid version format: {}", s));
+            return Err(anyhow::anyhow!("Invalid version format: {}", UserLogStr(s)));
         }
 
         parts[0] = parts[0].strip_prefix('v').unwrap_or(parts[0]);
@@ -33,13 +34,13 @@ impl std::str::FromStr for Version {
 
         let major = parts[0]
             .parse::<u16>()
-            .with_context(|| format!("Invalid major version: {}", parts[0]))?;
+            .with_context(|| format!("Invalid major version: {}", UserLogStr(parts[0])))?;
         let minor = parts[1]
             .parse::<u16>()
-            .with_context(|| format!("Invalid minor version: {}", parts[1]))?;
+            .with_context(|| format!("Invalid minor version: {}", UserLogStr(parts[1])))?;
         let patch = patch_str
             .parse::<u16>()
-            .with_context(|| format!("Invalid patch version: {}", patch_str))?;
+            .with_context(|| format!("Invalid patch version: {}", UserLogStr(patch_str)))?;
 
         let ret = Version {
             major,

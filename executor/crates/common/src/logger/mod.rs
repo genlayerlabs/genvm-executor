@@ -184,22 +184,8 @@ pub enum Capture<'a> {
     Display(&'a (dyn std::fmt::Display + 'a)),
     Debug(&'a (dyn std::fmt::Debug + 'a)),
     Anyhow(&'a anyhow::Error),
-    #[allow(clippy::type_complexity)]
-    Serde(
-        &'a (dyn Fn(
-            &mut std::io::Cursor<&mut Vec<u8>>,
-            &LogIntoBufferConfig,
-        ) -> Result<(), error::Error>
-                 + 'a),
-    ),
-    #[allow(clippy::type_complexity)]
-    Cd(
-        &'a (dyn Fn(
-            &mut std::io::Cursor<&mut Vec<u8>>,
-            &LogIntoBufferConfig,
-        ) -> Result<(), error::Error>
-                 + 'a),
-    ),
+    Serde(&'a (dyn Fn(Visitor<'_, '_>) -> Result<(), error::Error> + 'a)),
+    Cd(&'a (dyn Fn(Visitor<'_, '_>) -> Result<(), error::Error> + 'a)),
     Id(u64),
     Bytes(&'a [u8]),
 }
@@ -238,6 +224,8 @@ pub const STATIC_MIN_LEVEL: Level = Level::Debug;
 
 pub const MAX_SERIALIZATION_DEPTH: usize = 64;
 pub const MAX_SERIALIZATION_SEQ_LENGTH: usize = 128;
+/// Values a record dumps at most, nested ones and error sources included
+pub const MAX_RECORD_ITEMS: usize = 256;
 
 pub const fn statically_enabled(callsite: Callsite) -> bool {
     STATIC_MIN_LEVEL.filter_enables(callsite.level)
@@ -295,15 +283,13 @@ macro_rules! __make_capture {
     };
 
     (serde = $value:expr) => {
-        $crate::logger::Capture::Serde(&|v, conf| {
-            serde::Serialize::serialize(&$value, $crate::logger::Visitor(v, 0, *conf))
-        })
+        $crate::logger::Capture::Serde(&|v| serde::Serialize::serialize(&$value, v))
     };
 
     (cd = $value:expr) => {
-        $crate::logger::Capture::Cd(&|v, conf| {
+        $crate::logger::Capture::Cd(&|v| {
             let val = genlayer_calldata::to_value(&$value);
-            serde::Serialize::serialize(&val, $crate::logger::Visitor(v, 0, *conf))
+            serde::Serialize::serialize(&val, v)
         })
     };
 }
@@ -727,6 +713,29 @@ fn write_quoted_str_escaping(
     Ok(())
 }
 
+/// Writes `args` as a quoted string cut the way [`write_bytes`] cuts bytes, without
+/// ever formatting more than `limit` bytes of it into memory
+fn write_quoted_str_limited(
+    buf: &mut std::io::Cursor<&mut Vec<u8>>,
+    limit: usize,
+    args: std::fmt::Arguments<'_>,
+) -> std::io::Result<()> {
+    let e = calldata::elide::Elided::format(limit, args)
+        .map_err(|_| std::io::Error::other("a formatting trait implementation failed"))?;
+    let (head, tail) = (e.head(), e.tail());
+
+    buf.write_all(b"\"")?;
+    if head.starts_with('$') || head.is_empty() && !e.is_cut() && tail.starts_with('$') {
+        buf.write_all(b"$")?;
+    }
+    write_str_part_escaping(buf, head)?;
+    if e.is_cut() {
+        buf.write_all(b"...")?;
+    }
+    write_str_part_escaping(buf, tail)?;
+    buf.write_all(b"\"")
+}
+
 fn write_str_escaping(buf: &mut std::io::Cursor<&mut Vec<u8>>, s: &str) -> std::io::Result<()> {
     if s.starts_with("$") {
         // If the string starts with a dollar sign, we escape it to avoid confusion with variables.
@@ -756,10 +765,13 @@ fn write_k_v_str_fast(
     Ok(())
 }
 
+/// Writes 1 value of a record: the cursor, the nesting depth, the limits, and the
+/// [`MAX_RECORD_ITEMS`] budget the whole record shares
 pub struct Visitor<'a, 'w>(
     pub &'a mut std::io::Cursor<&'w mut Vec<u8>>,
     pub usize,
     pub LogIntoBufferConfig,
+    pub &'a std::cell::Cell<usize>,
 );
 
 pub struct SerializeVec<'a, 'w> {
@@ -770,6 +782,7 @@ pub struct SerializeVec<'a, 'w> {
     count: usize,
     overflow: std::collections::VecDeque<Vec<u8>>,
     conf: LogIntoBufferConfig,
+    budget: &'a std::cell::Cell<usize>,
 }
 
 pub struct SerializeMap<'a, 'w> {
@@ -778,6 +791,18 @@ pub struct SerializeMap<'a, 'w> {
     close_curly: bool,
     depth: usize,
     conf: LogIntoBufferConfig,
+    budget: &'a std::cell::Cell<usize>,
+    /// The budget ran out, so the remaining entries are dropped
+    skipping: bool,
+}
+
+fn take_item(budget: &std::cell::Cell<usize>) -> bool {
+    let left = budget.get();
+    if left == 0 {
+        return false;
+    }
+    budget.set(left - 1);
+    true
 }
 
 impl Visitor<'_, '_> {
@@ -790,6 +815,20 @@ impl Visitor<'_, '_> {
             return Ok(());
         }
 
+        if !take_item(self.3) {
+            self.0.write_all(b"\"$TooMany\"")?;
+            return Ok(());
+        }
+
+        self.write_special(value)
+    }
+
+    /// The value without spending another item: a calldata number or address is
+    /// written by unwrapping it here
+    fn write_special<T>(&mut self, value: &T) -> Result<(), error::Error>
+    where
+        T: ?Sized + Serialize,
+    {
         let full_name = std::any::type_name_of_val(value);
 
         match full_name {
@@ -801,12 +840,12 @@ impl Visitor<'_, '_> {
                 };
                 match casted {
                     calldata::Value::Number(num) => {
-                        self.serialize_with_special(num)?;
+                        self.write_special(num)?;
                     }
                     calldata::Value::Address(addr) => {
-                        self.serialize_with_special(addr)?;
+                        self.write_special(addr)?;
                     }
-                    _ => value.serialize(Visitor(self.0, self.1, self.2))?,
+                    _ => value.serialize(Visitor(self.0, self.1, self.2, self.3))?,
                 }
                 Ok(())
             }
@@ -837,11 +876,16 @@ impl Visitor<'_, '_> {
                         .as_ref()
                         .unwrap()
                 };
-                self.0.write_fmt(format_args!("{casted}"))?;
+                if casted.bits() <= calldata::elide::BIGINT_DECIMAL_BITS {
+                    self.0.write_fmt(format_args!("{casted}"))?;
+                } else {
+                    let shown = calldata::elide::bigint(casted);
+                    write_quoted_str_limited(self.0, self.2.str_limit, format_args!("{shown}"))?;
+                }
 
                 Ok(())
             }
-            _ => value.serialize(Visitor(self.0, self.1, self.2)),
+            _ => value.serialize(Visitor(self.0, self.1, self.2, self.3)),
         }
     }
 }
@@ -864,12 +908,13 @@ impl serde::ser::SerializeSeq for SerializeVec<'_, '_> {
                 self.cur.write_all(b"[")?;
                 self.put_comma = true;
             }
-            Visitor(self.cur, self.depth, self.conf).serialize_with_special(value)?;
+            Visitor(self.cur, self.depth, self.conf, self.budget).serialize_with_special(value)?;
         } else {
             let mut buf = Vec::new();
             {
                 let mut cursor = std::io::Cursor::new(&mut buf);
-                Visitor(&mut cursor, self.depth, self.conf).serialize_with_special(value)?;
+                Visitor(&mut cursor, self.depth, self.conf, self.budget)
+                    .serialize_with_special(value)?;
             }
             if self.overflow.len() >= HALF {
                 self.overflow.pop_front();
@@ -945,6 +990,10 @@ impl serde::ser::SerializeMap for SerializeMap<'_, '_> {
     where
         T: ?Sized + Serialize,
     {
+        if self.skipping {
+            return Ok(());
+        }
+
         if self.put_comma {
             self.cur.write_all(b",")?;
         } else {
@@ -952,11 +1001,24 @@ impl serde::ser::SerializeMap for SerializeMap<'_, '_> {
             self.put_comma = true;
         }
 
-        let key = serde_json::to_string(key).map_err(|e| error::Error(e.into()))?;
-        if key.starts_with("\"") && key.ends_with("\"") {
-            self.cur.write_all(key.as_bytes())?;
+        if self.budget.get() == 0 {
+            self.cur.write_all(b"\"$TooMany\":true")?;
+            self.skipping = true;
+            return Ok(());
+        }
+
+        let mut buf = Vec::new();
+        Visitor(
+            &mut std::io::Cursor::new(&mut buf),
+            self.depth,
+            self.conf,
+            self.budget,
+        )
+        .serialize_with_special(key)?;
+        if buf.starts_with(b"\"") {
+            self.cur.write_all(&buf)?;
         } else {
-            write_quoted_str_escaping(self.cur, key.as_str())?;
+            write_quoted_str_escaping(self.cur, &String::from_utf8_lossy(&buf))?;
         }
 
         self.cur.write_all(b":")?;
@@ -968,7 +1030,11 @@ impl serde::ser::SerializeMap for SerializeMap<'_, '_> {
     where
         T: ?Sized + Serialize,
     {
-        Visitor(self.cur, self.depth, self.conf).serialize_with_special(value)
+        if self.skipping {
+            return Ok(());
+        }
+
+        Visitor(self.cur, self.depth, self.conf, self.budget).serialize_with_special(value)
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
@@ -1017,7 +1083,7 @@ impl serde::ser::SerializeStruct for SerializeMap<'_, '_> {
         }
         write_quoted_str_escaping(self.cur, key)?;
         self.cur.write_all(b":")?;
-        Visitor(self.cur, self.depth, self.conf).serialize_with_special(value)?;
+        Visitor(self.cur, self.depth, self.conf, self.budget).serialize_with_special(value)?;
 
         Ok(())
     }
@@ -1132,7 +1198,16 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        write_quoted_str_escaping(self.0, v)?;
+        write_quoted_str_limited(self.0, self.2.str_limit, format_args!("{v}"))?;
+
+        Ok(())
+    }
+
+    fn collect_str<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
+    where
+        T: ?Sized + std::fmt::Display,
+    {
+        write_quoted_str_limited(self.0, self.2.str_limit, format_args!("{value}"))?;
 
         Ok(())
     }
@@ -1186,7 +1261,7 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
         self.0.write_all(b"{\"")?;
         write_str_part_escaping(self.0, name)?;
         self.0.write_all(b"\":")?;
-        Visitor(self.0, self.1 + 1, self.2).serialize_with_special(value)?;
+        Visitor(self.0, self.1 + 1, self.2, self.3).serialize_with_special(value)?;
         self.0.write_all(b"}")?;
 
         Ok(())
@@ -1205,7 +1280,7 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
         self.0.write_all(b"{\"")?;
         write_str_part_escaping(self.0, variant)?;
         self.0.write_all(b"\":")?;
-        Visitor(self.0, self.1 + 1, self.2).serialize_with_special(value)?;
+        Visitor(self.0, self.1 + 1, self.2, self.3).serialize_with_special(value)?;
         self.0.write_all(b"}")?;
         Ok(())
     }
@@ -1219,6 +1294,7 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
             count: 0,
             overflow: std::collections::VecDeque::new(),
             conf: self.2,
+            budget: self.3,
         })
     }
 
@@ -1231,6 +1307,7 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
             count: 0,
             overflow: std::collections::VecDeque::new(),
             conf: self.2,
+            budget: self.3,
         })
     }
 
@@ -1247,10 +1324,12 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
             cur: self.0,
             put_comma: false,
             close_curly: true,
-            depth: self.1 + 1,
+            // `{"name":` opens a JSON level of its own
+            depth: self.1 + 2,
             count: 0,
             overflow: std::collections::VecDeque::new(),
             conf: self.2,
+            budget: self.3,
         })
     }
 
@@ -1269,10 +1348,12 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
             cur: self.0,
             put_comma: false,
             close_curly: true,
-            depth: self.1 + 1,
+            // `{"name":` opens a JSON level of its own
+            depth: self.1 + 2,
             count: 0,
             overflow: std::collections::VecDeque::new(),
             conf: self.2,
+            budget: self.3,
         })
     }
 
@@ -1283,6 +1364,8 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
             close_curly: false,
             depth: self.1 + 1,
             conf: self.2,
+            budget: self.3,
+            skipping: false,
         })
     }
 
@@ -1297,6 +1380,8 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
             close_curly: false,
             depth: self.1 + 1,
             conf: self.2,
+            budget: self.3,
+            skipping: false,
         })
     }
 
@@ -1315,19 +1400,32 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
             cur: self.0,
             put_comma: false,
             close_curly: true,
-            depth: self.1 + 1,
+            // `{"name":` opens a JSON level of its own
+            depth: self.1 + 2,
             conf: self.2,
+            budget: self.3,
+            skipping: false,
         })
     }
 }
 
 impl<'a> Visitor<'a, '_> {
     fn dump_error(&mut self, err: &(dyn std::error::Error + 'a)) -> Result<(), error::Error> {
-        self.0.write_all(b"{")?;
-        write_k_v_str_fast(self.0, "message", &format!("{err:#}"))?;
+        if self.1 >= MAX_SERIALIZATION_DEPTH {
+            self.0.write_all(b"\"$TooDeep\"")?;
+            return Ok(());
+        }
+
+        if !take_item(self.3) {
+            self.0.write_all(b"\"$TooMany\"")?;
+            return Ok(());
+        }
+
+        self.0.write_all(b"{\"message\":")?;
+        write_quoted_str_limited(self.0, self.2.str_limit, format_args!("{err:#}"))?;
         if let Some(source) = err.source() {
             self.0.write_all(b",\"source\":")?;
-            self.dump_error(source)?;
+            Visitor(self.0, self.1 + 1, self.2, self.3).dump_error(source)?;
         }
         self.0.write_all(b"}")?;
 
@@ -1346,7 +1444,11 @@ impl<'a> Visitor<'a, '_> {
                 first = false;
             }
 
-            write_quoted_str_escaping(self.0, &format!("{c:#}"))?;
+            if !take_item(self.3) {
+                self.0.write_all(b"\"$TooMany\"")?;
+                break;
+            }
+            write_quoted_str_limited(self.0, self.2.str_limit, format_args!("{c:#}"))?;
         }
         self.0.write_all(b"]")?;
 
@@ -1363,7 +1465,8 @@ impl<'a> Visitor<'a, '_> {
                     first = false;
                 }
 
-                write_quoted_str_escaping(self.0, line)?;
+                // stack depth bounds these, so they spend none of the item budget
+                write_quoted_str_limited(self.0, self.2.str_limit, format_args!("{line}"))?;
             }
 
             self.0.write_all(b"]")?;
@@ -1378,17 +1481,22 @@ impl<'a> Visitor<'a, '_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LogIntoBufferConfig {
     pub bytes_limit: usize,
+    /// Cap of each string, the interpolated message included; a static message is
+    /// never cut
+    pub str_limit: usize,
 }
 
 pub const DEFAULT_BYTES_LIMIT: usize = 128;
+pub const DEFAULT_STR_LIMIT: usize = 1024;
 
-/// A user-visible record never dumps more than this, trace mode included
+/// A user-visible record never dumps more than this per value, trace mode included
 pub const USER_BYTES_LIMIT: usize = 128;
 
 impl Default for LogIntoBufferConfig {
     fn default() -> Self {
         Self {
             bytes_limit: DEFAULT_BYTES_LIMIT,
+            str_limit: DEFAULT_STR_LIMIT,
         }
     }
 }
@@ -1400,6 +1508,7 @@ pub fn log_into_buffer(
 ) -> std::result::Result<(), Error> {
     if record.callsite.audience == Audience::User {
         conf.bytes_limit = conf.bytes_limit.min(USER_BYTES_LIMIT);
+        conf.str_limit = conf.str_limit.min(USER_BYTES_LIMIT);
     }
 
     buf.clear();
@@ -1420,10 +1529,12 @@ pub fn log_into_buffer(
     if let Some(msg) = record.args.as_str() {
         write_k_v_str_fast(&mut writer, "message", msg)?;
     } else {
-        write_k_v_str_fast(&mut writer, "message", &record.args.to_string())?;
+        writer.write_all(b"\"message\":")?;
+        write_quoted_str_limited(&mut writer, conf.str_limit, record.args)?;
     }
 
-    let mut visitor = Visitor(&mut writer, 0, conf);
+    let budget = std::cell::Cell::new(MAX_RECORD_ITEMS);
+    let mut visitor = Visitor(&mut writer, 0, conf, &budget);
     for (k, v) in record.kv {
         // the macros reject these at compile time, a hand-built record cannot be
         // stopped that way
@@ -1439,17 +1550,16 @@ pub fn log_into_buffer(
         match v {
             Capture::Error(e) => visitor.dump_error(*e)?,
             Capture::Anyhow(e) => visitor.dump_anyhow(e)?,
-            Capture::Str(s) => write_quoted_str_escaping(visitor.0, s)?,
-            Capture::Display(d) => write_quoted_str_escaping(visitor.0, &d.to_string())?,
+            Capture::Str(s) => {
+                write_quoted_str_limited(visitor.0, conf.str_limit, format_args!("{s}"))?
+            }
+            Capture::Display(d) => {
+                write_quoted_str_limited(visitor.0, conf.str_limit, format_args!("{d}"))?
+            }
             Capture::Debug(d) => {
-                write_quoted_str_escaping(visitor.0, &format!("{d:?}"))?;
+                write_quoted_str_limited(visitor.0, conf.str_limit, format_args!("{d:?}"))?
             }
-            Capture::Serde(serde_fn) => {
-                serde_fn(visitor.0, &conf)?;
-            }
-            Capture::Cd(cd_fn) => {
-                cd_fn(visitor.0, &conf)?;
-            }
+            Capture::Serde(f) | Capture::Cd(f) => f(Visitor(visitor.0, 0, conf, &budget))?,
             Capture::Bytes(b) => {
                 write_bytes(&conf, visitor.0, b)?;
             }
@@ -1562,12 +1672,13 @@ where
             disabled_buffer: all_buffer,
         },
         default_writer,
-        conf: LogIntoBufferConfig {
-            bytes_limit: if filter == Level::Trace {
-                usize::MAX
-            } else {
-                DEFAULT_BYTES_LIMIT
-            },
+        conf: if filter == Level::Trace {
+            LogIntoBufferConfig {
+                bytes_limit: usize::MAX,
+                str_limit: usize::MAX,
+            }
+        } else {
+            LogIntoBufferConfig::default()
         },
     };
 

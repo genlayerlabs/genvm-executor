@@ -298,7 +298,7 @@ fn decode_enum_untagged(name: &syn::Ident, data: &syn::DataEnum) -> syn::Result<
         let __val = <genlayer_calldata::Value as genlayer_calldata::codec::Decode>::decode(__deserializer)?;
         #(#variant_attempts)*
         ::core::result::Result::Err(genlayer_calldata::codec::DecodeError::UnknownVariant {
-            got: ::std::format!("{:?}", __val),
+            got: genlayer_calldata::elide::user_format(::core::format_args!("{:?}", __val)),
             expected: #names_joined,
         })
     })

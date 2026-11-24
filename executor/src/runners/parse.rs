@@ -136,6 +136,7 @@ fn explain_malformed_header(header: &str, lines: usize) -> Option<String> {
     };
     Some(format!(
         "the header is all {lines} leading comment line(s), joined into `{shown}`, which fails with: {error}. \
-         It ends at the first line without the comment prefix, so leave a blank line between it and ordinary comments"
+         It ends at the first line without the comment prefix, so leave a blank line between it and ordinary comments",
+        error = genlayer_calldata::elide::user_format(format_args!("{error}"))
     ))
 }

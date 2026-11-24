@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use genlayer_calldata::elide::{user_format, UserLogStr};
 use genlayer_sdk::abi;
 use genvm_common::internal_constants;
 
@@ -21,12 +22,14 @@ fn validate_entry_name(name: &str, is_directory: bool) -> errors::Result<()> {
     }
     if name.starts_with('/') {
         return Err(malformed_runner(format!(
-            "entry name {name:?} starts with a slash"
+            "entry name {} starts with a slash",
+            user_format(format_args!("{name:?}"))
         )));
     }
     if name.contains('\\') {
         return Err(malformed_runner(format!(
-            "entry name {name:?} contains a backslash"
+            "entry name {} contains a backslash",
+            user_format(format_args!("{name:?}"))
         )));
     }
 
@@ -35,7 +38,8 @@ fn validate_entry_name(name: &str, is_directory: bool) -> errors::Result<()> {
     } else {
         if name.ends_with('/') {
             return Err(malformed_runner(format!(
-                "file entry name {name:?} has a trailing slash"
+                "file entry name {} has a trailing slash",
+                user_format(format_args!("{name:?}"))
             )));
         }
         name
@@ -45,7 +49,8 @@ fn validate_entry_name(name: &str, is_directory: bool) -> errors::Result<()> {
         .any(|component| component.is_empty() || component == "." || component == "..")
     {
         return Err(malformed_runner(format!(
-            "entry name {name:?} contains an invalid path component"
+            "entry name {} contains an invalid path component",
+            user_format(format_args!("{name:?}"))
         )));
     }
 
@@ -78,31 +83,32 @@ fn check_local_header_agrees(
     crc32: u32,
     size: u64,
 ) -> errors::Result<()> {
+    let shown = UserLogStr(name);
     let header_start: usize = header_start.into_int_comptime();
     let header = header_start
         .checked_add(ZIP_LOCAL_HEADER_LEN)
         .and_then(|end| bytes.get(header_start..end))
         .ok_or_else(|| {
             malformed_runner(format!(
-                "file {name} local header at {header_start} is out of bounds"
+                "file {shown} local header at {header_start} is out of bounds"
             ))
         })?;
 
     if header[0..4] != *b"PK\x03\x04" {
         return Err(malformed_runner(format!(
-            "file {name} has no local header at {header_start}"
+            "file {shown} has no local header at {header_start}"
         )));
     }
 
     let flags = u16::from_le_bytes([header[6], header[7]]);
     if flags & ZIP_FLAG_ENCRYPTED != 0 {
-        return Err(malformed_runner(format!("file {name} is encrypted")));
+        return Err(malformed_runner(format!("file {shown} is encrypted")));
     }
 
     let method = u16::from_le_bytes([header[8], header[9]]);
     if method != ZIP_STORED_METHOD {
         return Err(malformed_runner(format!(
-            "file {name} local compression method {method} contradicts the central directory"
+            "file {shown} local compression method {method} contradicts the central directory"
         )));
     }
 
@@ -118,12 +124,12 @@ fn check_local_header_agrees(
         .and_then(|range| bytes.get(range))
         .ok_or_else(|| {
             malformed_runner(format!(
-                "file {name} local name at {header_start} is out of bounds"
+                "file {shown} local name at {header_start} is out of bounds"
             ))
         })?;
     if std::str::from_utf8(local_name) != Ok(name) {
         return Err(malformed_runner(format!(
-            "file {name} local name contradicts the central directory"
+            "file {shown} local name contradicts the central directory"
         )));
     }
 
@@ -131,7 +137,7 @@ fn check_local_header_agrees(
         let local_crc32 = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
         if local_crc32 != crc32 {
             return Err(malformed_runner(format!(
-                "file {name} local CRC-32 {local_crc32:#010x} contradicts the central {crc32:#010x}"
+                "file {shown} local CRC-32 {local_crc32:#010x} contradicts the central {crc32:#010x}"
             )));
         }
 
@@ -142,12 +148,12 @@ fn check_local_header_agrees(
         // local field carries no information to compare against.
         if u64::from(local_size) != size && local_size != u32::MAX {
             return Err(malformed_runner(format!(
-                "file {name} local size {local_size} contradicts the central {size}"
+                "file {shown} local size {local_size} contradicts the central {size}"
             )));
         }
         if local_compressed != local_size {
             return Err(malformed_runner(format!(
-                "file {name} local compressed size {local_compressed} differs from size {local_size}"
+                "file {shown} local compressed size {local_compressed} differs from size {local_size}"
             )));
         }
     }
@@ -215,7 +221,9 @@ fn check_layout<'a>(
             .filter(|child| child.starts_with(directory.as_str()))
         {
             return Err(malformed_runner(format!(
-                "file {name} is also a directory of {child}"
+                "file {} is also a directory of {}",
+                UserLogStr(name),
+                UserLogStr(child)
             )));
         }
     }
@@ -280,7 +288,7 @@ impl Archive {
             if compressed_size != file.size() {
                 return Err(malformed_runner(format!(
                     "stored file {} compressed_size={} differs from size={}",
-                    file.name(),
+                    UserLogStr(file.name()),
                     compressed_size,
                     file.size()
                 )));
@@ -289,7 +297,7 @@ impl Archive {
                 if file.size() != 0 || file.crc32() != 0 {
                     return Err(malformed_runner(format!(
                         "directory entry {} has size {} and CRC-32 {:#010x}",
-                        file.name(),
+                        UserLogStr(file.name()),
                         file.size(),
                         file.crc32()
                     )));
@@ -300,7 +308,7 @@ impl Archive {
             let end_index = start_index.checked_add(compressed_size).ok_or_else(|| {
                 malformed_runner(format!(
                     "file {} data_start={} compressed_size={} overflow",
-                    file.name(),
+                    UserLogStr(file.name()),
                     start_index,
                     compressed_size
                 ))
@@ -311,7 +319,7 @@ impl Archive {
             {
                 return Err(malformed_runner(format!(
                     "file {} data_start={} compressed_size={} end_index={} bytes_len={}",
-                    file.name(),
+                    UserLogStr(file.name()),
                     start_index,
                     compressed_size,
                     end_index,
@@ -323,7 +331,7 @@ impl Archive {
             if actual_crc != file.crc32() {
                 return Err(malformed_runner(format!(
                     "file {} CRC-32 {actual_crc:#010x} differs from declared {:#010x}",
-                    file.name(),
+                    UserLogStr(file.name()),
                     file.crc32()
                 )));
             }

@@ -3,6 +3,7 @@ extern crate self as genlayer_calldata;
 mod bin;
 pub mod codec;
 pub mod consts;
+pub mod elide;
 mod encoder;
 mod error;
 #[cfg(feature = "fuzzing")]

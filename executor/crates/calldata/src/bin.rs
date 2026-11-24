@@ -42,7 +42,12 @@ impl std::fmt::Display for BinDecodeError {
                 write!(f, "invalid special value: {value}")
             }
             BinDecodeError::InvalidMapOrdering { prev, current } => {
-                write!(f, "invalid calldata map ordering: `{prev}` >= `{current}`")
+                write!(
+                    f,
+                    "invalid calldata map ordering: `{}` >= `{}`",
+                    crate::elide::UserLogStr(prev),
+                    crate::elide::UserLogStr(current)
+                )
             }
             BinDecodeError::InvalidTag(type_tag) => {
                 write!(f, "invalid type tag: {type_tag}")

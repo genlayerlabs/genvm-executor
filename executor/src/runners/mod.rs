@@ -14,6 +14,8 @@ pub use actions::*;
 
 use std::{str::FromStr as _, sync::Arc};
 
+use genlayer_calldata::elide::{user_format, UserLogStr};
+
 use crate::rt;
 use crate::rt::errors::{Error, ResultExt as _};
 
@@ -363,7 +365,7 @@ impl ArchiveCache {
             )
             .context(format!(
                 "parsing version '{}' for runner {}",
-                contents.trim(),
+                UserLogStr(contents.trim()),
                 self.id
             ))
         })?;
@@ -387,8 +389,8 @@ impl ArchiveCache {
                 })?;
 
                 let as_init = actions::parse_runner_json(contents_str).map_err(|e| {
-                    malformed_runner_error(format!("parsing runner.json for runner {}", self.id))
-                        .with_source(e)
+                    malformed_runner_error(user_format(format_args!("{e}")))
+                        .context(format!("parsing runner.json for runner {}", self.id))
                 })?;
 
                 match as_init.validate() {
@@ -415,7 +417,7 @@ impl ArchiveCache {
             .files
             .data
             .get(name)
-            .ok_or_else(|| malformed_runner_error(format!("no file {name}")))
+            .ok_or_else(|| malformed_runner_error(format!("no file {}", UserLogStr(name))))
             .with_ctx(|| format!("reading runner {}", self.id))?;
         Ok(contents.clone())
     }

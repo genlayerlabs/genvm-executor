@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use genlayer_calldata::elide::UserLogStr;
 use genlayer_sdk::abi;
 use genvm_common::internal_constants::runner_limits;
 
@@ -244,7 +245,8 @@ impl<'de> serde::Deserialize<'de> for RunnerJson {
                 )?;
                 if let Some(field) = serde::de::MapAccess::next_key::<String>(&mut map)? {
                     return Err(serde::de::Error::custom(format_args!(
-                        "unexpected field `{field}`"
+                        "unexpected field `{}`",
+                        UserLogStr(&field)
                     )));
                 }
                 Ok(RunnerJson(action))
