@@ -810,13 +810,14 @@ impl Visitor<'_, '_> {
     where
         T: ?Sized + Serialize,
     {
-        if self.1 >= MAX_SERIALIZATION_DEPTH {
-            self.0.write_all(b"\"$TooDeep\"")?;
+        // the marker spends an item too, so entries past the depth limit still end a map
+        if !take_item(self.3) {
+            self.0.write_all(b"\"$TooMany\"")?;
             return Ok(());
         }
 
-        if !take_item(self.3) {
-            self.0.write_all(b"\"$TooMany\"")?;
+        if self.1 >= MAX_SERIALIZATION_DEPTH {
+            self.0.write_all(b"\"$TooDeep\"")?;
             return Ok(());
         }
 
@@ -1411,13 +1412,14 @@ impl<'a, 'w> serde::Serializer for Visitor<'a, 'w> {
 
 impl<'a> Visitor<'a, '_> {
     fn dump_error(&mut self, err: &(dyn std::error::Error + 'a)) -> Result<(), error::Error> {
-        if self.1 >= MAX_SERIALIZATION_DEPTH {
-            self.0.write_all(b"\"$TooDeep\"")?;
+        // the marker spends an item too, so entries past the depth limit still end a map
+        if !take_item(self.3) {
+            self.0.write_all(b"\"$TooMany\"")?;
             return Ok(());
         }
 
-        if !take_item(self.3) {
-            self.0.write_all(b"\"$TooMany\"")?;
+        if self.1 >= MAX_SERIALIZATION_DEPTH {
+            self.0.write_all(b"\"$TooDeep\"")?;
             return Ok(());
         }
 
