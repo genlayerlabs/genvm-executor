@@ -1,3 +1,4 @@
+use crate::elide::{UserLogStr, user_format};
 use crate::{Address, Value, ValueKind};
 
 mod bin;
@@ -40,18 +41,24 @@ impl std::fmt::Display for DecodeError {
             DecodeError::DuplicateField(field) => write!(f, "duplicate field: {field}"),
             DecodeError::Unexpected(msg) => write!(f, "unexpected: {msg}"),
             DecodeError::UnexpectedKind(kind) => write!(f, "unexpected {kind}"),
-            DecodeError::UnknownField(field) => write!(f, "unknown field `{field}`"),
+            DecodeError::UnknownField(field) => {
+                write!(f, "unknown field `{}`", UserLogStr(field))
+            }
             DecodeError::UnknownVariant { got, expected } => {
-                write!(f, "unknown variant `{got}`, expected one of: {expected}")
+                write!(
+                    f,
+                    "unknown variant `{}`, expected one of: {expected}",
+                    UserLogStr(got)
+                )
             }
             DecodeError::LengthMismatch { expected, got } => {
                 write!(f, "expected {expected} elements, got {got}")
             }
             DecodeError::OutOfRange { value, target } => {
-                write!(f, "value {value} out of range for {target}")
+                write!(f, "value {} out of range for {target}", UserLogStr(value))
             }
-            DecodeError::UserError(e) => write!(f, "{e}"),
-            DecodeError::Custom(msg) => write!(f, "{msg}"),
+            DecodeError::UserError(e) => f.write_str(&user_format(format_args!("{e}"))),
+            DecodeError::Custom(msg) => write!(f, "{}", UserLogStr(msg)),
             DecodeError::BinDecodeError(e) => write!(f, "Binary Error: {e}"),
         }
     }

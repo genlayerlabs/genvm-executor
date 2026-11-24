@@ -4,6 +4,7 @@ use crate::int_traits::*;
 use crate::{caching, public_abi, rt, runners, wasi};
 
 use anyhow::Context as _;
+use genlayer_calldata::elide::{user_format, UserLogStr};
 use genlayer_sdk::abi;
 use genvm_common::internal_constants::{memory_limiter_consts, top_limits};
 use genvm_common::*;
@@ -107,13 +108,15 @@ fn maps_into_vm(to: &str) -> bool {
 pub fn check_mapping_target(to: &str) -> anyhow::Result<()> {
     if maps_into_vm(to) {
         return Err(runners::malformed_runner_error(format!(
-            "mapping into /vm/ is forbidden: {to}"
+            "mapping into /vm/ is forbidden: {}",
+            UserLogStr(to)
         ))
         .into());
     }
     if to.split('/').any(|component| component == "..") {
         return Err(runners::malformed_runner_error(format!(
-            "mapping path with a '..' component is forbidden: {to}"
+            "mapping path with a '..' component is forbidden: {}",
+            UserLogStr(to)
         ))
         .into());
     }
@@ -190,7 +193,7 @@ pub(crate) async fn resolve_runner_id(
         runners::IdUnresolved::Builtin { name, hash } => {
             let hash: Bytes32Hash = if hash == "test" || hash == "latest" {
                 if !supervisor.shared_data.debug_mode.allows_latest_resolution() {
-                    log_warn!(@user; ":{hash} runner used in non-debug mode, this is not allowed");
+                    log_warn!(@user; ":{} runner used in non-debug mode, this is not allowed", UserLogStr(&hash));
                     return Err(runners::malformed_runner_error(
                         "runner id doesn't match expected format",
                     )
@@ -212,7 +215,8 @@ pub(crate) async fn resolve_runner_id(
             } else {
                 Bytes32Hash::from_gvm32(&hash).map_err(|e| {
                     runners::malformed_runner_error(format!(
-                        "runner hash `{hash}` is not valid gvm32: {e}"
+                        "runner hash `{}` is not valid gvm32: {e}",
+                        UserLogStr(&hash)
                     ))
                 })?
             };
@@ -225,13 +229,15 @@ pub(crate) async fn resolve_runner_id(
             match supervisor.runner_cache.get_version(&name, &hash_gvm32) {
                 None => {
                     return Err(runners::malformed_runner_error(format!(
-                        "runner `{name}:{hash_gvm32}` is not installed"
+                        "runner `{}:{hash_gvm32}` is not installed",
+                        UserLogStr(&name)
                     ))
                     .into());
                 }
                 Some(version) if !version.is_visible_in(&supervisor.forks) => {
                     return Err(runners::malformed_runner_error(format!(
-                        "runner `{name}:{hash_gvm32}` is not available on this network"
+                        "runner `{}:{hash_gvm32}` is not available on this network",
+                        UserLogStr(&name)
                     ))
                     .into());
                 }
@@ -278,7 +284,8 @@ pub(crate) async fn resolve_runner_id(
         runners::IdUnresolved::Custom { hash } => {
             let hash = Bytes32Hash::from_gvm32(&hash).map_err(|e| {
                 runners::malformed_runner_error(format!(
-                    "custom runner hash `{hash}` is not valid gvm32: {e}"
+                    "custom runner hash `{}` is not valid gvm32: {e}",
+                    UserLogStr(&hash)
                 ))
             })?;
             runners::Id::Custom { hash }
@@ -334,26 +341,30 @@ pub(crate) fn resolve_child_custom_runners(
                     Some(runners::IdUnresolved::Custom { hash }) => hash,
                     _ => {
                         return Err(runners::malformed_runner_error(format!(
-                            "custom_runners entry `{elem}` is not a `custom:` runner id"
+                            "custom_runners entry `{}` is not a `custom:` runner id",
+                            UserLogStr(&elem)
                         ))
                         .into());
                     }
                 };
                 let hash = Bytes32Hash::from_gvm32(&hash).map_err(|e| {
                     runners::malformed_runner_error(format!(
-                        "custom_runners entry `{elem}` hash is not valid gvm32: {e}"
+                        "custom_runners entry `{}` hash is not valid gvm32: {e}",
+                        UserLogStr(&elem)
                     ))
                 })?;
                 let id = runners::Id::Custom { hash }.canonical();
                 let Some(pin) = parent_loaded.get(id) else {
                     return Err(runners::malformed_runner_error(format!(
-                        "custom_runners entry `{elem}` is not loaded in this scope"
+                        "custom_runners entry `{}` is not loaded in this scope",
+                        UserLogStr(&elem)
                     ))
                     .into());
                 };
                 if !granted_ids.insert(id) {
                     return Err(runners::malformed_runner_error(format!(
-                        "custom_runners entry `{elem}` is duplicated"
+                        "custom_runners entry `{}` is duplicated",
+                        UserLogStr(&elem)
                     ))
                     .into());
                 }
@@ -617,7 +628,11 @@ pub(crate) async fn load_action(
             runners::append_runner_subpath(name.as_str(), &hash.to_gvm32(), &mut path);
             path.set_extension("zip");
             if !path.exists() {
-                return Err(rt::errors::Error::internal(format!("runner {id} not found")).into());
+                return Err(rt::errors::Error::internal(format!(
+                    "runner {} not found",
+                    UserLogStr(id.as_str())
+                ))
+                .into());
             }
             let charged_size = std::fs::metadata(&path)
                 .with_ctx(|| format!("reading size of runner archive for {id}"))?
@@ -1002,7 +1017,12 @@ impl Ctx<'_, '_> {
                 self.supervisor
                     .compile_wasm(contents.as_ref(), wasm_key.as_str())
                     .await
-                    .with_context(|| format!("compiling wasm {path:?} of {}", current))
+                    .with_context(|| {
+                        format!(
+                            "compiling wasm {} of {current}",
+                            user_format(format_args!("{path:?}"))
+                        )
+                    })
             })
             .await?;
 
@@ -1108,16 +1128,20 @@ impl Ctx<'_, '_> {
                 }
                 InitAction::LinkWasm(path) => {
                     let contents = try_context!(
-                        current_runner_arch
-                            .get_file(&path)
-                            .with_ctx(|| format!("getting file {path:?}")),
+                        current_runner_arch.get_file(&path).with_ctx(|| format!(
+                            "getting file {}",
+                            user_format(format_args!("{path:?}"))
+                        )),
                         &contexts
                     );
 
                     let module = try_context!(
                         self.link_wasm(contents, current, &path)
                             .await
-                            .with_context(|| format!("linking wasm {path:?}")),
+                            .with_context(|| format!(
+                                "linking wasm {}",
+                                user_format(format_args!("{path:?}"))
+                            )),
                         &contexts
                     );
                     let module =
@@ -1130,14 +1154,18 @@ impl Ctx<'_, '_> {
                                 .instantiate_async(&mut self.vm.store, &module)
                                 .await
                                 .map_err(classify_instantiate_error)
-                                .with_context(|| format!("instantiating {path:?}")),
+                                .with_context(|| format!(
+                                    "instantiating {}",
+                                    user_format(format_args!("{path:?}"))
+                                )),
                             &contexts
                         );
                         let name = try_context!(
                             module.name().ok_or_else(|| {
                                 rt::errors::vm_error!(
                                     public_abi::VmError::invalid_contract().wasm().linking(),
-                                    "can't link unnamed module {path:?} of {current}"
+                                    "can't link unnamed module {} of {current}",
+                                    user_format(format_args!("{path:?}"))
                                 )
                             }),
                             &contexts
@@ -1152,7 +1180,13 @@ impl Ctx<'_, '_> {
                                         e,
                                     )
                                 })
-                                .with_ctx(|| format!("linking instance {name} for {path:?}")),
+                                .with_ctx(|| {
+                                    format!(
+                                        "linking instance {} for {}",
+                                        UserLogStr(name),
+                                        user_format(format_args!("{path:?}"))
+                                    )
+                                }),
                             &contexts
                         );
                         instance
@@ -1182,15 +1216,19 @@ impl Ctx<'_, '_> {
                         &contexts
                     );
                     let contents = try_context!(
-                        current_runner_arch
-                            .get_file(&path)
-                            .with_ctx(|| format!("getting file {path:?}")),
+                        current_runner_arch.get_file(&path).with_ctx(|| format!(
+                            "getting file {}",
+                            user_format(format_args!("{path:?}"))
+                        )),
                         &contexts
                     );
                     let module = try_context!(
                         self.link_wasm(contents, current, &path)
                             .await
-                            .with_context(|| format!("linking wasm {path:?}")),
+                            .with_context(|| format!(
+                                "linking wasm {}",
+                                user_format(format_args!("{path:?}"))
+                            )),
                         &contexts
                     );
 
@@ -1203,7 +1241,10 @@ impl Ctx<'_, '_> {
                             .instantiate_async(&mut self.vm.store, &module)
                             .await
                             .map_err(classify_instantiate_error)
-                            .with_context(|| format!("instantiating {path:?}")),
+                            .with_context(|| format!(
+                                "instantiating {}",
+                                user_format(format_args!("{path:?}"))
+                            )),
                         &contexts
                     )));
                 }

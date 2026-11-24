@@ -45,7 +45,10 @@ fn render_line(
             file: file!(),
             line: line!(),
         },
-        LogIntoBufferConfig { bytes_limit },
+        LogIntoBufferConfig {
+            bytes_limit,
+            str_limit: bytes_limit,
+        },
     )
     .unwrap();
 

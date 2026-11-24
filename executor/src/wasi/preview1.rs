@@ -204,9 +204,10 @@ impl Context {
         let locs_arr = vfs::split_normalize_path(location, true);
 
         if locs_arr.is_empty() {
-            return Err(
-                malformed().context(format!("mapping destination `{location}` names no file"))
-            );
+            return Err(malformed().context(format!(
+                "mapping destination `{}` names no file",
+                genlayer_calldata::elide::UserLogStr(location)
+            )));
         }
 
         // the trie is dropped recursively, so unbounded depth is a stack overflow

@@ -1,3 +1,5 @@
+use crate::elide::UserLogStr;
+
 #[derive(Debug)]
 pub enum Error {
     InvalidType {
@@ -68,13 +70,21 @@ impl std::fmt::Display for Error {
                 unexpected,
                 expected,
             } => {
-                write!(f, "invalid type: {unexpected}, expected {expected}")
+                write!(
+                    f,
+                    "invalid type: {}, expected {expected}",
+                    UserLogStr(unexpected)
+                )
             }
             Error::InvalidValue {
                 unexpected,
                 expected,
             } => {
-                write!(f, "invalid value: {unexpected}, expected {expected}")
+                write!(
+                    f,
+                    "invalid value: {}, expected {expected}",
+                    UserLogStr(unexpected)
+                )
             }
             Error::InvalidLength { len, expected } => {
                 write!(f, "invalid length {len}, expected {expected}")
@@ -82,12 +92,17 @@ impl std::fmt::Display for Error {
             Error::DuplicateField(field) => write!(f, "duplicate field `{field}`"),
             Error::MissingField(field) => write!(f, "missing field `{field}`"),
             Error::UnknownField { field, expected } => {
-                write!(f, "unknown field `{field}`, expected one of {expected:?}")
+                write!(
+                    f,
+                    "unknown field `{}`, expected one of {expected:?}",
+                    UserLogStr(field)
+                )
             }
             Error::UnknownVariant { variant, expected } => {
                 write!(
                     f,
-                    "unknown variant `{variant}`, expected one of {expected:?}"
+                    "unknown variant `{}`, expected one of {expected:?}",
+                    UserLogStr(variant)
                 )
             }
             Error::OnlyStringKeysSupported => write!(f, "only string keys are supported"),
@@ -98,9 +113,9 @@ impl std::fmt::Display for Error {
             Error::UnexpectedAddress { target_type } => {
                 write!(f, "unexpected address for {target_type}")
             }
-            Error::Custom(msg) => write!(f, "{msg}"),
+            Error::Custom(msg) => write!(f, "{}", UserLogStr(msg)),
             Error::AtField { field, source } => {
-                write!(f, "at field `{field}`: {source}")
+                write!(f, "at field `{}`: {source}", UserLogStr(field))
             }
             Error::AtIndex { index, source } => {
                 write!(f, "at index [{index}]: {source}")

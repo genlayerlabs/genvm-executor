@@ -95,7 +95,12 @@ pub fn patch_str(
                     None
                 }
             })
-            .ok_or_else(|| anyhow::anyhow!("unknown variable `{r}`"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown variable `{}`",
+                    genlayer_calldata::elide::UserLogStr(r)
+                )
+            })
     })
 }
 

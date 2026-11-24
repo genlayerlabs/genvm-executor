@@ -46,7 +46,7 @@ macro_rules! impl_decode_int {
                         }
                         fn visit_bigint(self, value: &num_bigint::BigInt) -> Result<$ty, DecodeError> {
                             <$ty>::try_from(value).map_err(|_| DecodeError::OutOfRange {
-                                value: value.to_string(),
+                                value: crate::elide::bigint(value),
                                 target: stringify!($ty),
                             })
                         }
@@ -152,13 +152,13 @@ impl Decode for primitive_types::U256 {
                 let (sign, bytes) = value.to_bytes_le();
                 if sign == Sign::Minus {
                     return Err(DecodeError::OutOfRange {
-                        value: value.to_string(),
+                        value: crate::elide::bigint(value),
                         target: "U256",
                     });
                 }
                 if bytes.len() > 32 {
                     return Err(DecodeError::OutOfRange {
-                        value: value.to_string(),
+                        value: crate::elide::bigint(value),
                         target: "U256",
                     });
                 }

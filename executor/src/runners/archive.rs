@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use genlayer_calldata::elide::{user_format, UserLogStr};
 use genlayer_sdk::abi;
 use genvm_common::internal_constants;
 
@@ -26,12 +27,14 @@ fn validate_entry_name(name: &str) -> errors::Result<()> {
     }
     if name.starts_with('/') {
         return Err(malformed_runner(format!(
-            "entry name {name:?} starts with a slash"
+            "entry name {} starts with a slash",
+            user_format(format_args!("{name:?}"))
         )));
     }
     if name.contains('\\') {
         return Err(malformed_runner(format!(
-            "entry name {name:?} contains a backslash"
+            "entry name {} contains a backslash",
+            user_format(format_args!("{name:?}"))
         )));
     }
 
@@ -40,7 +43,8 @@ fn validate_entry_name(name: &str) -> errors::Result<()> {
         .any(|component| component.is_empty() || component == "." || component == "..")
     {
         return Err(malformed_runner(format!(
-            "entry name {name:?} contains an invalid path component"
+            "entry name {} contains an invalid path component",
+            user_format(format_args!("{name:?}"))
         )));
     }
 
@@ -56,6 +60,7 @@ fn check_local_header_agrees(
     central: &genvm_stored_zip::Entry<'_>,
     local: &genvm_stored_zip::LocalHeader<'_>,
 ) -> errors::Result<()> {
+    let name = UserLogStr(name);
     if local.method != genvm_stored_zip::STORED {
         return Err(malformed_runner(format!(
             "file {name} local compression method {} contradicts the central directory",
@@ -123,6 +128,7 @@ fn check_local_header_agrees(
 /// Version made by and permission bits stay free. File type bits may be absent:
 /// `zipfile.writestr` sets only the permissions.
 fn check_entry_fields(name: &str, entry: &genvm_stored_zip::Entry<'_>) -> errors::Result<()> {
+    let name = UserLogStr(name);
     if entry.version_needed != ZIP_VERSION_NEEDED {
         return Err(malformed_runner(format!(
             "file {name} needs version {}",
@@ -214,9 +220,10 @@ impl Archive {
                 .ok_or_else(|| {
                     malformed_runner(format!(
                         "ZIP entry {i} name \"{}\" is not printable ASCII",
-                        entry.name.escape_ascii()
+                        user_format(format_args!("{}", entry.name.escape_ascii()))
                     ))
                 })?;
+            let shown = UserLogStr(name);
 
             if entry.method != genvm_stored_zip::STORED {
                 return Err(malformed_runner(format!(
@@ -228,30 +235,30 @@ impl Archive {
             let offset: usize = entry.header_offset.into_int_comptime();
             if offset != next_offset {
                 return Err(malformed_runner(format!(
-                    "file {name} starts at {offset}, not at {next_offset}"
+                    "file {shown} starts at {offset}, not at {next_offset}"
                 )));
             }
 
             let local = zip
                 .local_header(&entry)
-                .map_err(|e| malformed_runner(format!("file {name}: {e}")))?;
+                .map_err(|e| malformed_runner(format!("file {shown}: {e}")))?;
             check_local_header_agrees(name, &entry, &local)?;
             check_entry_fields(name, &entry)?;
             if entry.flags != 0 {
                 return Err(malformed_runner(format!(
-                    "file {name} has unsupported flags {:#06x}",
+                    "file {shown} has unsupported flags {:#06x}",
                     entry.flags
                 )));
             }
             if !entry.comment.is_empty() {
-                return Err(malformed_runner(format!("file {name} has a comment")));
+                return Err(malformed_runner(format!("file {shown} has a comment")));
             }
 
             // A stored entry is copied verbatim, so both sizes describe the same
             // bytes; disagreeing ones mean the archive lies about at least one.
             if entry.compressed_size != entry.size {
                 return Err(malformed_runner(format!(
-                    "stored file {name} compressed_size={} differs from size={}",
+                    "stored file {shown} compressed_size={} differs from size={}",
                     entry.compressed_size, entry.size
                 )));
             }
@@ -259,13 +266,13 @@ impl Archive {
 
             if name.ends_with('/') {
                 return Err(malformed_runner(format!(
-                    "directory entry {name} is not allowed"
+                    "directory entry {shown} is not allowed"
                 )));
             }
 
             validate_entry_name(name)?;
             if !names.insert(name) {
-                return Err(malformed_runner(format!("file {name} is repeated")));
+                return Err(malformed_runner(format!("file {shown} is repeated")));
             }
             files.push((name, local.data, entry.crc32));
         }
@@ -288,7 +295,9 @@ impl Archive {
                 .filter(|child| child.starts_with(directory.as_str()))
             {
                 return Err(malformed_runner(format!(
-                    "file {name} is also a directory of {child}"
+                    "file {} is also a directory of {}",
+                    UserLogStr(name),
+                    UserLogStr(child)
                 )));
             }
         }
@@ -299,7 +308,8 @@ impl Archive {
             let actual_crc = crc32fast::hash(&buf);
             if actual_crc != crc32 {
                 return Err(malformed_runner(format!(
-                    "file {name} CRC-32 {actual_crc:#010x} differs from declared {crc32:#010x}"
+                    "file {} CRC-32 {actual_crc:#010x} differs from declared {crc32:#010x}",
+                    UserLogStr(name)
                 )));
             }
             res.insert(String::from(name), buf);

@@ -24,7 +24,7 @@ fn decode_entry_kind(val: calldata::Value) -> Result<EntryKind, calldata::codec:
     };
     let v: u8 = <u8 as TryFrom<&num_bigint::BigInt>>::try_from(&n).map_err(|_| {
         calldata::codec::DecodeError::OutOfRange {
-            value: n.to_string(),
+            value: calldata::elide::bigint(&n),
             target: "EntryKind",
         }
     })?;
