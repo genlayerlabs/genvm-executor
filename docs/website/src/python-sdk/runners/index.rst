@@ -31,8 +31,8 @@ before the main runner using a Seq block:
    #   ]
    # }
 
-For the full runner specification, see :external+genvm:doc:`spec/02-execution-environment/04-runners`.
+For the full runner specification, see :doc:`/spec/02-execution-environment/04-runners`.
 
 For version history and what changed, see the :doc:`Changelog </python-sdk/changelog>`.
 
-For list of available runners and their hashes, see :doc:`Available Runners </python-sdk/available-runners>`.
+For list of available runners and their hashes, see :doc:`/python-sdk/available-runners`.

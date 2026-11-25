@@ -38,7 +38,7 @@
         # Self-contained docs toolchain (sphinx + extensions) for this line's
         # standalone docs sub-site, built via `nix develop .#gen-docs`. The
         # manager's support/ci/pipelines/docs.py enters this shell and drops the
-        # output under build/doc/html/executors/<line>/.
+        # output under build/doc/html/executor/<version>/.
         docs-python = pkgs.python312.withPackages (
           ps: with ps; [
             sphinx
@@ -204,7 +204,7 @@
         };
         devShells.gen-docs = pkgs.mkShell {
           # Standalone sphinx toolchain for this line's docs sub-site. The
-          # text→api.txt merge is plain python (docs/website/merge_txts.py), run
+          # text→spec.txt merge is plain python (docs/website/merge_txts.py), run
           # by the manager pipeline, so no ruby here.
           packages = [
             docs-python

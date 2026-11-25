@@ -8,7 +8,7 @@ see the `main documentation <https://docs.genlayer.com/developers/intelligent-co
 .. toctree::
 
    introduction
-   reference/index
+   reference
    runners/index
    available-runners
    guides/index

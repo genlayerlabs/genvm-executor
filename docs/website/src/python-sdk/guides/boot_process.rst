@@ -3,7 +3,7 @@
 Startup Process
 ===============
 
-Standard library provides a built-in bootloader that bridges :external+genvm:ref:`internal ABI <contract-execution-flow>`
+Standard library provides a built-in bootloader that bridges :ref:`internal ABI <contract-execution-flow>`
 to a more Pythonic interface.
 
 Bootloader is located in module ``_genlayer_bootloader`` and is executed on import.
@@ -62,12 +62,12 @@ Optional performance profiling when ``GENLAYER_ENABLE_PROFILER`` environment var
 
 * Uses ``cProfile`` with microsecond timing precision
 * Outputs compressed, base64-encoded statistics to stderr on exit
-* Integrates with :external+genvm:term:`GenVM` :external+genvm:ref:`debugging infrastructure <tracing-runtime-microsec>`
+* Integrates with :term:`GenVM` :ref:`debugging infrastructure <tracing-runtime-microsec>`
 
 Storage Integration
 ~~~~~~~~~~~~~~~~~~~
 
 Manages contract storage lifecycle:
 
-* Locks default :external+genvm:term:`Storage Slot`\s during contract initialization
+* Locks default :term:`Storage Slot`\s during contract initialization
 * Provides contract instance from the root slot

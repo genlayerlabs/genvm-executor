@@ -1,17 +1,13 @@
-GenVM Executor Documentation
-============================
+GenVM Executor |release|
+========================
 
-Documentation for the |release| executor line, including the ``genlayer``
-Python SDK shipped by this line's runners.
+The executor runs intelligent contracts. This site specifies what it does and
+documents the ``genlayer`` Python SDK its runners ship.
 
-See the `main GenVM documentation <../../index.html>`_ for the protocol
-specification and implementation internals.
+How the manager hosts it is in :external+manager:doc:`the manager documentation <index>`.
 
 .. toctree::
    :maxdepth: 2
 
+   spec/index
    python-sdk/index
-
-.. note::
-   More executor-line docs (Lua API, greyboxing, ...) will be published on this
-   sub-site alongside the SDK reference.
